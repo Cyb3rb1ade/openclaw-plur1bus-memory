@@ -294,7 +294,7 @@ test("writes optional Markdown below the workspace and passes it as a document a
     await host.readConversation(session);
     const result = await host.deliver(session, { text: "Attached follow-up", document: { title: "../../unsafe title", markdown: "# Complete proposal\n\nAll details." }, idempotencyKey: "../../untrusted-key" });
     assert.equal(result.sent, true);
-    assert.match(result.documentPath, /\/\.plur1bus\/afterthoughts\/[a-f0-9]{64}\.md$/);
+    assert.match(result.documentPath, /[\\/]\.plur1bus[\\/]afterthoughts[\\/][a-f0-9]{64}\.md$/);
     assert.equal(readFileSync(result.documentPath, "utf8"), "# Complete proposal\n\nAll details.");
     assert.equal(state.sent[0].mediaUrl, result.documentPath);
     assert.deepEqual(state.sent[0].mediaLocalRoots, [workspaceDir]);

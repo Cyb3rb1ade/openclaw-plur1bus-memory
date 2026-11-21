@@ -47,7 +47,9 @@ test('short authored input gets independent assessment, private atomic mood and 
   const persisted = readFileSync(statePath, 'utf8');
   assert.equal(persisted.includes('Ja!'), false);
   assert.equal(JSON.parse(persisted).state.version, 3);
-  assert.equal(statSync(statePath).mode & 0o777, 0o600);
+  if (process.platform !== 'win32') { // POSIX modes; win32 secures via ACLs (securePath)
+    assert.equal(statSync(statePath).mode & 0o777, 0o600);
+  }
   assert.ok(existsSync(join(f.root, '.current-mood.txt')));
   const env = await f.runtime.resolveExecEnv({}, f.ctx);
   assert.deepEqual(Object.keys(env).sort(), ['PLUR1BUS_SPEECH_CONTEXT_FILE', 'PLUR1BUS_SPEECH_RUN_ID']);
@@ -57,8 +59,10 @@ test('short authored input gets independent assessment, private atomic mood and 
   assert.equal(snapshot.sessionId, f.ctx.sessionId);
   assert.equal(snapshot.expiresAt - snapshot.createdAt, 900000);
   assert.equal(snapshot.context.at(-1).content, 'Ja!');
-  assert.equal(statSync(env.PLUR1BUS_SPEECH_CONTEXT_FILE).mode & 0o777, 0o600);
-  assert.equal(statSync(join(f.root, '.plur1bus/speech-context')).mode & 0o777, 0o700);
+  if (process.platform !== 'win32') { // POSIX modes; win32 secures via ACLs (securePath)
+    assert.equal(statSync(env.PLUR1BUS_SPEECH_CONTEXT_FILE).mode & 0o777, 0o600);
+    assert.equal(statSync(join(f.root, '.plur1bus/speech-context')).mode & 0o777, 0o700);
+  }
   for (const patch of [{ runId: undefined }, { workspaceDir: undefined }, { runId: 'other' }, { sessionId: 'other' }, { agentId: 'bernhardine' }, { sessionKey: 'other' }]) {
     assert.deepEqual(await f.runtime.resolveExecEnv({}, { ...f.ctx, ...patch }), {});
   }

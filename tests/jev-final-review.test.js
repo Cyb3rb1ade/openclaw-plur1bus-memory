@@ -77,7 +77,7 @@ for (const transition of ['active', 'active-then-shadow']) for (const outcome of
   });
 }
 
-test('shadow runtime through trusted host and real adapter carries authored persona/context/current mood, closes terminal and revoked runs', async t => {
+test('shadow runtime through trusted host and real adapter carries authored persona/context/current mood, closes terminal and revoked runs', { skip: process.platform === 'win32' && 'the speech context reader uses POSIX owner/mode checks and fails closed on win32 (asserted in telegram-speech-adapter.test.js)' }, async t => {
   t.mock.timers.enable({ apis: ['Date'], now: 1800000000000 });
   let allowed = true;
   const inputs = [];
@@ -168,7 +168,7 @@ test('stale shadow exec handler cannot delete the replacement generation context
   assert.deepEqual(await active.resolveExecEnv({}, ctx), currentEnv);
 });
 
-for (const mode of ['shadow', 'active']) test(`${mode} exposes matching authored contextual inputs to outgoing comparison`, async t => {
+for (const mode of ['shadow', 'active']) test(`${mode} exposes matching authored contextual inputs to outgoing comparison`, { skip: process.platform === 'win32' && 'the speech context reader uses POSIX owner/mode checks and fails closed on win32 (asserted in telegram-speech-adapter.test.js)' }, async t => {
   t.mock.timers.enable({ apis: ['Date'], now: 1800000000000 });
   const f = fixture(t, mode, { assessor: async () => ({ ok: false, reason: 'invalid_or_uncertain_answer' }) });
   writeFileSync(join(f.root, 'persona-voice.md'), '<!-- persona:begin -->\n- Private gentle persona\n<!-- persona:end -->');

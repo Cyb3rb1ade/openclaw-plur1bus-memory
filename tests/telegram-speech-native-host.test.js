@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, existsSync, statSync } from 'node:fs';
+import { readFileSync, realpathSync, writeFileSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import vm from 'node:vm';
 import { makeTempDir } from './helpers/temp-dir.js';
@@ -66,7 +66,7 @@ async function setup(t, mode = 'shadow') {
   return { root, config, pool, inputs, events, contexts, runtime, ctx, call, env };
 }
 
-test('native admitted structured text reaches real runtime and adapter once per stable admission, shadow remains neutral', async t => {
+test('native admitted structured text reaches real runtime and adapter once per stable admission, shadow remains neutral', { skip: process.platform === 'win32' && 'the speech context reader uses POSIX owner/mode checks and fails closed on win32 (asserted in telegram-speech-adapter.test.js)' }, async t => {
   const f = await setup(t);
   const before = f.pool.get('main').serializeState().current;
   const message = { role: 'user', content: [{ type: 'text', text: ' Authored\n' }, { type: 'image', text: 'NOT TEXT' }, { type: 'text', text: 'words 🐈 ' }], idempotencyKey: 'logical-turn:stable', provenance: { kind: 'external_user' }, modelPromptProjection: { text: 'ADVERSARIAL PROJECTION', idempotencyKey: 'forged' } };
@@ -135,7 +135,8 @@ test('directory preflights all native targets before any mutation and supports i
   const report = patchExecContextDirectory(root);
   assert.ok(Array.isArray(report.files));
   assert.equal(report.files.length, 3);
-  assert.equal(report.file, join(root, 'bash-tools-fixture.mjs'));
+  // The patcher reports canonical paths (macOS: /var -> /private/var).
+  assert.equal(report.file, join(realpathSync(root), 'bash-tools-fixture.mjs'));
   assert.deepEqual(names.map(name => readFileSync(join(root, `${name}-fixture.mjs`), 'utf8')), before);
   patchExecContextDirectory(root, true);
   assert.equal(patchExecContextDirectory(root, true).changed, false);

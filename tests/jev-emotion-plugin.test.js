@@ -71,7 +71,9 @@ test('real recall path cannot prevent independent state when DB open fails', asy
   assert.equal(f.requests.length, 1);
   assert.ok(results.some(result => result?.prependContext?.includes('<jev-emotion>')));
   assert.ok(existsSync(join(f.root, '.emotional-state.json')));
-  assert.match(JSON.stringify(f.logs), /recall (?:scheduler )?failed.*(directory|ENOTDIR|EEXIST|Path traversal blocked)/i);
+  // main logs the error class/code only (describeError); the store error differs per platform
+  // (ENOTDIR on Linux, LanceDB GenericFailure on macOS/Windows).
+  assert.match(JSON.stringify(f.logs), /recall (?:scheduler )?failed for agent=main/i);
 });
 
 test('standalone injector suppresses active enabled agent but retains shadow/other agents', async t => {
