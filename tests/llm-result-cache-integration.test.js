@@ -362,7 +362,11 @@ describe("deterministic LLM result-cache allowlist", () => {
       },
     });
 
-    assert.deepEqual(captureCfg?.resultCacheContext, AGENT_CONTEXTS.skill);
+    const { validateResult, ...context } = captureCfg.resultCacheContext;
+    assert.deepEqual(context, AGENT_CONTEXTS.skill);
+    assert.equal(typeof validateResult, "function");
+    assert.equal(validateResult('{"confidence":0.9,"skillName":"incomplete"}'), false);
+    assert.equal(validateResult('{"skip":true,"confidence":0}'), true);
     assert.equal(captureCfg?.temperature, 0);
   });
 
@@ -402,7 +406,11 @@ describe("deterministic LLM result-cache allowlist", () => {
         logger: { info: () => {}, warn: () => {} },
       });
 
-      assert.deepEqual(captureCfg?.resultCacheContext, AGENT_CONTEXTS.skill);
+      const { validateResult, ...context } = captureCfg.resultCacheContext;
+    assert.deepEqual(context, AGENT_CONTEXTS.skill);
+    assert.equal(typeof validateResult, "function");
+    assert.equal(validateResult('{"confidence":0.9,"skillName":"incomplete"}'), false);
+    assert.equal(validateResult('{"skip":true,"confidence":0}'), true);
       assert.equal(captureCfg?.temperature, 0);
     } finally {
       rmSync(workspaceDir, { recursive: true, force: true });
