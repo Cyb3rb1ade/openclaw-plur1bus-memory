@@ -45,7 +45,8 @@ These features sit **after** normal recall and only append results. They must ne
 
 - Loads precomputed `.plur1bus/semantic-lens-index.json` from the workspace.
 - Adds community/bridge/faded memories after normal recall; dedupes against base recall IDs.
-- Default `enabled: false`; caps `maxLensMemories: 3`, `maxBridgeMemories: 2`, `maxFadedMemories: 1`, `maxCommunities: 2`.
+- Default `enabled: true`; caps `maxLensMemories: 3`, `maxBridgeMemories: 2`, `maxFadedMemories: 1`, `maxCommunities: 2`.
+- Hydrated raw rows must pass the canonical request ACL before Lens projection or selection quotas; index membership grants no access.
 - Hard timeout 50 ms; fallback returns base recall unchanged.
 - No writes, no live graph recompute, no second recall path.
 

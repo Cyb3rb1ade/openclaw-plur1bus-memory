@@ -618,8 +618,9 @@ export function createTurnCapture(ctx) {
               }
             }
             host.logger.info(`memory-lancedb-namespaced: embedded ${textsToEmbed.length} capture item(s) in batch for agent=${agentId}${background ? " (background)" : ""}`);
-          } catch (batchErr) {
-            host.logger.warn(`memory-lancedb-namespaced: batch embed failed, falling back to individual embeddings: ${String(batchErr)}`);
+          } catch {
+            // Provider errors may contain capture text or unsafe coercion hooks.
+            host.logger.warn("memory-lancedb-namespaced: batch embed failed, falling back to individual embeddings operation=capture stage=batch-embedding errorCode=batch-embedding-failed");
             textToVector.clear();
           }
         }

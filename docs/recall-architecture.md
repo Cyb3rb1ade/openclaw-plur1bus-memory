@@ -131,11 +131,14 @@ prompt-compressor stage in this path; that runtime feature remains B12-P.
 
 After primary recall finalizes, the caller may append:
 
-- **Semantic Lens** results from the precomputed workspace lens index.
+- **Semantic Lens** results from the precomputed workspace lens index. Each
+  hydrated raw row must pass the canonical request ACL before projection or
+  selection quotas; denied rows consume no Lens slot. Workspace index membership
+  grants no access to user, agent-private, or workspace memories.
 - **Conversation Reactivation Recall (CRR)** results for bounded reactivation
   triggers.
 
-Both stages are disabled by default, deduplicate against primary result IDs,
-have strict caps/timeouts, and fall back to the unchanged primary recall on an
-error. Neither stage replaces primary recall, performs a second authoritative
-write path, or mutates memory records.
+Semantic Lens is enabled by default; CRR requires explicit opt-in. Both stages
+deduplicate against primary result IDs, have strict caps/timeouts, and fall back
+to the unchanged primary recall on an error. Neither stage replaces primary
+recall, performs a second authoritative write path, or mutates memory records.
