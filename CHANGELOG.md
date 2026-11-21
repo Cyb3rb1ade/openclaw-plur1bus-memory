@@ -45,6 +45,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 ### Ported from 7.18.21–7.20.2
 
 - **7.18.21** — Morning/evening review health check accepts `obsidianBridge.mode: "apply"`; system notices are grouped by code; `invalid_mode` and the review footnote are translated.
+- **7.18.22** — A denied Obsidian mutation policy answers with translated text naming the closed gates instead of raw JSON; the result carries a non-enumerable `policyDenied`, which the adapter's operator path forwards so the review feature cron ends with an error.
 
 ### Ported from 7.18.5–7.18.20
 

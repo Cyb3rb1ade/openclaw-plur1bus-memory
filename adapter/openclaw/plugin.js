@@ -381,7 +381,11 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
         if (operatorLang) commandCtx.lang = operatorLang;
         const result = await spec.handler(commandCtx);
         const text = typeof result === "string" ? result : result?.text;
-        return { text: typeof text === "string" && text.length > 0 ? text : "NO_REPLY" };
+        return {
+          text: typeof text === "string" && text.length > 0 ? text : "NO_REPLY",
+          // 7.18.22: Der Review-Cron wertet eine Policy-Ablehnung als Fehler.
+          ...(result?.policyDenied ? { policyDenied: result.policyDenied } : {}),
+        };
       };
       // PR-03g: every chat-command registration below this point — and,
       // for M1a, the six user-facing command bodies and the four
