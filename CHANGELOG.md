@@ -60,6 +60,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - **7.19.2** — `autoApplyLowRisk` stamps the approval hash and metadata so revalidation accepts it, the morning review run gets `memoryStore`/`knowledgeUpdate`, a failing auto-apply is logged; note import skips workspace prompt files and derived content.
 - **7.19.3** — Neo journals keep at least 90 days: the append path only applies an emergency ceiling of 40,000 lines; regular retention runs in the daily consolidation above 5000 lines, by value (revisions stay or go together, protected entries last), and removed lines are archived to `<workspace>/archive/<file>.<YYYY-MM>.jsonl.gz`. The daily consolidation now also prunes the hook store (`pruneHookNeoStoreFiles`). Without this, the 5000-line append cap on main cut stores grown under 7.19.3+ without an archive.
 - **7.19.4** — The DB adapter connects with `readConsistencyInterval: 0`, so classify-recent sees cards written after the table was opened. Main already had this (E1 Task 8); the port adds the release regression test.
+- **7.20.0** — Dashboard card "Conversation compaction model": one row per chat agent writes `agents.entries.<id>.compaction.model` in the OpenClaw config (`compaction_model_unsupported` on hosts without it); values come from the running host config (`liveHostConfig`).
 
 ### Ported from 7.18.5–7.18.20
 

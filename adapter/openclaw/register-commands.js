@@ -39,7 +39,7 @@ import { resolveEffectiveConfig } from "../../lib/setup/config-contract.js";
 import { boundTelegramAccountId } from "../../lib/setup/feature-cron-plan.js";
 import { createCompactionRunner, isPartitionId } from "../../lib/setup/control-ui-compaction.js";
 import { registerControlUiRuntime } from "../../lib/setup/control-ui-plugin-runtime.js";
-import { applyControlUiWriteAction, createCaptureChunkingMutator, createJevApiKeyMutator, createConfirmationStore, createEmbeddingProfileMutator, createFeatureModelMutator, createChatModelMutator, createFormTokenStore, createRerankerMutator, createSettingMutator, rerankerKeyConfigured } from "../../lib/setup/control-ui-write.js";
+import { applyControlUiWriteAction, createCaptureChunkingMutator, createCompactionModelMutator, createJevApiKeyMutator, createConfirmationStore, createEmbeddingProfileMutator, createFeatureModelMutator, createChatModelMutator, createFormTokenStore, createRerankerMutator, createSettingMutator, rerankerKeyConfigured } from "../../lib/setup/control-ui-write.js";
 import { registerFeatureCronNativeDispatch, loadOpenClawPluginSdkRuntime } from "../../lib/setup/feature-cron-plugin-runtime.js";
 import { resolveAgentWorkspaceDir } from "../../lib/setup/memory-host-runtime.js";
 import { describeVaultCandidates, registerObsidianVaultRuntime } from "../../lib/setup/obsidian-vault-plugin-runtime.js";
@@ -492,6 +492,7 @@ export function registerChatCommands(ctx) {
       getHostConfig: () => host.runtime?.config?.current?.() ?? api.config ?? {},
       loadModelSession: () => loadOpenClawPluginSdkRuntime("model-session-runtime"),
     });
+    const setCompactionModel = createCompactionModelMutator({ api });
     const setCaptureChunking = createCaptureChunkingMutator({ api });
     const setJevApiKey = createJevApiKeyMutator({ api });
     const setSetting = createSettingMutator({
@@ -544,6 +545,7 @@ export function registerChatCommands(ctx) {
           setReranker,
           setFeatureModel,
           setChatModel,
+          setCompactionModel,
           setCaptureChunking,
           setJevApiKey,
           setSetting,
@@ -641,6 +643,7 @@ export function registerChatCommands(ctx) {
         return buildControlPlaneProjection({
           config: cfg,
           hostConfig: api.config,
+          liveHostConfig: host.runtime?.config?.current?.() ?? null,
           obsidianVault: {
             configured: configuredObsidianWorkspaces.length > 0,
             configuredCount: configuredObsidianWorkspaces.length,
