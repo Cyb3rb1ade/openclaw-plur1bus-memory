@@ -755,6 +755,11 @@
       "x-tier": "advanced",
       "description": "Settings for captureChunkingMode \"automatisch\". Jev (TypeSafe) decides per message that the splitter would cut: coherent with high confidence stores the whole row, independent points with high confidence store only the parts, otherwise whole and parts. The message is sent to api.typesafe.ai. Without a key the mode behaves like \"beides\".",
       "properties": {
+        "apiKey": {
+          "$ref": "#/$defs/secretInput",
+          "x-sensitive": true,
+          "description": "Optional TypeSafe API key. A nonempty value takes precedence over apiKeyEnv."
+        },
         "apiKeyEnv": {
           "type": "string",
           "default": "TYPESAFE_API_KEY",

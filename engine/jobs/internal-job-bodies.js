@@ -569,11 +569,22 @@ export function createInternalJobBodies(ctx) {
           const disabledResult = { job: "afterthought", skipped: true, reason: "disabled" };
           return jobCtx.skip("disabled", cronInternal ? formatAfterthoughtCronReply(disabledResult) : formatJsonCommandResult(disabledResult));
         }
-        const { runAfterthoughtJob } = await import("../../lib/afterthought.js");
         const sessionRuntime = commandCtx?.runtimeContext?.llm;
-        const result = await runAfterthoughtJob({
+        // 7.18.25: Nachgedanken nach Gesprächsruhe lesen die Originalsitzung
+        // und stellen in sie zu. Das kann nur der Host (OpenClaw-Adapter:
+        // host.capabilities.createAfterthoughtHost); ohne ihn bleibt der
+        // bisherige Journal-basierte Job.
+        const createConversationHost = host.capabilities?.createAfterthoughtHost;
+        const conversationHost = typeof createConversationHost === "function"
+          ? createConversationHost({ agentId: internalAgent, workspaceDir: commandCtx.workspaceDir })
+          : null;
+        const runJob = conversationHost
+          ? (await import("../../lib/afterthought-reflection.js")).runConversationAfterthoughtJob
+          : (await import("../../lib/afterthought.js")).runAfterthoughtJob;
+        const result = await runJob({
           workspaceDir: commandCtx.workspaceDir,
           agentId: internalAgent,
+          ...(conversationHost ?? {}),
           llmCfg: withLlmCallContext(
             afterthoughtLlmCfg,
             internalAgent,
@@ -584,9 +595,14 @@ export function createInternalJobBodies(ctx) {
           timeZone: cfg.afterthought?.timezone ?? cfg.timezone ?? null,
           logger: host.logger,
         });
-        host.logger.info(`plur1bus internal afterthought[${internalAgent}]: ${JSON.stringify(summarizeAfterthoughtResultForLog(result))}`);
+        const afterthoughtLog = conversationHost
+          ? { sent: result?.sent === true, skipped: result?.skipped === true, reason: result?.reason }
+          : summarizeAfterthoughtResultForLog(result);
+        host.logger.info(`plur1bus internal afterthought[${internalAgent}]: ${JSON.stringify(afterthoughtLog)}`);
         return cronInternal
-          ? formatAfterthoughtCronReply(result)
+          // Der Gesprächs-Nachgedanke stellt selbst in die Sitzung zu; die
+          // Cron-Antwort trägt dann keinen Text mehr.
+          ? formatAfterthoughtCronReply(conversationHost ? { ...result, text: undefined } : result)
           : formatJsonCommandResult({ job: "afterthought", ...result });
       }
       if (subKey === "persona-evolve") {

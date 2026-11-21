@@ -97,7 +97,7 @@ describe("dashboard", () => {
     assert.ok(CAPTURE_CHUNKING_CHOICES.some((choice) => choice.id === "automatisch"));
     assert.equal(activeCaptureChunkingId({ captureChunkingMode: "automatisch" }), "automatisch");
     const withKey = buildControlPlaneProjection({ config: { captureChunkingMode: "automatisch" }, env: { TYPESAFE_API_KEY: "secret-value" } });
-    assert.deepEqual(withKey.captureChunking, { mode: "automatisch", jevKey: true });
+    assert.deepEqual(withKey.captureChunking, { mode: "automatisch", jevKey: true, jevKeySource: "environment" });
     assert.ok(!JSON.stringify(withKey).includes("secret-value"));
     const custom = buildControlPlaneProjection({ config: { captureChunkingMode: "automatisch", captureChunkingJev: { apiKeyEnv: "JEV_KEY" } }, env: {} });
     assert.equal(custom.captureChunking.jevKey, false);

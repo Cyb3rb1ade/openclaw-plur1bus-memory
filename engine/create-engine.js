@@ -545,7 +545,7 @@ export function createEngine(host, config, testOptions = {}) {
   const dreamNarrativeLlmCfg = createFeatureRoute("dream-narrative", {});
   const dreamEchoLlmCfg = createFeatureRoute("dream-echo", {});
   const episodeExtractionLlmCfg = createFeatureRoute("episode-extraction", {});
-  const afterthoughtLlmCfg = createFeatureRoute("afterthought", cfg.afterthought || {});
+  const afterthoughtLlmCfg = createFeatureRoute("afterthought", { maxTokens: 8192, ...(cfg.afterthought || {}) });
   const personaVoiceLlmCfg = createFeatureRoute("persona-voice", cfg.personaVoice || {});
   // 7.12.38: Obergrenze des verwalteten Blocks (Seed + Gelerntes, Default 24)
   // und daraus abgeleiteter Deckel der injizierten Stimm-Direktive

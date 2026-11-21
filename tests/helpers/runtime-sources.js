@@ -117,6 +117,8 @@ const ADAPTER_PATHS = Object.freeze({
   plugin: "adapter/openclaw/plugin.js",
   configSchema: "adapter/openclaw/config-schema.js",
   obsidianReviewCronCommands: "adapter/openclaw/obsidian-review-cron-commands.js",
+  afterthoughtHooks: "adapter/openclaw/afterthought-hooks.js",
+  afterthoughtHost: "adapter/openclaw/afterthought-host.js",
 });
 
 function listJsFiles(relativeDir) {

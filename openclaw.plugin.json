@@ -4,6 +4,9 @@
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
   "version": "7.18.4",
   "kind": "memory",
+  "controlUi": {
+    "entry": "dist/control-ui/jev-key/index.js"
+  },
   "cliCommands": [
     {
       "name": "plur1bus",
@@ -63,6 +66,10 @@
           "expected": "string"
         },
         {
+          "path": "captureChunkingJev.apiKey",
+          "expected": "string"
+        },
+        {
           "path": "reranker.apiKey",
           "expected": "string"
         },
@@ -113,6 +120,12 @@
       "sensitive": true,
       "advanced": true,
       "help": "Webhook for reminder delivery; may carry a token. Plain value only, no SecretRef."
+    },
+    "captureChunkingJev.apiKey": {
+      "label": "Jev API Key",
+      "sensitive": true,
+      "advanced": true,
+      "help": "Optional TypeSafe credential. A nonempty key overrides apiKeyEnv; remove it explicitly to use the environment fallback."
     },
     "reranker.apiKey": {
       "label": "Reranker API Key",
@@ -932,6 +945,10 @@
         "additionalProperties": false,
         "description": "Settings for captureChunkingMode \"automatisch\". Jev (TypeSafe) decides per message that the splitter would cut: coherent with high confidence stores the whole row, independent points with high confidence store only the parts, otherwise whole and parts. The message is sent to api.typesafe.ai. Without a key the mode behaves like \"beides\".",
         "properties": {
+          "apiKey": {
+            "$ref": "#/$defs/secretInput",
+            "description": "Optional TypeSafe API key. A nonempty value takes precedence over apiKeyEnv."
+          },
           "apiKeyEnv": {
             "type": "string",
             "default": "TYPESAFE_API_KEY",

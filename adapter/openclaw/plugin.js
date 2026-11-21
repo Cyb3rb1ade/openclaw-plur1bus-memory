@@ -51,7 +51,10 @@ import { buildMaintenanceNudges, completePendingConfirmation, findNeoRecord, gua
 import { createEngine } from "../../engine/create-engine.js";
 import { internalsOf } from "../../engine/internals.js";
 import { createHostServices } from "../../lib/host-services.js";
-import { shouldCoordinateLocalModelGeneration, configMutationLogNotice } from "../../lib/runtime-shutdown.js";
+import { shouldCoordinateLocalModelGeneration, configMutationLogNotice, runtimeIfUsable } from "../../lib/runtime-shutdown.js";
+import { registerAfterthoughtActivityHooks } from "./afterthought-hooks.js";
+import { observeAfterthoughtActivity } from "../../lib/afterthought-reflection.js";
+import { createAfterthoughtHost } from "./afterthought-host.js";
 import { createOpenClawSkillWorkshopClient } from "../../lib/setup/skill-workshop-plugin-runtime.js";
 import { createOpenClawEmbeddingSelectionMutator } from "../../lib/reembedding/runtime-config.js";
 import { deliverCriticalButtonPush } from "../../lib/critical-button-delivery.js";
@@ -166,6 +169,10 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
       commandRuntimeHooks,
       postTurnRefineScheduled,
       handleObsidianBridgeCommand: handleObsidianBridgeCommandWithNativeCron,
+      // 7.18.25: Nachgedanken nach Gesprächsruhe lesen und beliefern die
+      // Originalsitzung über die öffentlichen Session-Laufzeiten des Hosts
+      // (engine/jobs/internal-job-bodies.js, Job "afterthought").
+      createAfterthoughtHost: ({ agentId, workspaceDir }) => createAfterthoughtHost({ api, agentId, workspaceDir }),
       // MemoryOps archive-first backups stay where /forget and /correct have
       // always put them (~/.openclaw/memory/_archive, or under OPENCLAW_HOME).
       memoryArchiveDir: resolveDefaultArchiveDir,
@@ -528,6 +535,19 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
     registerNeoServiceLifecycle({ api, host, neoEnabled, neoRoot, neoWorkerRuntime });
   }
 
+  // 7.18.25: Gesprächsaktivität für die Nachgedanken nach Gesprächsruhe.
+  // "start" auf before_prompt_build (Priorität 1000), "end" weiter unten auf
+  // agent_end — dieselben Positionen wie in index.js der Release-Linie.
+  const afterthoughtActivityOptions = {
+    api,
+    enabled: cfg.afterthought?.enabled !== false,
+    observe: observeAfterthoughtActivity,
+    classifyIncognito: internals.classifyHostIncognitoSession,
+    isAllowed: (event, ctx) => automaticWorkspacePolicyDecision(event, ctx).allowed,
+    resolveSession: ({ agentId, sessionKey }) => runtimeIfUsable(api)?.agent?.session?.getSessionEntry?.({ agentId, sessionKey, readConsistency: "latest" }),
+  };
+  registerAfterthoughtActivityHooks({ ...afterthoughtActivityOptions, phases: ["start"] });
+
   // ========================================================================
   // Auto-Capture: Speichere User-Nachrichten automatisch
   // ========================================================================
@@ -653,6 +673,8 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
 
   // 7.17.0: Light-Sprachzüge laufen pro Lauf auf Haiku (register-voice-mode.js).
   registerVoiceModelOverride({ api, host, baseDbPath });
+
+  registerAfterthoughtActivityHooks({ ...afterthoughtActivityOptions, phases: ["end"] });
 
   // Manual tools remain available regardless of autoCapture/autoRecall:
   // memory_store, memory_recall, memory_forget and knowledge_update are not
