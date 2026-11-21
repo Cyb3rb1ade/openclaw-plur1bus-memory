@@ -36,6 +36,7 @@ const ADAPTER_ONLY_RUNTIME_KEYS = new Set(["traceRegistrations"]);
 const SECRET_INPUTS = [
   "embedding.apiKey",
   "embedding.fallback.apiKey",
+  "captureChunkingJev.apiKey",
   "reranker.apiKey",
   "merging.apiKey",
   "schicht15.apiKey",
@@ -57,6 +58,7 @@ const SENSITIVE = [
   "embedding.fallback.apiKey",
   "embedding.routes",
   "reminders.webhookUrl",
+  "captureChunkingJev.apiKey",
   "reranker.apiKey",
   "merging.apiKey",
   "merging.headers",
@@ -142,7 +144,7 @@ describe("engine-config.schema.json", () => {
     assert.deepEqual([...SENSITIVE].sort(), [...SECRET_INPUTS, ...SENSITIVE_PLAIN].sort());
     assert.deepEqual(
       engineConfigKeys().filter((k) => k.sensitive).map((k) => k.key),
-      ["embedding", "reminders", "reranker", "merging", "schicht15", "skillMiner", "criticalPush", "emotion"],
+      ["embedding", "reminders", "captureChunkingJev", "reranker", "merging", "schicht15", "skillMiner", "criticalPush", "emotion"],
     );
   });
 

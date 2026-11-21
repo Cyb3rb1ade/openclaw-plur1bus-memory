@@ -20,6 +20,7 @@
   },
   "files": [
     "index.js",
+    "dist/control-ui/jev-key/",
     "lib/",
     "engine/",
     "adapter/",
@@ -75,7 +76,7 @@
     "openai": "^6.27.0"
   },
   "optionalDependencies": {
-    "@huggingface/transformers": "4.3.1",
+    "@huggingface/transformers": "4.3.2",
     "typescript": "^5.9.3"
   },
   "devDependencies": {
@@ -95,6 +96,6 @@
     "fast-uri": "3.1.8",
     "hono": "4.13.7",
     "ip-address": "10.7.1",
-    "zod": "4.6.6"
+    "zod": "4.6.7"
   }
 }

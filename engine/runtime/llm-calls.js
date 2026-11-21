@@ -77,7 +77,7 @@ async function callMergeCheck(existingText, newText, llmCfg, agentId, callContex
     LLM_RESULT_CACHE_PURPOSES.MERGE_DECISION,
     // No temperature: providers like the Kimi coding endpoint allow exactly
     // one value per thinking mode and answer HTTP 400 for anything else.
-    { jsonMode: true, maxTokens: 300 },
+    { jsonMode: true, maxTokens: 450 },
     callContext,
   ));
   if (!content) return null;

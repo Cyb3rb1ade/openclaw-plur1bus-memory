@@ -105,7 +105,7 @@ async function summarizeForCapture(text, maxChars, llmCfg, logger, agentId, call
       },
     ], withLlmCallContext(
       withLlmResultCacheContext(
-        { ...llmCfg, maxTokens: Math.round(maxChars / 3), temperature: 0 },
+        { ...llmCfg, maxTokens: Math.round(maxChars / 2), temperature: 0 },
         agentId,
         LLM_RESULT_CACHE_PURPOSES.CAPTURE_SUMMARY,
       ),
@@ -142,7 +142,7 @@ function makeQuerySummarizer(llmCfg, logger, agentId, callContext = {}) {
       },
     ], withLlmCallContext(
       withLlmResultCacheContext(
-        { ...llmCfg, maxTokens: 300, temperature: 0 },
+        { ...llmCfg, maxTokens: 450, temperature: 0 },
         agentId,
         LLM_RESULT_CACHE_PURPOSES.RECALL_QUERY_SUMMARY,
       ),

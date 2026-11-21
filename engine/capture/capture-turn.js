@@ -24,7 +24,7 @@ import { runReflectionJob } from "../../lib/jobs/reflection-job.js";
 import { withLlmCallContext } from "../../lib/llm-result-cache.js";
 import { isLlmRouteAvailable } from "../../lib/llm-router.js";
 import { expandForCapture, expandForCaptureDecided } from "../../lib/memory-chunking.js";
-import { createJevChunkDecider } from "../../lib/jev-chunk-decider.js";
+import { createJevChunkDecider, resolveJevApiKey } from "../../lib/jev-chunk-decider.js";
 import { applyDynamicsDefaults } from "../../lib/memory-dynamics.js";
 import { buildEdgesForSession, buildEpisodeAnchorEdges, createGraphMetrics, extractGraphSignals, readBoundGraph, writeGraphConstellationReport } from "../../lib/memory-graph.js";
 import { resolveMemoryRequestContext } from "../../lib/memory-request-context.js";
@@ -190,7 +190,7 @@ export function createTurnCapture(ctx) {
   const jevChunkCfg = cfg?.captureChunkingJev || {};
   const jevChunkDecider = cfg?.captureChunkingMode === "automatisch"
     ? createJevChunkDecider({
-      apiKey: process.env[typeof jevChunkCfg.apiKeyEnv === "string" && jevChunkCfg.apiKeyEnv.trim() ? jevChunkCfg.apiKeyEnv.trim() : "TYPESAFE_API_KEY"],
+      apiKey: resolveJevApiKey(jevChunkCfg, process.env),
       model: jevChunkCfg.model,
       minConfidence: jevChunkCfg.minConfidence,
       timeoutMs: jevChunkCfg.timeoutMs,
