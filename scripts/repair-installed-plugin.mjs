@@ -4,7 +4,10 @@
  *
  * Runs after `openclaw plugins update` or whenever the deployed extension may have drifted
  * from the repo source. Detects and fixes:
- *   1. Deploy-integrity drift (index.js, lib/*.js, openclaw.plugin.json)
+ *   1. Deploy-integrity drift (index.js, lib/*.js, openclaw.plugin.json), plus
+ *      advisory refresh of the other packaged files (CHANGELOG.md, README.md,
+ *      docs, emotional-state-injector) — archived before overwrite, never
+ *      deleted, never part of the exit code
  *   2. LanceDB manifest-version explosion (diagnosis only unless --maintain-lancedb)
  *   3. Dreaming-cron error state (diagnosis only unless --run-cron)
  *
@@ -32,7 +35,15 @@ import { join, resolve, dirname } from "node:path";
 import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { validateDeployment, smokeTestExports, DEPLOY_FILES } from "./lib/deploy-integrity.mjs";
+import {
+  validateDeployment,
+  smokeTestExports,
+  DEPLOY_FILES,
+  listAuxiliaryPackagedFiles,
+  syncAuxiliaryFiles,
+  describeAuxiliaryReport,
+  repairBackupRoot,
+} from "./lib/deploy-integrity.mjs";
 import { findDeployDir } from "./lib/find-deploy-dir.mjs";
 
 const SMOKE_EXPECTATIONS = [
@@ -58,9 +69,7 @@ function parseArgs(argv) {
   return opts;
 }
 
-function backupDeployDir(deployDir, files) {
-  const ts = new Date().toISOString().replace(/[:.]/g, "").slice(0, 15);
-  const backupRoot = join(homedir(), ".openclaw-backups", `plur1bus-repair-${ts}`);
+function backupDeployDir(deployDir, files, backupRoot = repairBackupRoot()) {
   mkdirSync(backupRoot, { recursive: true });
   for (const f of files) {
     const src = join(deployDir, f);
@@ -204,8 +213,10 @@ async function main() {
     expectedVersion: opts.expectedVersion,
   });
   const hasViolations = !checkReport.ok;
+  // One archive directory per run, shared by the strict and advisory tiers.
+  const backupRoot = repairBackupRoot();
   if (hasViolations && mutationAllowed) {
-    const backupDir = backupDeployDir(deployDir, DEPLOY_FILES);
+    const backupDir = backupDeployDir(deployDir, DEPLOY_FILES, backupRoot);
     console.log(`  backup → ${backupDir}`);
   }
 
@@ -227,6 +238,22 @@ async function main() {
     const detail = r.repaired ? ` (was: ${r.reasons.join(", ")})` : r.reasons.length ? ` (${r.reasons.join(", ")})` : "";
     console.log(`  ${icon} ${label} ${r.file}${detail}`);
   }
+
+  // Packaged non-code files (advisory). Refreshed only after the strict tier
+  // is healthy, so they always come from the release the preflight accepted.
+  const aux = listAuxiliaryPackagedFiles(repoDir);
+  const auxReport = syncAuxiliaryFiles({
+    deployDir,
+    repoDir,
+    files: aux.files,
+    refresh: report.ok,
+    dryRun: !mutationAllowed,
+    backupDir: backupRoot,
+  });
+  console.log("\n  packaged files (advisory):");
+  if (!report.ok) console.log("  ⚠ NOTE    refresh skipped: deploy integrity failed");
+  for (const line of describeAuxiliaryReport(auxReport, aux.errors)) console.log(`  ${auxReport.ok ? "✓" : "⚠"} ${line}`);
+  if (!hasViolations && auxReport.results.some((r) => r.backupPath)) console.log(`  backup → ${backupRoot}`);
 
   let smokeOk = true;
   if (!opts.noSmoke) {
@@ -271,6 +298,7 @@ async function main() {
   // Summary
   section("Summary");
   console.log(`  Deploy integrity:  ${integrityOk ? "✓ OK" : "✗ FAIL"}`);
+  console.log(`  Packaged files:    ${auxReport.ok ? "✓ current" : "⚠ drift (advisory)"}`);
   console.log(`  LanceDB versions:  ${lancedbOk ? "✓ OK" : "⚠ elevated"}`);
   console.log(`  Dreaming cron:     ${cronOk ? "✓ OK" : "⚠ error state"}`);
   console.log("");

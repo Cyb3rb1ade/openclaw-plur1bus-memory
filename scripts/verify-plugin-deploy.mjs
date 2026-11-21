@@ -14,9 +14,26 @@
 //   node scripts/verify-plugin-deploy.mjs [--repair] [--dry-run] [--expected-version VERSION] [--repo-dir DIR] [--deploy-dir DIR]
 //
 // Exit code 0 = healthy (or successfully repaired). Non-zero = unresolved violations.
+//
+// Two tiers:
+//   - DEPLOY_FILES (strict): runtime code. Any mismatch fails the check.
+//   - Packaged auxiliary files (advisory): everything else package.json `files`
+//     ships (CHANGELOG.md, README.md, docs, emotional-state-injector, ...),
+//     derived from the source checkout. Reported as STALE/MISSING and, with
+//     --repair, refreshed after the strict tier passed — each overwritten file
+//     is archived to ~/.openclaw-backups/plur1bus-repair-<ts>/ first. Never
+//     deletes anything and never changes the exit code.
 
 import { resolve } from "node:path";
-import { validateDeployment, smokeTestExports, DEPLOY_FILES } from "./lib/deploy-integrity.mjs";
+import {
+  validateDeployment,
+  smokeTestExports,
+  DEPLOY_FILES,
+  listAuxiliaryPackagedFiles,
+  syncAuxiliaryFiles,
+  describeAuxiliaryReport,
+  repairBackupRoot,
+} from "./lib/deploy-integrity.mjs";
 import { findDeployDir } from "./lib/find-deploy-dir.mjs";
 
 // Named exports confirmed to exist in the real files (no guessing).
@@ -79,6 +96,24 @@ async function main() {
     }
   }
 
+  // Advisory tier: refresh only once the strict code tier is healthy, so docs
+  // are never pulled from a source the release-identity preflight rejected.
+  const aux = listAuxiliaryPackagedFiles(repoDir);
+  const auxBackupDir = repairBackupRoot();
+  const auxReport = syncAuxiliaryFiles({
+    deployDir,
+    repoDir,
+    files: aux.files,
+    refresh: opts.repair && report.ok,
+    dryRun: opts.dryRun,
+    backupDir: auxBackupDir,
+  });
+  console.log("");
+  console.log("[deploy-integrity] packaged files (advisory):");
+  if (opts.repair && !report.ok) console.log("  NOTE    refresh skipped: strict deploy-integrity check failed");
+  for (const line of describeAuxiliaryReport(auxReport, aux.errors)) console.log(`  ${line}`);
+  if (auxReport.results.some((r) => r.backupPath)) console.log(`  backup → ${auxBackupDir}`);
+
   const smokeExpectations = EXPORT_EXPECTATIONS.map(({ file, exports }) => ({
     filePath: resolve(deployDir, file),
     exports,
@@ -100,6 +135,11 @@ async function main() {
   const ok = report.ok && smoke.ok;
   console.log("");
   console.log(ok ? "[deploy-integrity] PASS" : "[deploy-integrity] FAIL");
+  // process.exit() does not wait for buffered stdout: after the smoke test has
+  // imported native modules, a piped stdout can be non-blocking and the report
+  // was cut off mid-list. Flush first, then exit (lingering handles from the
+  // smoke imports would otherwise keep the process alive).
+  await new Promise((resolveFlush) => process.stdout.write("", resolveFlush));
   process.exit(ok ? 0 : 1);
 }
 

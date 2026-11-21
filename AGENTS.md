@@ -234,7 +234,12 @@ node --test tests/*.test.js
   (`lib/snapshot/store-snapshot.js`, `scripts/snapshot-store.mjs`,
   `snapshotsDir`) and the modules the add-on vendors; keep their tests
   (`tests/selftest-*`, `tests/snapshot-store.test.js`,
-  `tests/protect-plur1bus-deploy.test.js`) green. The full suite on Windows and
+  `tests/protect-plur1bus-deploy.test.js`) green. Deploy verify/repair has two
+  tiers: `DEPLOY_FILES` (strict code manifest, a mismatch fails) and the
+  advisory packaged-file tier derived from `package.json` `files` (docs,
+  changelog, README, emotional-state-injector; refreshed after archiving,
+  never deleted, never fails — `tests/deploy-packaged-files.test.js`). A new
+  shipped doc needs no manifest entry; new runtime code still does. The full suite on Windows and
   macOS runs in `ci.yml` (`test-cross`).
 - Current baseline (Linux, Node 24.22.3, 7.18.4 with 7.18.21–7.20.2 ported):
   6,890 tests in 1,184 suites, 9 skipped (platform-only and opt-in cases). The Local Inference adm-zip check
