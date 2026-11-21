@@ -42,7 +42,7 @@ globalThis.fetch = async (url, init) => {
 };
 const report = { observedAt: new Date().toISOString(), models: { embedding: embeddings.model, reranker: provider.model, jev: "jev-latest" },
   limits: { maxPromptMemories: 15, softBudgetMs: cfg.recall?.softBudgetMs ?? 12000, rerankerTimeoutMs: cfg.reranker?.timeoutMs ?? 2500 },
-  methodology: "One frozen ANN top-100 snapshot per query; real recall pipeline and ACL; canonical-file/graph boosters excluded; anchor coverage is a lower bound, not exhaustive relevance labeling. Query embedding cost shared. No clinical validation of historical memory contents.",
+  methodology: "One frozen ANN top-100 snapshot per query; production namespace merge and budget (one private namespace), real recall pipeline and ACL; canonical-file/graph boosters excluded; anchor coverage is a lower bound, not exhaustive relevance labeling. Query embedding cost shared. No clinical validation of historical memory contents.",
   monetaryCost: null, costNote: "Measured provider usage; monetary totals require account-specific tariffs, never guessed.", cases: [] };
 const stringify = (value) => JSON.stringify(value, (_key, item) => typeof item === "bigint" ? Number(item) : item, 2);
 try {

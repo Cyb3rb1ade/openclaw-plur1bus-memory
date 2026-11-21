@@ -1,5 +1,7 @@
 # Recall comparison — 2026-10-23
 
+Historical 7.18.27 measurement. This run called the recall pipeline directly and did not exercise the namespace merge. The corrected measurement using the production wrapper, after the upstream ordering backport, is in [7.18.28 follow-up](2026-10-23-recall-upstream-followup.md). Use that report for the current decision.
+
 Measured on the existing OpenClaw 2026.10.4 installation using the three private agent stores (main, bernhardine, heisenberg). Production selection remains **40 ANN candidates, direct Cohere reranking, at most 15 prompt memories**. Jev recall filtering remains an operator benchmark adapter; it is not installed in the production recall route.
 
 | Variant | Known source anchors | Mean | Median | p95 | Cohere billed search units |

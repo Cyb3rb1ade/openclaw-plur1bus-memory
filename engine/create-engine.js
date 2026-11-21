@@ -2049,7 +2049,11 @@ export function createEngine(host, config, testOptions = {}) {
     { credentialResolver, localModelGeneration },
   );
   // Wie viele Kandidaten vor dem Re-Ranking holen (dann auf limit/top_n reduzieren)
-  const rerankCandidates = rerankerCfg.candidates ?? candidateTopK;
+  // Provider normalization supplies its own default; only explicit caps should
+  // override the candidate pool selected for recall (7.18.28).
+  const rerankCandidates = rawPluginConfig.reranker?.candidates == null
+    ? candidateTopK
+    : rerankerCfg.candidates;
 
   if (reranker) {
     const experimental = rerankerCfg.provider === "local-transformers" ? " experimental" : "";
