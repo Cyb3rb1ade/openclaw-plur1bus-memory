@@ -49,6 +49,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - **7.18.23** — Host LLM routes to Claude Haiku disable thinking for background jobs; tight output limits rise about 50 % (dream narratives, light/REM dream, emotion T3 300 → 450, critical-push classification 16 → 24, merge check and query summary 300 → 450, capture summary maxChars/3 → /2).
 - **7.18.24** — Session-scoped host runtime-lifecycle cleanups (reset/delete or a `sessionKey`) no longer dispose the plugin-wide pools, embeddings and caches (`isSessionScopedRuntimeCleanup`), so recall, capture and feature crons keep working after a session reset.
 - **7.18.25** — Afterthoughts reflect on the original conversation after a persisted 15–120 minute idle delay; the cron checks deadlines every minute (shipped 30-minute/3-hour intervals migrate). Jev credentials can be saved or removed from the dashboard (`captureChunkingJev.apiKey`, a SecretInput, before `apiKeyEnv`). On main the host-bound parts live in `adapter/openclaw/afterthought-{host,hooks}.js`; the engine job uses `host.capabilities.createAfterthoughtHost` and falls back to the journal-based job without it.
+- **7.18.26** — Afterthought prompts keep stable instructions, identity and Persona Voice in the system prefix and the untrusted conversation plus the decision request in a separate user message, so the host transport can cache the stable prefix.
 
 ### Ported from 7.18.5–7.18.20
 
