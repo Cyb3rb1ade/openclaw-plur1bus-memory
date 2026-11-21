@@ -52,6 +52,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - **7.18.26** — Afterthought prompts keep stable instructions, identity and Persona Voice in the system prefix and the untrusted conversation plus the decision request in a separate user message, so the host transport can cache the stable prefix.
 - **7.18.27** — Model selections share provider groups and natural sorting; catalog reconciliation keeps referenced models and never rewrites routing. Read-only recall comparison (`scripts/compare-recall.mjs`, optional conservative Jev prefilter); provider ACL is checked right before reranking, and a reranker may declare an empty result valid.
 - **7.18.28** — Reranker order survives the namespace merge and the recall budget (`preserveOrder` from `rerankScore`); duplicate rerank indices are ignored; only an explicit `reranker.candidates` caps the rerank pool; a knowledge cache with a failed section is not written; a failed graph-hydration relevance check rejects the row. The open PR #257 fixes the same area differently and needs a rebase against this port.
+- **7.18.29** — The dashboard shows whether a Jev credential is configured and where it comes from (config or environment), never the value.
 
 ### Ported from 7.18.5–7.18.20
 
