@@ -34,14 +34,14 @@ describe("formatRelevantMemoriesContext — RELATIVE TIME instruction", () => {
     assert.equal(relativeTimeLines(out).length, 1, `expected one RELATIVE TIME line in: ${out}`);
   });
 
-  it("is one line naming created-at, the en/de examples and the year", () => {
+  it("is one line naming created-at, the en/de examples, without forcing years into replies", () => {
     const [line] = relativeTimeLines(formatRelevantMemoriesContext([memory()], { now: NOW_MS }));
     assert.ok(line.includes("created-at"), line);
     assert.ok(line.includes("not to today"), line);
     for (const word of ["yesterday", "last week", "next month", "gestern", "letzte Woche"]) {
       assert.ok(line.includes(`"${word}"`), `missing example ${word}: ${line}`);
     }
-    assert.match(line, /include the year/);
+    assert.doesNotMatch(line, /include the year/, "live replies keep their own date style");
     assert.doesNotMatch(line, /approximat|roughly|about|ungefähr|circa/i, "no approximation clause");
   });
 
