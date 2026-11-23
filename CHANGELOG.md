@@ -6,6 +6,18 @@ Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 
+## [7.20.3] — 2026-11-23
+
+### Added
+
+- The Semantic Lens index (`.plur1bus/semantic-lens-index.json`) is written every night. It never had a writer: the reader shipped in 6.6.0, the three indexes in use were generated once by hand on 2026-06-14, and the 6.8.7 entry below wrongly listed the file under the nightly discovery. `lib/semantic-lens-writer.js` clusters the neighbour lists that the discovery stores in `link-index.json` (local-moving phase of Louvain, deterministic; a community is named after its smallest member id, so the name survives nights in which the rest of the membership changes). Each community records representatives (best connected, then most important), bridges (members with neighbours in other communities) and faded candidates (the oldest other members by `createdAt`; the scan carries no retrieval history). Only active memories take part. `discover-semantic-links` rebuilds the index after the link step under the same mutation gates and reports it as `lens` in its result; a failure is logged and does not fail the discovery. Measured on the live stores: about 1 s and 1,400 communities per agent.
+
+### Fixed
+
+- Nightly semantic discovery processed nothing since June (`processed 0, skipped 500` every night), so `link-index.json` stayed at its 2026-06-14 state. The active scan kept a vector only if it was a JS array, but LanceDB returns an Arrow vector, so every row lost its vector. Scans now return plain vectors when called with `withVectors`; the GC and the other callers scan without the vector column.
+- The discovery budget (`maxPerRun`) counted rows that needed no search. With vectors back, each night would have ended in the first, already indexed batch and new memories would never have entered the link index. Only searches use up the budget now. The first runs after the update catch up on the memories since June, including their Obsidian mirror notes.
+- Semantic Lens hydration checks access. The index of a shared workspace lists the owning agent's private ids, and every agent working in that workspace reads it; hydration called `db.getById` without `checkAccess`. Port of the fix from `main` (8e753189).
+
 ## [7.20.2] — 2026-11-19
 
 ### Fixed
