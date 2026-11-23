@@ -38,9 +38,31 @@ Der Sprung in der letzten Zeile kommt **allein** daraus, dass die Kappung auf
 [findings/2026-09-20-harness-defer-final-cap.md](findings/2026-09-20-harness-defer-final-cap.md).
 Keine neue Einbettung, kein anderes Modell, kein größerer Kontext.
 
-Nach Kategorie (letzter Lauf): einfach 45,0 %, mehrstufig 59,2 %,
-**zeitlich 21,9 %**, offen 71,3 %. Zeitliches Schließen ist die verbliebene
-Schwäche und liegt nicht am Ranking.
+Nach Kategorie (letzter Lauf): mehrstufig 45,0 %, zeitlich 59,2 %,
+Schlussfolgern 21,9 %, einfach 71,3 %. Bis 23.11.2026 standen hier die
+Namen verschoben (cat1 als „einfach“, cat3 als „zeitlich“). LOCOMO nummeriert:
+cat1 mehrstufig (immer mehrere Belege), cat2 zeitlich, cat3 Schlussfolgern
+(wenige Fragen, Allgemeinwissen), cat4 einfach, cat5 adversarial.
+
+## Messung vom 23.11.2026 (7.20.5)
+
+Jahre der Daten auf 2026 verschoben (letzte Session in den letzten zwei
+Wochen), Stores über den Capture-Pfad mit Jev-Aufteilung (`ingest-capture.mjs
+--jev`), Kappung wie in der Produktion über `mergeNamespaceRecallResults`,
+DeepSeek als Antwortmodell und Jury.
+
+| Datensatz | Ergebnis |
+|---|---|
+| LongMemEval oracle, 100 Fragen, ungeteilt | 90 % |
+| LongMemEval oracle, 100 Fragen, Jev-Aufteilung, 7.20.3 → 7.20.4 → 7.20.5 | 83 → 86 → 89 % |
+| LOCOMO conv-44/47/50, mehrstufig (82), Antwort „so kurz wie möglich“ | 47,6 % |
+| dieselben, Antwort „alle Punkte nennen, über alle Erinnerungen zählen“ | 58,5 % |
+
+Die Antwortanweisung fragt seitdem bei Aufzählungen nach allen Punkten: 7 von
+12 Fehlern mit vollständigem Recall waren unvollständige Listen, die die Jury
+nach LongMemEval-Regel als falsch wertet. Mehr Recall-Plätze (30 statt 15,
+Pool 100 statt 40) hoben die Fragen mit allen Belegen von 35 auf 51 von 82,
+die Trefferquote aber nicht (47,6 → 48,8 %).
 
 ## Vergleichbarkeit mit anderen Systemen
 
