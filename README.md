@@ -7,9 +7,9 @@ PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolate
 Latest release: **7.20.2** ([GitHub Release](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/v7.20.2),
 ClawHub, npm). Releases are cut on the release line (`release/*`, tags
 `vX.Y.Z`). This branch, `main`, carries the engine/adapter layout and contains
-every release change through 7.20.2 as `port(<version>)` commits (#212, #280).
-The package version on `main` stays at 7.18.4, the last point where both lines
-were merged, so a build from `main` is not a release. The declared compatibility floor is
+every release change through 7.20.2 as `port(<version>)` commits (#212, #280),
+so its package version is 7.20.2 as well. A build from `main` is still not the
+release artifact: it also carries the unreleased engine/adapter work. The declared compatibility floor is
 `openclaw@2026.8.1` and plugin API `>=2026.8.1` (`openclaw.compat` in
 `package.json`); that floor is the only compatibility claim. The package is
 built against the build baseline `openclaw@2026.8.2` (release metadata), and
@@ -1204,7 +1204,7 @@ npm ci
 npm test
 npm pack
 openclaw plugins install \
-  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-<package-version>.tgz \
+  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.20.2.tgz \
   --force --accept-capabilities
 ```
 
