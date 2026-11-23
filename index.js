@@ -573,6 +573,21 @@ class Reranker {
   }
 }
 
+/**
+ * Turn a LanceDB vector (Arrow Vector, typed array or plain array) into a plain array.
+ *
+ * @param {unknown} vector
+ * @returns {number[]|null} The vector, or null when absent or empty.
+ */
+export function plainScanVector(vector) {
+  if (!vector) return null;
+  let out = null;
+  if (Array.isArray(vector)) out = vector;
+  else if (ArrayBuffer.isView(vector)) out = Array.from(vector);
+  else if (typeof vector.toArray === "function") out = Array.from(vector.toArray());
+  return out && out.length > 0 ? out : null;
+}
+
 function semanticDiscoveryStats() {
   return {
     processed: 0,
@@ -610,7 +625,7 @@ export function selectSemanticDiscoveryWorkspaces(rawConfig = {}, agentId) {
   return discoverObsidianWorkspaces(rawConfig, { workspace: workspaceAgentId });
 }
 
-async function runSemanticDiscoveryBatches({ db, semVaultCfg, pool, logger, defaultAgentId, mutationPolicy }) {
+export async function runSemanticDiscoveryBatches({ db, semVaultCfg, pool, logger, defaultAgentId, mutationPolicy }) {
   const discoveryCfg = semVaultCfg?.graphLinks?.semanticDiscovery || {};
   const batchSize = Math.max(1, Math.min(Number(discoveryCfg.batchSize || 500), 5000));
   let remaining = Math.max(1, Number(discoveryCfg.maxPerRun || 500));
@@ -621,8 +636,8 @@ async function runSemanticDiscoveryBatches({ db, semVaultCfg, pool, logger, defa
   }
 
   const scanBatches = typeof db.scanActiveBatches === "function"
-    ? db.scanActiveBatches({ batchSize })
-    : (async function* fallbackScan() { yield await db.scanActive(); })();
+    ? db.scanActiveBatches({ batchSize, withVectors: true })
+    : (async function* fallbackScan() { yield await db.scanActive({ withVectors: true }); })();
 
   for await (const lancedbRecords of scanBatches) {
     if (!Array.isArray(lancedbRecords) || lancedbRecords.length === 0) continue;
@@ -637,7 +652,10 @@ async function runSemanticDiscoveryBatches({ db, semVaultCfg, pool, logger, defa
       confirm: true,
     });
     addSemanticDiscoveryStats(total, result);
-    const consumed = (result.processed || 0) + (result.skipped || 0) + (result.unchanged || 0) + (result.errors || 0);
+    // Nur Suchen verbrauchen das Budget. Unveränderte Zeilen kosten einen
+    // Hash-Vergleich; zählten sie mit, endete jeder Lauf im ersten, längst
+    // indexierten Batch und neue Erinnerungen kämen nie in den Link-Index.
+    const consumed = (result.processed || 0) + (result.errors || 0);
     remaining -= Math.max(consumed, 0);
     if (result.batchAborted || remaining <= 0) break;
   }
@@ -2276,11 +2294,14 @@ class MemoryDB {
     }
   }
 
-  normalizeActiveScanRow(r) {
+  normalizeActiveScanRow(r, { withVectors = false } = {}) {
     return {
       id: r.id,
       type: r.type || "memory",
-      vector: (Array.isArray(r.vector) && r.vector.length > 0) ? r.vector : null,
+      // LanceDB liefert ein Arrow-Vector-Objekt, kein Array. Der frühere
+      // Array.isArray-Test machte jeden Vektor zu null, die Link-Erkennung
+      // übersprang deshalb seit Juni jede Zeile (processed 0, skipped 500).
+      vector: withVectors ? plainScanVector(r.vector) : null,
       text: r.text || "",
       summary: r.summary || "",
       category: r.category || "",
@@ -2304,12 +2325,14 @@ class MemoryDB {
   }
 
   // Scan-Spalten sind für Active- und Collectable-Scan identisch.
-  _buildScanQuery(statusWhere) {
+  _buildScanQuery(statusWhere, { withVectors = false } = {}) {
     this._assertTrustedPath();
     let query = this.table.query().where(statusWhere);
     if (typeof query.select === "function") {
+      // Vektoren nur auf Anforderung: der GC scannt bis zu 150 000 Zeilen und
+      // braucht sie nicht, die Link-Erkennung schon.
       query = query.select([
-        "id", "type", "vector", "text", "summary", "category", "importance", "createdAt",
+        "id", "type", ...(withVectors ? ["vector"] : []), "text", "summary", "category", "importance", "createdAt",
         "scope", "agentId", "storedBy", "workspaceId", "workspaceKey", "memoryKind", "ownerUserId", "status",
         "updatedAt", "versionCreatedAt", "sourceTimestamp", "neverForget", "memoryClass",
       ]);
@@ -2317,7 +2340,7 @@ class MemoryDB {
     return query;
   }
 
-  buildActiveScanQuery() {
+  buildActiveScanQuery(options = {}) {
     // Fail-closed Whitelist: NUR "active" (oder legacy NULL/leer) gilt als aktiv.
     // Ein unbekannter/falsch geschriebener Status (z. B. "archvied") wird NICHT
     // als aktiv interpretiert. (Vorher: Negativliste != deleted/archived, die
@@ -2326,7 +2349,7 @@ class MemoryDB {
     // `superseded` ist hier bewusst NICHT enthalten: Recall, Shared Search und
     // die Vault-Notizen sollen keine überholten Fassungen sehen. Der GC braucht
     // sie trotzdem — dafür gibt es buildCollectableScanQuery().
-    return this._buildScanQuery("status IS NULL OR status = 'active' OR status = ''");
+    return this._buildScanQuery("status IS NULL OR status = 'active' OR status = ''", options);
   }
 
   /**
@@ -2357,14 +2380,14 @@ class MemoryDB {
         `${label}:${offset}`,
       );
       if (!rows || rows.length === 0) break;
-      yield rows.map((r) => this.normalizeActiveScanRow(r));
+      yield rows.map((r) => this.normalizeActiveScanRow(r, { withVectors: options.withVectors === true }));
       if (rows.length < batchSize) break;
       offset += rows.length;
     }
   }
 
   async *scanActiveBatches(options = {}) {
-    yield* this._scanBatches(() => this.buildActiveScanQuery(), "MemoryDB.scanActiveBatches", options);
+    yield* this._scanBatches(() => this.buildActiveScanQuery({ withVectors: options.withVectors === true }), "MemoryDB.scanActiveBatches", options);
   }
 
   async *scanCollectableBatches(options = {}) {
@@ -7489,7 +7512,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 loadSemanticRecords: async () => pool.withAuthoritativeReadDb(obsidianMemoryCtx.agentId, async (semanticDb) => {
                   const initialized = await semanticDb.init();
                   if (initialized === false) return [];
-                  return semanticDb.scanActive();
+                  return semanticDb.scanActive({ withVectors: true });
                 }),
                 searchSemanticNeighbors: async (source) => pool.withAuthoritativeReadDb(obsidianMemoryCtx.agentId, async (semanticDb) => {
                   const initialized = await semanticDb.init();
