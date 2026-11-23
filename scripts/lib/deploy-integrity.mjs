@@ -231,6 +231,7 @@ export const DEPLOY_FILES = [
   "lib/score.js",
   "lib/semantic-input.js",
   "lib/semantic-lens-index.js",
+  "lib/semantic-lens-writer.js",
   "lib/sql-safety.js",
   "lib/text-utils.js",
   // ── setup/config contract + temporal (v6.7.0+) ─────────────────────────────
