@@ -297,7 +297,7 @@ import {
   summarizeTrace,
   textPreview,
 } from "./lib/recall-decision-trace.js";
-import { applySemanticLensToRecall } from "./lib/semantic-lens-index.js";
+import { applySemanticLensToRecall, authorizedLensHydrator } from "./lib/semantic-lens-index.js";
 import {
   buildNeoDoctorReport,
   buildNeoWorkspaceAliases,
@@ -13213,7 +13213,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             : await applySemanticLensToRecall(ordered, {
               semanticLens: semanticLensCfg,
               workspaceDir: ctx?.workspaceDir,
-              getMemoryById: async (memoryId) => db.getById(memoryId),
+              getMemoryById: authorizedLensHydrator((memoryId) => db.getById(memoryId), memoryCtx),
             });
           const semanticLensItems = semanticLensResult.lensMemories.map((r) => ({
             id: r.entry.id,
