@@ -107,3 +107,26 @@ describe("Zeitparser mit dem now der Pipeline", () => {
     assert.ok(!memories.some((m) => m.entry.id === "old"), "eine Erinnerung ausserhalb des Fensters faellt heraus");
   });
 });
+
+describe("7.20.6-Review: Rueckfallweg", () => {
+  it("reine Graph-Treffer landen nicht vor der besten Vektorrelevanz", () => {
+    const out = relevanceFallbackOrder([
+      { entry: { id: "seed" }, vectorScore: 0.6, score: 0.2 },
+      { entry: { id: "graph-only" }, score: 0.9, source: "graph" },
+    ]);
+    assert.deepEqual(out.map((r) => r.entry.id), ["seed", "graph-only"]);
+    assert.ok(out[1].score <= 0.85 * 0.6 + 1e-9);
+  });
+
+  it("ein einzelner Kandidat traegt mit Reranker die Relevanz als score", async () => {
+    const rows = [row("b", 0.1, { memoryStrength: 0.4 })];
+    const reranker = { rerank: async () => { throw new Error("nicht aufgerufen"); } };
+    const { memories } = await runRecallPipeline({
+      agentId: "agent-a", query: "test", dbTable: table(rows), embeddings, topN: 2, reranker,
+      rerankCandidates: 10, rerankerFallbackOnError: true, canonicalEnabled: false, logger: silent,
+    });
+    assert.equal(memories.length, 1);
+    assert.ok(Number.isFinite(memories[0].boostedScore), "der kombinierte Wert bleibt erhalten");
+    assert.ok(memories[0].score > memories[0].boostedScore, "score ist die Relevanz, nicht der verfallene kombinierte Wert");
+  });
+});

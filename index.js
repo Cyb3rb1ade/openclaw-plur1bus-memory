@@ -2014,13 +2014,23 @@ class MemoryDB {
         ? [...new Set(["id", "createdAt", "text", "sessionId", "sourceTurnId", ...fields])].filter(hat)
         : bekannt ? [...felder].filter((name) => name !== "vector") : null;
       let rows = [];
+      const grenze180 = Math.floor(now - 180 * 86_400_000);
       for (const tage of [7, 30, 180, null]) {
-        const where = tage === null || !hat("createdAt")
+        // Der letzte Durchgang liest nur, was aelter als 180 Tage ist, und
+        // haengt es an: sonst ersetzte er das 180-Tage-Ergebnis und verloere
+        // bei mehr als 20 000 Zeilen genau die neuesten (7.20.6-Review).
+        const rest = tage === null && hat("createdAt") && spalten;
+        const where = !hat("createdAt")
           ? this._buildRecentGraphWhere()
-          : `${this._buildRecentGraphWhere()} AND createdAt >= ${Math.floor(now - tage * 86_400_000)}`;
+          : rest
+            ? `${this._buildRecentGraphWhere()} AND (createdAt < ${grenze180} OR createdAt IS NULL)`
+            : tage === null
+              ? this._buildRecentGraphWhere()
+              : `${this._buildRecentGraphWhere()} AND createdAt >= ${Math.floor(now - tage * 86_400_000)}`;
         let query = this.table.query().where(where);
         if (spalten && typeof query.select === "function") query = query.select(spalten);
-        rows = await this._read(query.limit(spalten ? 20_000 : limit * 2).toArray(), "MemoryDB.getRecentForGraph");
+        const gelesen = await this._read(query.limit(spalten ? 20_000 : limit * 2).toArray(), "MemoryDB.getRecentForGraph");
+        rows = rest ? [...rows, ...gelesen] : gelesen;
         if (!spalten || rows.length >= limit || tage === null || !hat("createdAt")) break;
       }
 
@@ -11811,10 +11821,13 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   api.logger?.debug?.(`memory-graph: recent ownership projection failed: ${String(err)}`);
                 }
 
-                // Baue neue Edges
+                // Baue neue Edges. getRecentForGraph liefert die eben
+                // gespeicherten Zeilen dieses Laufs mit; ohne diesen Filter
+                // stuenden sie doppelt im Bestand (7.20.6-Review).
+                const neueIds = new Set(newMemories.map((m) => String(m.id)));
                 const allEdges = memoryCtx ? await buildEdgesForSession(
                   newMemories.filter(m => m.vector),
-                  [...recentExisting, ...newMemories],
+                  [...recentExisting.filter((r) => !neueIds.has(String(r.id))), ...newMemories],
                   db.table,
                   api.logger,
                   { requestContext: memoryCtx },

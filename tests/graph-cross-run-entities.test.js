@@ -131,3 +131,54 @@ describe("MemoryDB.getRecentForGraph", () => {
     }
   });
 });
+
+describe("7.20.6-Review: doppelte Zeilen eines Laufs", () => {
+  const now = iso(NOW);
+  // DB-Kopien der eben gespeicherten Zeilen (Text, keine Themen) plus die Capture-Zeilen.
+  const dbA = { id: "a", text: "Eva war heute in Berlin.", emotionalDominant: "joy", emotionalIntensity: 0.5, createdAt: now };
+  const dbB = { id: "b", text: "Eva plant Urlaub im Sommer.", emotionalDominant: "joy", emotionalIntensity: 0.5, createdAt: now };
+  const newA = { ...dbA, topics: ["eva", "berlin"], entities: ["Eva", "Berlin"] };
+  const newB = { ...dbB, topics: ["eva", "urlaub", "sommer"], entities: ["Eva", "Urlaub", "Sommer"] };
+
+  it("ein einziges gemeinsames Thema ergibt auch mit DB-Kopien keine Entitaetskante", async () => {
+    const edges = await buildEdgesForSession([newA, newB], [dbB, dbA, newA, newB], table([]), null);
+    assert.equal(edges.filter((e) => e.type === "entity").length, 0);
+  });
+
+  it("bei Duplikaten gewinnt die Zeile mit eigenen Signalen (emotionale Kanten im Lauf bleiben)", async () => {
+    const edges = await buildEdgesForSession([newA, newB], [dbB, dbA, newA, newB], table([]), null);
+    assert.ok(edges.some((e) => e.type === "emotional"));
+  });
+
+  it("der Capture-Aufruf filtert die eigenen neuen Zeilen aus dem Bestand", async () => {
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+    assert.match(source, /\[\.\.\.recentExisting\.filter\(\(r\) => !neueIds\.has\(String\(r\.id\)\)\), \.\.\.newMemories\]/);
+  });
+});
+
+describe("7.20.6-Review: getRecentForGraph bei mehr als 20 000 alten Zeilen", () => {
+  it("die neuesten Zeilen gehen im letzten Durchgang nicht verloren", async (t) => {
+    const DIM = 2;
+    const dir = join(makeTempDir("graph-recent-big-"), "graph-agent");
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    const old = Array.from({ length: 20_010 }, (_, i) => ({ ageDays: 400 + (20_010 - i), i }));
+    const recent = [{ ageDays: 100, i: 20_010 }, { ageDays: 90, i: 20_011 }];
+    const rows = [...old, ...recent].map(({ ageDays, i }) => ({
+      id: `00000000-0000-4000-8000-${i.toString(16).padStart(12, "0")}`,
+      text: `Zeile ${i}`, summary: "", vector: [0.1, 0.1], status: "active", memoryKind: "memory", category: "fact",
+      createdAt: NOW - ageDays * 86_400_000, sessionId: "", sourceTurnId: "", agentId: "graph-agent", workspaceId: "",
+    }));
+    const db0 = await lancedb.connect(dir);
+    await db0.createTable("memories", rows);
+    const plugin = await import(`../index.js?graph-recent-big=${NOW}`);
+    const db = new plugin.MemoryDB(dir, DIM, null, { readOnly: true });
+    await db.init();
+    try {
+      const got = await db.getRecentForGraph({ limit: 5, now: NOW, fields: ["id", "createdAt", "text"] });
+      assert.deepEqual(got.slice(0, 2).map((r) => r.text), ["Zeile 20011", "Zeile 20010"]);
+    } finally {
+      await db.shutdown();
+    }
+  });
+});
