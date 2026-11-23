@@ -37,27 +37,32 @@ export function loadEnv(path = "/root/.openclaw/gateway.systemd.env") {
 export const EMBED_MODEL = "text-embedding-3-large";
 export const EMBED_DIM = 3072;
 
+/** Eigener Schluessel des Messstands aus der Umgebung oder .env.bench; nie
+ *  der des Gateways (23.11.2026: Messlaeufe haben das Cohere-Limit der
+ *  Produktion aufgebraucht). */
+function requireBenchKey(name) {
+  if (!process.env[name]) {
+    try { loadEnv(`${BENCH}/.env.bench`); } catch { /* Datei fehlt: Fehler unten */ }
+  }
+  if (!process.env[name]) {
+    throw new Error(`${name} fehlt — der Messstand nutzt keine Schluessel des Gateways (.env.bench).`);
+  }
+}
+
 export async function makeEmbeddings() {
+  requireBenchKey("BENCH_OPENAI_API_KEY");
   const { OpenAIEmbeddingProvider } = await import(`${RELEASE}/lib/providers/embedding-openai.js`);
   return new OpenAIEmbeddingProvider({
     provider: "openai",
     model: EMBED_MODEL,
     dimensions: EMBED_DIM,
-    apiKeyEnv: "OPENAI_API_KEY",
+    apiKeyEnv: "BENCH_OPENAI_API_KEY",
     embeddingCacheEnabled: false,
   });
 }
 
 export async function makeReranker({ timeoutMs = 2500 } = {}) {
-  // Nie den Schluessel des Gateways: am 23.11.2026 haben Messlaeufe ueber
-  // COHERE_API_KEY aus gateway.systemd.env das Monatslimit des Produktiv-
-  // Rerankers aufgebraucht. Der Messstand braucht einen eigenen Schluessel.
-  if (!process.env.BENCH_COHERE_API_KEY) {
-    try { loadEnv(`${BENCH}/.env.bench`); } catch { /* Datei fehlt: Fehler unten */ }
-  }
-  if (!process.env.BENCH_COHERE_API_KEY) {
-    throw new Error("BENCH_COHERE_API_KEY fehlt — der Messstand nutzt nicht den Cohere-Schluessel des Gateways.");
-  }
+  requireBenchKey("BENCH_COHERE_API_KEY");
   const { CohereRerankerProvider } = await import(`${RELEASE}/lib/providers/reranker-cohere.js`);
   return new CohereRerankerProvider({ apiKeyEnv: "BENCH_COHERE_API_KEY", timeoutMs });
 }

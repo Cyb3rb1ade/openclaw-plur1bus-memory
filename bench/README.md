@@ -85,8 +85,9 @@ Neue Schalter in `run.mjs`:
 - `shift-data.py` (in `data/` ausführen) verschiebt LOCOMO conv-44/47/50 und
   LongMemEval oracle ins Jahr 2026, damit kein mehrjähriger Decay wirkt.
 
-Der Reranker läuft nur mit eigenem Schlüssel (`BENCH_COHERE_API_KEY`, aus der
-Umgebung oder `.env.bench`); `makeReranker` bricht sonst ab. Am 23.11.2026
+Reranker und Einbettungen laufen nur mit eigenen Schlüsseln
+(`BENCH_COHERE_API_KEY`, `BENCH_OPENAI_API_KEY`, aus der Umgebung oder
+`.env.bench`); `makeReranker` und `makeEmbeddings` brechen sonst ab. Am 23.11.2026
 haben Messläufe über den Gateway-Schlüssel das Monatslimit des Produktiv-
 Rerankers aufgebraucht.
 
