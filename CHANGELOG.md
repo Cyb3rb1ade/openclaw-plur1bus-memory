@@ -6,6 +6,19 @@ Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 
+## [7.20.6] — 2026-11-23
+
+### Fixed
+
+- Entity edges only formed within one capture run. `topics`/`entities` are not stored in LanceDB, and the capture asked `getRecentForGraph` for fields without the text, so existing rows reached `buildEdgesForSession` without topics. `withGraphSignals` (`lib/memory-graph.js`) derives them from the text with the same `extractGraphSignals`; derived topics do not count for emotional edges (one shared word suffices there, and with topics for every existing row the emotional edges grew tenfold in the bench). Rows of the running capture are filtered from the existing set, and `buildEdgesForSession` keeps one row per id, so shared topics are not counted twice.
+- `getRecentForGraph` read the first `limit*2` rows in storage order — on large tables the oldest — and sorted afterwards. It now reads growing `createdAt` windows (7/30/180 days, then the older rest appended) without the vector column and keeps the newest.
+- Without a reranker answer (error, timeout, no valid indices, e.g. an exhausted quota) the recall ordered by the combined score, where `memoryStrength - 1` (down to -0.6 for decayed memories) and the epistemic adjustment outweigh cosine differences. `relevanceFallbackOrder` orders by vector relevance and keeps the combined score as tie-breaker (`boostedScore`); graph-only hits are capped below the best vector relevance; a single candidate also carries its relevance, so merged namespaces stay comparable. The empty-answer branch now logs.
+- `parseTemporal` gets the recall's `now` instead of the system time.
+
+### Changed
+
+- The automatic recall (`before_prompt_build`) no longer takes canonical hits from `maxPromptMemories`; they come on top, capped by `canonicalMaxItems` (`canonicalOutsideLimit` in `mergeNamespaceRecallResults` and the merged budget). `memory_recall`/`memory_search` keep their explicit `limit` as the total.
+
 ## [7.20.5] — 2026-11-23
 
 ### Fixed
