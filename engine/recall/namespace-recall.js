@@ -34,10 +34,13 @@ function resolveRuntimeRecallBudget(query, ceiling, adaptiveBudget) {
   return Math.min(cap, Math.max(1, Math.floor(resolved.budget)));
 }
 
-function applyMergedRecallBudget(merged, budget) {
+function applyMergedRecallBudget(merged, budget, { canonicalOutsideBudget = false } = {}) {
   const effectiveBudget = normalizeBoundedRecallInteger(budget, 12, 1, 100);
   const canonical = Array.isArray(merged.canonical) ? merged.canonical.slice(0, effectiveBudget) : [];
-  const remainingBudget = Math.max(0, effectiveBudget - canonical.length);
+  // Beim automatischen Recall kommen kanonische Treffer (schon durch
+  // canonicalMaxItems begrenzt) zusaetzlich; bis 7.20.5 gingen sie vom
+  // Erinnerungsbudget ab und kosteten bei 4 Treffern 4 der 15 Plaetze.
+  const remainingBudget = canonicalOutsideBudget ? effectiveBudget : Math.max(0, effectiveBudget - canonical.length);
   const candidates = merged.memories || [];
   // 7.18.28: Reranker-Reihenfolge durch Merge und Budget erhalten.
   const preserveOrder = candidates.some((item) => Number.isFinite(item?.rerankScore));
@@ -186,6 +189,7 @@ async function runMergedNamespaceRecall(
     }
     let merged = mergeNamespaceRecallResults(fusionInput, {
       maxOut: multiIdentity && baseParams.reranker ? 100 : baseParams.topN,
+      canonicalOutsideLimit: baseParams.canonicalOutsideLimit === true,
       canonicalMaxItems: baseParams.canonicalMaxItems,
       dedupEnabled: baseParams.dedupEnabled,
       dedupJaccard: baseParams.dedupJaccard,
@@ -208,13 +212,15 @@ async function runMergedNamespaceRecall(
         trySafeWarn(baseParams.logger, "namespace-recall.reranker", error);
       } finally { controller.abort(); }
     }
-    if (multiIdentity && baseParams.reranker) merged.memories = merged.memories.slice(0, Math.max(0, (baseParams.topN ?? 12) - merged.canonical.length));
+    // Mit canonicalOutsideLimit (automatischer Recall, 7.20.6) zaehlen die
+    // kanonischen Treffer auch hier nicht gegen topN.
+    if (multiIdentity && baseParams.reranker) merged.memories = merged.memories.slice(0, Math.max(0, (baseParams.topN ?? 12) - (baseParams.canonicalOutsideLimit === true ? 0 : merged.canonical.length)));
     if (identityQueries?.failures.length) {
       merged.degraded = { reason: "embedding-unavailable", capability: "recall", identities: identityQueries.failures };
       trySafeWarn(baseParams.logger, "namespace-recall.embedding-unavailable", new Error(JSON.stringify(identityQueries.failures)));
     }
     if (baseParams.adaptiveBudget?.enabled !== false) {
-      merged = applyMergedRecallBudget(merged, baseParams.budget);
+      merged = applyMergedRecallBudget(merged, baseParams.budget, { canonicalOutsideBudget: baseParams.canonicalOutsideLimit === true });
     }
     emitRetrievalLedger({
       retrievalLogger: baseParams.retrievalLogger,

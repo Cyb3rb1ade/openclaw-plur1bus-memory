@@ -70,6 +70,8 @@ export function autoRecallParams(ctx, {
   } = ctx;
   return {
     query,
+    // Kanonische Treffer zusaetzlich zu maxPromptMemories (7.20.6).
+    canonicalOutsideLimit: true,
     phaseTimer: timer,
     softBudgetFallback,
     embeddings,

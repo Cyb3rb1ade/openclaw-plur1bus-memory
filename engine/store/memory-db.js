@@ -986,20 +986,47 @@ class MemoryDB {
     return teile.length > 0 ? teile.join(" AND ") : "true";
   }
 
-  async getRecentForGraph({ limit = 100, sessionId = "", includeGlobalRecent = true, fields = null } = {}) {
+  async getRecentForGraph({ limit = 100, sessionId = "", includeGlobalRecent = true, fields = null, now = Date.now() } = {}) {
     await this.init();
     if (!this.table) return [];
     try {
-      let rows = await this._read(
-        this.table.query()
-          .where(this._buildRecentGraphWhere())
-          .limit(limit * 2)
-          .toArray(),
-        "MemoryDB.getRecentForGraph",
-      );
+      // LanceDB sortiert nicht. Bis 7.20.5 las diese Funktion die ersten
+      // limit*2 Zeilen in Speicherreihenfolge — bei grossen Tabellen die
+      // aeltesten — und sortierte erst danach. Jetzt: wachsende Zeitfenster
+      // ueber createdAt, nur schlanke Spalten, bis genug Zeilen da sind.
+      const felder = this.schemaFieldNames;
+      const hat = (name) => !felder || felder.size === 0 || felder.has(name);
+      // Mit fields nur diese Spalten (plus Sortier- und Textfelder); ohne fields
+      // alle Spalten ausser dem Vektor, damit kein Aufrufer Besitzer- oder
+      // Statusfelder verliert. Ist das Schema unbekannt, bleibt es beim alten,
+      // kleinen Lesevorgang ohne Spaltenauswahl.
+      const bekannt = felder && felder.size > 0;
+      const spalten = Array.isArray(fields)
+        ? [...new Set(["id", "createdAt", "text", "sessionId", "sourceTurnId", ...fields])].filter(hat)
+        : bekannt ? [...felder].filter((name) => name !== "vector") : null;
+      let rows = [];
+      const grenze180 = Math.floor(now - 180 * 86_400_000);
+      for (const tage of [7, 30, 180, null]) {
+        // Der letzte Durchgang liest nur, was aelter als 180 Tage ist, und
+        // haengt es an: sonst ersetzte er das 180-Tage-Ergebnis und verloere
+        // bei mehr als 20 000 Zeilen genau die neuesten (7.20.6-Review).
+        const rest = tage === null && hat("createdAt") && spalten;
+        const where = !hat("createdAt")
+          ? this._buildRecentGraphWhere()
+          : rest
+            ? `${this._buildRecentGraphWhere()} AND (createdAt < ${grenze180} OR createdAt IS NULL)`
+            : tage === null
+              ? this._buildRecentGraphWhere()
+              : `${this._buildRecentGraphWhere()} AND createdAt >= ${Math.floor(now - tage * 86_400_000)}`;
+        let query = this.table.query().where(where);
+        if (spalten && typeof query.select === "function") query = query.select(spalten);
+        const gelesen = await this._read(query.limit(spalten ? 20_000 : limit * 2).toArray(), "MemoryDB.getRecentForGraph");
+        rows = rest ? [...rows, ...gelesen] : gelesen;
+        if (!spalten || rows.length >= limit || tage === null || !hat("createdAt")) break;
+      }
 
       // Sort by createdAt DESC
-      rows.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      rows.sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0));
 
       // If includeGlobalRecent: take top N regardless of session
       // If not: filter to same session first, fill rest with global

@@ -1178,8 +1178,10 @@ export function createTurnCapture(ctx) {
                 limit: 100,
                 sessionId: event?.sessionId || event?.sessionKey || event?.runId || "",
                 includeGlobalRecent: true,
+                // text: daraus leitet buildEdgesForSession die Themen ab,
+                // die in der Tabelle nicht gespeichert sind.
                 fields: [
-                  "id", "createdAt", "sessionId", "topics", "entities", "emotionalDominant", "emotionalIntensity",
+                  "id", "createdAt", "text", "sessionId", "topics", "entities", "emotionalDominant", "emotionalIntensity",
                   "status", "epistemicStatus", "expiresAt", "scope", "agentId", "storedBy", "workspaceId", "workspaceKey", "ownerUserId",
                 ],
               });
@@ -1187,10 +1189,13 @@ export function createTurnCapture(ctx) {
               host.logger.debug(`memory-graph: recent ownership projection failed: ${describeError(err)}`);
             }
 
-            // Baue neue Edges
+            // Baue neue Edges. getRecentForGraph liefert die eben
+            // gespeicherten Zeilen dieses Laufs mit; ohne diesen Filter
+            // stuenden sie doppelt im Bestand (7.20.6-Review).
+            const neueIds = new Set(newMemories.map((m) => String(m.id)));
             const allEdges = memoryCtx ? await buildEdgesForSession(
               newMemories.filter(m => m.vector),
-              [...recentExisting, ...newMemories],
+              [...recentExisting.filter((r) => !neueIds.has(String(r.id))), ...newMemories],
               db.table,
               host.logger,
               { requestContext: memoryCtx },
