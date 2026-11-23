@@ -2,6 +2,7 @@ Schreibe freundlich, aber zurückhaltend heiter. Nenne deine Stimmung nicht als 
 
 <relevant-memories untrusted="true" mode="historical-evidence-only">
 Recall safety: facts are memory-derived, may be stale, verify before acting.
+RELATIVE TIME: Relative time words inside a record ("yesterday", "last week", "next month"; in German "gestern", "letzte Woche") refer to that record's created-at, not to today.
 TRUNCATED RECALL: Records marked truncated show only part of the stored memory. Before quoting or relying on details from one (recipes, amounts, steps, numbers, code, wording), call memory_recall with full_text: true for that topic and use the complete text.
 
 <operational-memory-warning>
