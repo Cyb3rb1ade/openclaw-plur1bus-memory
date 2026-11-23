@@ -6,6 +6,17 @@ Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 
+## [7.20.4] — 2026-11-23
+
+### Fixed
+
+- Split messages used up several recall slots. `projectRecallEntry` dropped `chunkGroupId` and `sourceTurnId`, so the chunk rules in `dedupResults` never ran (a whole row replaces its parts; at most two parts per message). With Jev storing whole and parts, 15 slots carried on average 10 distinct messages on 100 LongMemEval questions. The projection passes both fields now.
+- The chunk group key is `chunkGroupId` only. A `sourceTurnId` covers a whole conversation turn (measured up to 26 rows of user and assistant messages); as a group key it would have capped recall at two memories per turn. A whole row counts as the whole of a part only if it is from the same turn and its text contains the part.
+
+### Added
+
+- Small-to-big recall (pipeline option `chunkSmallToBig`, on; not a config key): after the rerank, each part whose whole row exists is replaced by it at the part's position, so the search matches on the focused part and the prompt gets the full message; several parts of one message share one slot. Parts without a whole row (Jev chose "parts") stay. One lookup per recall; a failed lookup keeps the parts. Measured on 100 LongMemEval questions with Jev-split stores: distinct messages per 15 slots 10.0 → 12.6, prompt text +32 %, accuracy 83 → 86 % (90 % without splitting; the remaining gap is under investigation).
+
 ## [7.20.3] — 2026-11-23
 
 ### Added
