@@ -97,3 +97,25 @@ describe("expandChunkPartsToWholes", () => {
     assert.deepEqual(merged.memories.map((r) => r.entry.id), ["whole", "other"]);
   });
 });
+
+describe("Aufzaehlungen (7.20.5)", () => {
+  // findStructuralParts schneidet Listenmarker ab: das Teilstueck beginnt ohne "1.".
+  const LIST_TEXT = "Worauf achten:\n1. Online Reviews: Yelp und Google lesen.\n2. Referenzen: Nach Beispielen fragen.";
+  const LIST_WHOLE = row("list-whole", LIST_TEXT, { sourceTurnId: "turn-2" });
+  // Das erste Teilstueck traegt die Einleitung — im Rohtext steht "1." dazwischen.
+  const LIST_PART = row("list-part", "Worauf achten: Online Reviews: Yelp und Google lesen.", { sourceTurnId: "turn-2", chunkGroupId: "g2" });
+
+  it("erkennt das Ganze auch ohne die abgeschnittenen Listenmarker", async () => {
+    const out = await expandChunkPartsToWholes([hit(LIST_PART, 0.9)], fakeTable([LIST_WHOLE]));
+    assert.deepEqual(out.map((r) => r.entry.id), ["list-whole"]);
+    assert.deepEqual(dedupResults([hit(LIST_PART, 0.9), hit(LIST_WHOLE, 0.5)], 10).map((r) => r.entry.id), ["list-whole"]);
+  });
+
+  it("jedes Teilstueck einer Aufzaehlung steht vergleichbar in seiner Ursprungszeile", async () => {
+    const { findStructuralParts, comparableChunkText } = await import("../lib/memory-chunking.js");
+    const text = "Einleitung zum Thema:\n- erster Punkt mit Text\n* zweiter Punkt\n• dritter Punkt\n3) vierter Punkt\nFortsetzung der Zeile";
+    const parts = findStructuralParts(text);
+    assert.ok(parts.length >= 3);
+    for (const part of parts) assert.ok(comparableChunkText(text).includes(comparableChunkText(part)), part);
+  });
+});
