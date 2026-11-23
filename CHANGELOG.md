@@ -25,7 +25,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Geändert
 
-- **Package-Version auf `main` ist 7.20.6.** `main` enthält alle Release-Änderungen bis 7.20.6 (Ports #212, #280, #283), die Version stand trotzdem noch auf 7.18.4. `package.json`, `package-lock.json`, `openclaw.plugin.json`, die beiden Versions-Tests und README/AGENTS.md nennen jetzt 7.20.6. Ältere Einträge „Package-Version bleibt 7.18.4“ beschreiben ihren damaligen Stand.
+- **Package-Version auf `main` ist 7.20.6.** `main` enthält alle Release-Änderungen bis 7.20.6 (Ports #212, #280, #283, #285), die Version stand trotzdem noch auf 7.18.4. `package.json`, `package-lock.json`, `openclaw.plugin.json`, die beiden Versions-Tests und README/AGENTS.md nennen jetzt 7.20.6. Ältere Einträge „Package-Version bleibt 7.18.4“ beschreiben ihren damaligen Stand.
 - **Empfehlung angeglichen: EmbeddingGemma 2 (q8) ist die erste Option in Provider-Wizard und Shell-Installer.** Der Owner hat EmbeddingGemma 2 zum einheitlichen lokalen Standard erklärt. Der Wizard listet sie als Option 1 mit dem Zusatz „empfohlen“, der Installer ist auf `gemma2` vorbelegt (keine Lizenzabfrage, daher auch nicht-interaktiv ohne Rückfall). Jina v5 Nano bleibt wählbar (Option 2, weiterhin mit CC-BY-NC-Hinweis und Zustimmung), danach OpenAI, E5 und Jina v3; keine Option außer EmbeddingGemma 2 trägt noch das Wort „empfohlen“. Die Nummern der Wizard-Optionen verschieben sich entsprechend (Auswahl intern über den Schlüssel der Option). i18n de/en, README und `docs/configuration.md` angepasst; Tests prüfen Reihenfolge und Empfehlung.
 
 ### Fixed
