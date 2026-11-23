@@ -6,6 +6,12 @@ Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 
+## [7.20.7] — 2026-11-23
+
+### Changed
+
+- The `<relevant-memories>` block carries one fixed line after the recall safety preamble: relative time words inside a record ("yesterday", "last week", "next month", "gestern", "letzte Woche") refer to that record's `created-at`, not to today. Models resolved them against the current turn. LOCOMO bench (multi-hop + temporal, 172 questions, 3 repeats, identical recall): 56.8 → 59.8 % (+3.0 pp, 95 % CI +0.6 … +5.6, sign test p = 0.019); temporal questions without known-bad gold answers +4.8 pp. A second sentence asking for the year in every date added nothing (+0.5 pp) and would change the reply style in chat, so it is not included. The line costs about 180 characters of `memoriesMaxChars`.
+
 ## [7.20.6] — 2026-11-23
 
 ### Fixed
