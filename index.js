@@ -930,10 +930,13 @@ function resolveRuntimeRecallBudget(query, ceiling, adaptiveBudget) {
   return Math.min(cap, Math.max(1, Math.floor(resolved.budget)));
 }
 
-function applyMergedRecallBudget(merged, budget) {
+function applyMergedRecallBudget(merged, budget, { canonicalOutsideBudget = false } = {}) {
   const effectiveBudget = normalizeBoundedRecallInteger(budget, 12, 1, 100);
   const canonical = Array.isArray(merged.canonical) ? merged.canonical.slice(0, effectiveBudget) : [];
-  const remainingBudget = Math.max(0, effectiveBudget - canonical.length);
+  // Beim automatischen Recall kommen kanonische Treffer (schon durch
+  // canonicalMaxItems begrenzt) zusaetzlich; bis 7.20.5 gingen sie vom
+  // Erinnerungsbudget ab und kosteten bei 4 Treffern 4 der 15 Plaetze.
+  const remainingBudget = canonicalOutsideBudget ? effectiveBudget : Math.max(0, effectiveBudget - canonical.length);
   const candidates = merged.memories || [];
   const preserveOrder = candidates.some((item) => Number.isFinite(item?.rerankScore));
   const memories = applyRecallBudget(candidates, { budget: remainingBudget, preserveOrder }).selected;
@@ -1019,13 +1022,14 @@ export async function runMergedNamespaceRecall(
     }
     let merged = mergeNamespaceRecallResults(namespaceResults, {
       maxOut: baseParams.topN,
+      canonicalOutsideLimit: baseParams.canonicalOutsideLimit === true,
       canonicalMaxItems: baseParams.canonicalMaxItems,
       dedupEnabled: baseParams.dedupEnabled,
       dedupJaccard: baseParams.dedupJaccard,
       trace,
     });
     if (baseParams.adaptiveBudget?.enabled !== false) {
-      merged = applyMergedRecallBudget(merged, baseParams.budget);
+      merged = applyMergedRecallBudget(merged, baseParams.budget, { canonicalOutsideBudget: baseParams.canonicalOutsideLimit === true });
     }
     emitRetrievalLedger({
       retrievalLogger: baseParams.retrievalLogger,
@@ -13167,6 +13171,8 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           // v1.9.0 — komplette Pipeline aus shared module
           const _autoRecallBaseParams = {
             query: event.prompt,
+            // Kanonische Treffer zusaetzlich zu maxPromptMemories (7.20.6).
+            canonicalOutsideLimit: true,
             phaseTimer: timer,
             softBudgetFallback,
             embeddings,
