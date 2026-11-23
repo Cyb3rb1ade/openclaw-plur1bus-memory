@@ -665,11 +665,8 @@ describe("Golden-Set: runRecallPipeline ACL", () => {
 });
 
 describe("Golden-Set: runRecallPipeline temporal embedding context", () => {
-  it("passes the same frozen agent context to initial and temporal-anchor embeddings", async () => {
-    const createdAt = 1_750_000_000_000;
-    const rows = [makeRow({ id: "anchor", text: "docker setup", distance: 0.1, createdAt })];
-    const embeddingCalls = [];
-    const embeddings = {
+  function recordingEmbeddings(embeddingCalls) {
+    return {
       async embedQuery(text, context) {
         embeddingCalls.push(["query", text, context]);
         return [1, 0];
@@ -679,11 +676,42 @@ describe("Golden-Set: runRecallPipeline temporal embedding context", () => {
         return [1, 0];
       },
     };
+  }
+
+  it("legacy: passes the same frozen agent context to initial and temporal-anchor embeddings", async () => {
+    const createdAt = 1_750_000_000_000;
+    const rows = [makeRow({ id: "anchor", text: "docker setup", distance: 0.1, createdAt })];
+    const embeddingCalls = [];
 
     await runRecallPipeline({
       query: "what happened after the docker setup",
       dbTable: mockTable(rows),
-      embeddings,
+      embeddings: recordingEmbeddings(embeddingCalls),
+      topN: 5,
+      importanceBoost: 0,
+      canonicalEnabled: false,
+      associativeEnabled: false,
+      logger: silence(),
+      temporalFilterMode: "legacy",
+    });
+
+    assert.deepEqual(embeddingCalls, [
+      ["query", "what happened after the docker setup", { agentId: "agent-a" }],
+      ["anchor", "docker setup", { agentId: "agent-a" }],
+    ]);
+    assert.equal(embeddingCalls[0][2], embeddingCalls[1][2]);
+    assert.ok(Object.isFrozen(embeddingCalls[1][2]));
+  });
+
+  it("intent (Default, 7.20.8): an anchor phrase embeds only the query, with the frozen agent context", async () => {
+    const createdAt = 1_750_000_000_000;
+    const rows = [makeRow({ id: "anchor", text: "docker setup", distance: 0.1, createdAt })];
+    const embeddingCalls = [];
+
+    await runRecallPipeline({
+      query: "what happened after the docker setup",
+      dbTable: mockTable(rows),
+      embeddings: recordingEmbeddings(embeddingCalls),
       topN: 5,
       importanceBoost: 0,
       canonicalEnabled: false,
@@ -693,10 +721,8 @@ describe("Golden-Set: runRecallPipeline temporal embedding context", () => {
 
     assert.deepEqual(embeddingCalls, [
       ["query", "what happened after the docker setup", { agentId: "agent-a" }],
-      ["anchor", "docker setup", { agentId: "agent-a" }],
     ]);
-    assert.equal(embeddingCalls[0][2], embeddingCalls[1][2]);
-    assert.ok(Object.isFrozen(embeddingCalls[1][2]));
+    assert.ok(Object.isFrozen(embeddingCalls[0][2]));
   });
 });
 

@@ -609,22 +609,26 @@ describe("multi-namespace registered recall", namespaceRoutingOptions, () => {
     for (const stop of api.handlers.get("gateway_stop") || []) await stop();
   });
 
-  it("rejects a temporal anchor namespace timeout without partial output", async (t) => {
+  it("7.20.8: an anchor phrase triggers no second (anchor) read in any namespace", async (t) => {
+    // Bis 7.20.7 löste „after the X“ einen zweiten, ACL-losen vectorSearch pro
+    // Namensraum aus; ein Timeout dort ließ den ganzen Recall scheitern. Der
+    // Plugin-Pfad nutzt jetzt den intent-Modus: kein Anker-Lookup mehr.
     const baseDbPath = makeTempDir("plur1bus-namespace-anchor-timeout-");
     const workspaceDir = makeTempDir("plur1bus-namespace-anchor-workspace-");
     const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
     const originalEmbedPassage = LocalTransformersEmbeddingProvider.prototype.embedPassage;
     const originalInit = MemoryDB.prototype.init;
     const rawSettlement = deferred();
+    const vectorSearchCalls = { active: 0, legacy: 0 };
     LocalTransformersEmbeddingProvider.prototype.embedQuery = async () => vector();
     LocalTransformersEmbeddingProvider.prototype.embedPassage = async () => vector();
     MemoryDB.prototype.init = async function initAnchorTimeoutFixture() {
       const legacy = this.dbPath.endsWith(join("legacy", AGENT_ID));
-      let vectorSearchCalls = 0;
+      const key = legacy ? "legacy" : "active";
       this.table = {
         vectorSearch() {
-          vectorSearchCalls++;
-          const call = vectorSearchCalls;
+          vectorSearchCalls[key]++;
+          const call = vectorSearchCalls[key];
           return {
             limit() { return this; },
             async toArray() {
@@ -675,18 +679,13 @@ describe("multi-namespace registered recall", namespaceRoutingOptions, () => {
     const result = await recall.execute("namespace-anchor-timeout", {
       query: "what happened after the Docker setup",
     });
-    assert.match(result.content[0].text, /memory recall failed.*legacy temporal anchor read timed out/i);
-    assert.doesNotMatch(result.content[0].text, /66666666-6666-4666-8666-666666666666/);
-    assert.doesNotMatch(result.content[0].text, /77777777-7777-4777-8777-777777777777/);
-    assert.equal(readRetrievalLedger(baseDbPath).length, 0, "anchor failure emits no partial ledger");
+    assert.doesNotMatch(result.content[0].text, /memory recall failed/i);
+    assert.doesNotMatch(result.content[0].text, /anchor read timed out/i);
+    assert.match(result.content[0].text, /Active temporal candidate|active temporal/);
+    assert.match(result.content[0].text, /Legacy temporal candidate|legacy temporal/);
+    assert.deepEqual(vectorSearchCalls, { active: 1, legacy: 1 }, "only the primary vector read per namespace");
+    assert.equal(readRetrievalLedger(baseDbPath).length, 1, "a successful merged recall writes one ledger entry");
 
-    let shutdownSettled = false;
-    const shutdownPromise = Promise.all(
-      (api.handlers.get("gateway_stop") || []).map((stop) => stop()),
-    ).then(() => { shutdownSettled = true; });
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(shutdownSettled, false, "anchor timeout retains the namespace lease");
-    rawSettlement.resolve();
-    await shutdownPromise;
+    for (const stop of api.handlers.get("gateway_stop") || []) await stop();
   });
 });
