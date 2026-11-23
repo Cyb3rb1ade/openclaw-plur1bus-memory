@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { BENCH, RELEASE, PROVIDERS, chatClient, lancedb, loadEnv, makeEmbeddings, makeReranker, pMap, withRetry, silentLogger, parseLocomoDate } from "./lib/common.mjs";
 
 loadEnv();
-const { runRecallPipeline } = await import(`${RELEASE}/lib/recall-pipeline.js`);
+const { runRecallPipeline, mergeNamespaceRecallResults } = await import(`${RELEASE}/lib/recall-pipeline.js`);
 
 const which = process.argv[2];
 const arg = (flag, fallback = null) => {
@@ -192,7 +192,7 @@ function answerMessages(question, memories, nowIso, judgeTask) {
   return [
     {
       role: "system",
-      content: `You answer questions about a long-running conversation, using ONLY the retrieved memories below. Each memory is prefixed with the date and time it was said. The current date and time is ${nowIso}. Answer as briefly as possible — a short phrase, a name, a date, or a number — with no explanation. If the memories do not contain the information needed, reply exactly: I don't know.`,
+      content: `You answer questions about a long-running conversation, using ONLY the retrieved memories below. Each memory is prefixed with the date and time it was said. The current date and time is ${nowIso}. Answer briefly — a short phrase, a name, a date, or a number — with no explanation. If the question asks for several things (what, which, where, who — in plural, or 'all'), list every item the memories support, not only the first. If it asks how many, count across all memories before answering. If the memories do not contain the information needed, reply exactly: I don't know.`,
     },
     { role: "user", content: `Retrieved memories:\n${block}\n\nQuestion: ${question}\nShort answer:` },
   ];
@@ -226,7 +226,12 @@ async function recall(storeDir, query, now, agentId) {
   // ueber maxOut: topN beim Zusammenfuehren der Namensraeume; ohne diesen
   // Schritt landen hier bis zu 100 Erinnerungen im Prompt statt topN, und der
   // Lauf misst wieder etwas anderes als die Produktion.
-  const memories = (result.memories || []).slice(0, RECALL.topN);
+  // Wie in der Produktion (index.js: runMergedNamespaceRecall): die Kappung
+  // auf topN macht mergeNamespaceRecallResults, mit Entdopplung und
+  // Gruppendeckel. Bis 23.11.2026 kappte der Messstand hier nur per slice.
+  const memories = mergeNamespaceRecallResults([{ namespace: "default", canonical: [], memories: result.memories || [] }], {
+    maxOut: RECALL.topN, canonicalMaxItems: RECALL.canonicalMaxItems, dedupEnabled: RECALL.dedupEnabled, dedupJaccard: RECALL.dedupJaccard,
+  }).memories;
   return { memories, ms: Date.now() - started, rerankApplied: reranker ? !rerankFallback : false };
 }
 
@@ -286,7 +291,9 @@ function buildTasks() {
 }
 
 const allTasks = buildTasks();
-const tasks = allTasks.filter((t) => existsSync(t.store)).slice(0, LIMIT);
+// --category locomo-cat1 beschraenkt den Lauf auf eine Kategorie.
+const CATEGORY = arg("--category", null);
+const tasks = allTasks.filter((t) => existsSync(t.store) && (!CATEGORY || t.category === CATEGORY)).slice(0, LIMIT);
 const EXPECTED = { locomo: 1986, lme: 500 }[which];
 if (!Number.isFinite(LIMIT) && tasks.length !== EXPECTED) {
   console.error(`abort: ${tasks.length} questions with an existing store, expected ${EXPECTED} — ingest incomplete`);
