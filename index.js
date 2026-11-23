@@ -2005,16 +2005,23 @@ class MemoryDB {
       // ueber createdAt, nur schlanke Spalten, bis genug Zeilen da sind.
       const felder = this.schemaFieldNames;
       const hat = (name) => !felder || felder.size === 0 || felder.has(name);
-      const spalten = [...new Set(["id", "createdAt", "text", "sessionId", "sourceTurnId", ...(Array.isArray(fields) ? fields : [])])].filter(hat);
+      // Mit fields nur diese Spalten (plus Sortier- und Textfelder); ohne fields
+      // alle Spalten ausser dem Vektor, damit kein Aufrufer Besitzer- oder
+      // Statusfelder verliert. Ist das Schema unbekannt, bleibt es beim alten,
+      // kleinen Lesevorgang ohne Spaltenauswahl.
+      const bekannt = felder && felder.size > 0;
+      const spalten = Array.isArray(fields)
+        ? [...new Set(["id", "createdAt", "text", "sessionId", "sourceTurnId", ...fields])].filter(hat)
+        : bekannt ? [...felder].filter((name) => name !== "vector") : null;
       let rows = [];
       for (const tage of [7, 30, 180, null]) {
         const where = tage === null || !hat("createdAt")
           ? this._buildRecentGraphWhere()
           : `${this._buildRecentGraphWhere()} AND createdAt >= ${Math.floor(now - tage * 86_400_000)}`;
         let query = this.table.query().where(where);
-        if (typeof query.select === "function") query = query.select(spalten);
-        rows = await this._read(query.limit(20_000).toArray(), "MemoryDB.getRecentForGraph");
-        if (rows.length >= limit || tage === null || !hat("createdAt")) break;
+        if (spalten && typeof query.select === "function") query = query.select(spalten);
+        rows = await this._read(query.limit(spalten ? 20_000 : limit * 2).toArray(), "MemoryDB.getRecentForGraph");
+        if (!spalten || rows.length >= limit || tage === null || !hat("createdAt")) break;
       }
 
       // Sort by createdAt DESC
