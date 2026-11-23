@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
+
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 import { plainScanVector, runSemanticDiscoveryBatches } from "../index.js";
 import { computeContentHash } from "../lib/obsidian/link-index.js";
@@ -40,40 +41,36 @@ test("plainScanVector turns Arrow-like, typed and plain vectors into arrays", ()
 });
 
 test("unchanged rows do not use up the nightly budget, new rows behind them are still found", async () => {
-  const vault = mkdtempSync(join(tmpdir(), "plur1bus-sem-budget-"));
-  try {
-    const rows = Array.from({ length: 1200 }, (_, i) => record(i + 1));
-    // 1150 rows are already indexed with their current hash; the 50 new ones come last.
-    const entries = {};
-    for (const row of rows.slice(0, 1150)) {
-      entries[row.id] = { similar: [], contentHash: computeContentHash(row), firstDiscoveredAt: "2026-06-14T00:00:00.000Z", lastCheckedAt: "2026-06-14T00:00:00.000Z" };
-    }
-    mkdirSync(join(vault, ".plur1bus"), { recursive: true });
-    writeFileSync(join(vault, ".plur1bus", "link-index.json"), JSON.stringify({ version: 1, entries }));
-
-    let searches = 0;
-    const db = {
-      async *scanActiveBatches({ batchSize, withVectors }) {
-        assert.equal(withVectors, true, "discovery must request vectors");
-        for (let i = 0; i < rows.length; i += batchSize) yield rows.slice(i, i + batchSize);
-      },
-      async search() { searches += 1; return []; },
-    };
-    const result = await runSemanticDiscoveryBatches({
-      db,
-      semVaultCfg: { vaultPath: vault, graphLinks: { semanticDiscovery: { batchSize: 500, maxPerRun: 500 } } },
-      pool: {},
-      logger: null,
-      defaultAgentId: "main",
-      mutationPolicy: POLICY,
-    });
-
-    assert.equal(result.processed, 50);
-    assert.equal(result.unchanged, 1150);
-    assert.equal(searches, 50);
-    const written = JSON.parse(readFileSync(join(vault, ".plur1bus", "link-index.json"), "utf8"));
-    assert.equal(Object.keys(written.entries).length, 1200);
-  } finally {
-    rmSync(vault, { recursive: true, force: true });
+  const vault = makeTempDir("plur1bus-sem-budget-");
+  const rows = Array.from({ length: 1200 }, (_, i) => record(i + 1));
+  // 1150 rows are already indexed with their current hash; the 50 new ones come last.
+  const entries = {};
+  for (const row of rows.slice(0, 1150)) {
+    entries[row.id] = { similar: [], contentHash: computeContentHash(row), firstDiscoveredAt: "2026-06-14T00:00:00.000Z", lastCheckedAt: "2026-06-14T00:00:00.000Z" };
   }
+  mkdirSync(join(vault, ".plur1bus"), { recursive: true });
+  writeFileSync(join(vault, ".plur1bus", "link-index.json"), JSON.stringify({ version: 1, entries }));
+
+  let searches = 0;
+  const db = {
+    async *scanActiveBatches({ batchSize, withVectors }) {
+      assert.equal(withVectors, true, "discovery must request vectors");
+      for (let i = 0; i < rows.length; i += batchSize) yield rows.slice(i, i + batchSize);
+    },
+    async search() { searches += 1; return []; },
+  };
+  const result = await runSemanticDiscoveryBatches({
+    db,
+    semVaultCfg: { vaultPath: vault, graphLinks: { semanticDiscovery: { batchSize: 500, maxPerRun: 500 } } },
+    pool: {},
+    logger: null,
+    defaultAgentId: "main",
+    mutationPolicy: POLICY,
+  });
+
+  assert.equal(result.processed, 50);
+  assert.equal(result.unchanged, 1150);
+  assert.equal(searches, 50);
+  const written = JSON.parse(readFileSync(join(vault, ".plur1bus", "link-index.json"), "utf8"));
+  assert.equal(Object.keys(written.entries).length, 1200);
 });

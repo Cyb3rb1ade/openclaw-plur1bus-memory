@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
+
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 import { runSemanticDiscoveryBatches } from "../index.js";
 import { applySemanticLensToRecall, clearSemanticLensIndexCache, loadSemanticLensIndex } from "../lib/semantic-lens-index.js";
@@ -80,50 +81,42 @@ test("memories no longer active drop out of the graph", () => {
 });
 
 test("the reader loads what the writer saves, and the Lens appends a community member", async () => {
-  const vault = mkdtempSync(join(tmpdir(), "plur1bus-lens-writer-"));
-  try {
-    const index = buildSemanticLensIndex({ linkIndex: LINKS, records: RECORDS, workspaceId: "main" });
-    assert.equal(saveSemanticLensIndex(vault, index, { mutationPolicy: null }).written, false, "no policy, no write");
-    assert.equal(saveSemanticLensIndex(vault, index, { mutationPolicy: POLICY }).written, true);
-    clearSemanticLensIndexCache();
-    const loaded = loadSemanticLensIndex({ workspaceDir: vault });
-    assert.equal(loaded?.index.communities["lens-a1"].size, 3);
+  const vault = makeTempDir("plur1bus-lens-writer-");
+  const index = buildSemanticLensIndex({ linkIndex: LINKS, records: RECORDS, workspaceId: "main" });
+  assert.equal(saveSemanticLensIndex(vault, index, { mutationPolicy: null }).written, false, "no policy, no write");
+  assert.equal(saveSemanticLensIndex(vault, index, { mutationPolicy: POLICY }).written, true);
+  clearSemanticLensIndexCache();
+  const loaded = loadSemanticLensIndex({ workspaceDir: vault });
+  assert.equal(loaded?.index.communities["lens-a1"].size, 3);
 
-    const texts = { a1: "Paris museum trip tickets", a2: "Paris museum trip budget", a3: "Paris museum trip hotel" };
-    const result = await applySemanticLensToRecall(
-      [{ entry: { id: "a2", text: texts.a2 }, score: 0.9 }],
-      { workspaceDir: vault, getMemoryById: async (id) => (texts[id] ? { id, text: texts[id], status: "active" } : null), semanticLens: { timeoutMs: 1000 } },
-    );
-    assert.ok(result.lensMemories.length > 0);
-    assert.ok(result.lensMemories.every((m) => ["a1", "a3"].includes(m.entry.id)));
-  } finally {
-    rmSync(vault, { recursive: true, force: true });
-  }
+  const texts = { a1: "Paris museum trip tickets", a2: "Paris museum trip budget", a3: "Paris museum trip hotel" };
+  const result = await applySemanticLensToRecall(
+    [{ entry: { id: "a2", text: texts.a2 }, score: 0.9 }],
+    { workspaceDir: vault, getMemoryById: async (id) => (texts[id] ? { id, text: texts[id], status: "active" } : null), semanticLens: { timeoutMs: 1000 } },
+  );
+  assert.ok(result.lensMemories.length > 0);
+  assert.ok(result.lensMemories.every((m) => ["a1", "a3"].includes(m.entry.id)));
 });
 
 test("the nightly discovery run writes the Lens index next to the link index", async () => {
-  const vault = mkdtempSync(join(tmpdir(), "plur1bus-lens-nightly-"));
-  try {
-    const rows = RECORDS.map((r, i) => ({ ...r, type: "memory", text: `memory ${r.id}`, summary: "", vector: [i, 1, 0] }));
-    const neighbours = Object.fromEntries(Object.entries(LINKS.entries).map(([id, e]) => [id, e.similar]));
-    const db = {
-      async *scanActiveBatches({ withVectors }) {
-        yield rows.map((r) => (withVectors ? r : { ...r, vector: null }));
-      },
-      async search(vector) {
-        const self = rows.find((r) => r.vector[0] === vector[0]);
-        return neighbours[self.id].map((id) => ({ entry: { id }, score: 0.9 }));
-      },
-    };
-    const result = await runSemanticDiscoveryBatches({
-      db, semVaultCfg: { vaultPath: vault }, pool: {}, logger: null, defaultAgentId: "main", mutationPolicy: POLICY,
-    });
-    assert.equal(result.processed, 6);
-    assert.deepEqual(result.lens, { written: true, communities: 2, members: 6, edges: 7 });
-    const lensPath = join(vault, ".plur1bus", "semantic-lens-index.json");
-    assert.ok(existsSync(lensPath));
-    assert.equal(JSON.parse(readFileSync(lensPath, "utf8")).memoryToCommunity.b2, "lens-b1");
-  } finally {
-    rmSync(vault, { recursive: true, force: true });
-  }
+  const vault = makeTempDir("plur1bus-lens-nightly-");
+  const rows = RECORDS.map((r, i) => ({ ...r, type: "memory", text: `memory ${r.id}`, summary: "", vector: [i, 1, 0] }));
+  const neighbours = Object.fromEntries(Object.entries(LINKS.entries).map(([id, e]) => [id, e.similar]));
+  const db = {
+    async *scanActiveBatches({ withVectors }) {
+      yield rows.map((r) => (withVectors ? r : { ...r, vector: null }));
+    },
+    async search(vector) {
+      const self = rows.find((r) => r.vector[0] === vector[0]);
+      return neighbours[self.id].map((id) => ({ entry: { id }, score: 0.9 }));
+    },
+  };
+  const result = await runSemanticDiscoveryBatches({
+    db, semVaultCfg: { vaultPath: vault }, pool: {}, logger: null, defaultAgentId: "main", mutationPolicy: POLICY,
+  });
+  assert.equal(result.processed, 6);
+  assert.deepEqual(result.lens, { written: true, communities: 2, members: 6, edges: 7 });
+  const lensPath = join(vault, ".plur1bus", "semantic-lens-index.json");
+  assert.ok(existsSync(lensPath));
+  assert.equal(JSON.parse(readFileSync(lensPath, "utf8")).memoryToCommunity.b2, "lens-b1");
 });
