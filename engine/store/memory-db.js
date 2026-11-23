@@ -89,6 +89,21 @@ function normalizeVectorValue(vector) {
   return vector;
 }
 
+/**
+ * Turn a LanceDB vector (Arrow Vector, typed array or plain array) into a plain array.
+ *
+ * @param {unknown} vector
+ * @returns {number[]|null} The vector, or null when absent or empty.
+ */
+export function plainScanVector(vector) {
+  if (!vector) return null;
+  let out = null;
+  if (Array.isArray(vector)) out = vector;
+  else if (ArrayBuffer.isView(vector)) out = Array.from(vector);
+  else if (typeof vector.toArray === "function") out = Array.from(vector.toArray());
+  return out && out.length > 0 ? out : null;
+}
+
 class MemoryDB {
   /**
    * @param {string} dbPath LanceDB agent path.
@@ -1322,11 +1337,14 @@ class MemoryDB {
     }
   }
 
-  normalizeActiveScanRow(r) {
+  normalizeActiveScanRow(r, { withVectors = false } = {}) {
     return {
       id: r.id,
       type: r.type || "memory",
-      vector: (Array.isArray(r.vector) && r.vector.length > 0) ? r.vector : null,
+      // LanceDB liefert ein Arrow-Vector-Objekt, kein Array. Der frühere
+      // Array.isArray-Test machte jeden Vektor zu null, die Link-Erkennung
+      // übersprang deshalb seit Juni jede Zeile (processed 0, skipped 500).
+      vector: withVectors ? plainScanVector(r.vector) : null,
       text: r.text || "",
       summary: r.summary || "",
       category: r.category || "",
@@ -1350,12 +1368,14 @@ class MemoryDB {
   }
 
   // Scan-Spalten sind für Active- und Collectable-Scan identisch.
-  _buildScanQuery(statusWhere) {
+  _buildScanQuery(statusWhere, { withVectors = false } = {}) {
     this._assertTrustedPath();
     let query = this.table.query().where(statusWhere);
     if (typeof query.select === "function") {
+      // Vektoren nur auf Anforderung: der GC scannt bis zu 150 000 Zeilen und
+      // braucht sie nicht, die Link-Erkennung schon.
       query = query.select([
-        "id", "type", "vector", "text", "summary", "category", "importance", "createdAt",
+        "id", "type", ...(withVectors ? ["vector"] : []), "text", "summary", "category", "importance", "createdAt",
         "scope", "agentId", "storedBy", "workspaceId", "workspaceKey", "memoryKind", "ownerUserId", "status",
         "updatedAt", "versionCreatedAt", "sourceTimestamp", "neverForget", "memoryClass",
       ]);
@@ -1363,7 +1383,7 @@ class MemoryDB {
     return query;
   }
 
-  buildActiveScanQuery() {
+  buildActiveScanQuery(options = {}) {
     // Fail-closed Whitelist: NUR "active" (oder legacy NULL/leer) gilt als aktiv.
     // Ein unbekannter/falsch geschriebener Status (z. B. "archvied") wird NICHT
     // als aktiv interpretiert. (Vorher: Negativliste != deleted/archived, die
@@ -1372,7 +1392,7 @@ class MemoryDB {
     // `superseded` ist hier bewusst NICHT enthalten: Recall, Shared Search und
     // die Vault-Notizen sollen keine überholten Fassungen sehen. Der GC braucht
     // sie trotzdem — dafür gibt es buildCollectableScanQuery().
-    return this._buildScanQuery("status IS NULL OR status = 'active' OR status = ''");
+    return this._buildScanQuery("status IS NULL OR status = 'active' OR status = ''", options);
   }
 
   /**
@@ -1403,14 +1423,14 @@ class MemoryDB {
         `${label}:${offset}`,
       );
       if (!rows || rows.length === 0) break;
-      yield rows.map((r) => this.normalizeActiveScanRow(r));
+      yield rows.map((r) => this.normalizeActiveScanRow(r, { withVectors: options.withVectors === true }));
       if (rows.length < batchSize) break;
       offset += rows.length;
     }
   }
 
   async *scanActiveBatches(options = {}) {
-    yield* this._scanBatches(() => this.buildActiveScanQuery(), "MemoryDB.scanActiveBatches", options);
+    yield* this._scanBatches(() => this.buildActiveScanQuery({ withVectors: options.withVectors === true }), "MemoryDB.scanActiveBatches", options);
   }
 
   async *scanCollectableBatches(options = {}) {

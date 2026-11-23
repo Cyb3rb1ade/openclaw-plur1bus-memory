@@ -295,7 +295,7 @@ export function createPlur1busCommandRunner(ctx) {
         loadSemanticRecords: async () => pool.withAuthoritativeReadDb(obsidianMemoryCtx.agentId, async (semanticDb) => {
           const initialized = await semanticDb.init();
           if (initialized === false) return [];
-          return semanticDb.scanActive();
+          return semanticDb.scanActive({ withVectors: true });
         }),
         searchSemanticNeighbors: async (source) => pool.withAuthoritativeReadDb(obsidianMemoryCtx.agentId, async (semanticDb) => {
           const initialized = await semanticDb.init();

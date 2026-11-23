@@ -57,6 +57,7 @@ FILES=(
   lib/jobs/daily-consolidation.js
   lib/feedback-log.js
   lib/semantic-lens-index.js
+  lib/semantic-lens-writer.js
   lib/conversation-reactivation-recall.js
   lib/relevant-memory-context.js
   test/neo-maintenance.test.js

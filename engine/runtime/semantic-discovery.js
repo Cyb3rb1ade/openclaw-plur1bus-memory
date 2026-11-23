@@ -9,6 +9,8 @@ import { discoverObsidianWorkspaces } from "../../lib/obsidian-bridge.js";
 import { discoverSemanticLinks } from "../../lib/obsidian/semantic-link-discoverer.js";
 import { writeMemoryNotes } from "../../lib/obsidian/memory-note-writer.js";
 import { mutationAllowed } from "../../lib/obsidian-mutation-policy.js";
+import { loadLinkIndex } from "../../lib/obsidian/link-index.js";
+import { buildSemanticLensIndex, saveSemanticLensIndex } from "../../lib/semantic-lens-writer.js";
 
 function semanticDiscoveryStats() {
   return {
@@ -58,8 +60,8 @@ async function runSemanticDiscoveryBatches({ db, semVaultCfg, pool, logger, defa
   }
 
   const scanBatches = typeof db.scanActiveBatches === "function"
-    ? db.scanActiveBatches({ batchSize })
-    : (async function* fallbackScan() { yield await db.scanActive(); })();
+    ? db.scanActiveBatches({ batchSize, withVectors: true })
+    : (async function* fallbackScan() { yield await db.scanActive({ withVectors: true }); })();
 
   for await (const lancedbRecords of scanBatches) {
     if (!Array.isArray(lancedbRecords) || lancedbRecords.length === 0) continue;
@@ -74,12 +76,62 @@ async function runSemanticDiscoveryBatches({ db, semVaultCfg, pool, logger, defa
       confirm: true,
     });
     addSemanticDiscoveryStats(total, result);
-    const consumed = (result.processed || 0) + (result.skipped || 0) + (result.unchanged || 0) + (result.errors || 0);
+    // Nur Suchen verbrauchen das Budget. Unveränderte Zeilen kosten einen
+    // Hash-Vergleich; zählten sie mit, endete jeder Lauf im ersten, längst
+    // indexierten Batch und neue Erinnerungen kämen nie in den Link-Index.
+    const consumed = (result.processed || 0) + (result.errors || 0);
     remaining -= Math.max(consumed, 0);
     if (result.batchAborted || remaining <= 0) break;
   }
 
+  // Die Semantic Lens liest ihre Communities aus semantic-lens-index.json; der
+  // Index wird aus den Nachbarlisten von link-index.json gebaut, also nach der
+  // Erkennung. Ein Fehler hier darf die Erkennung nicht scheitern lassen.
+  try {
+    total.lens = await writeSemanticLensForVault({ db, semVaultCfg, batchSize, defaultAgentId, mutationPolicy });
+  } catch (err) {
+    logger?.warn?.(`plur1bus-semantic: lens index build failed: ${err?.message || String(err)}`);
+    total.lens = { written: false, reason: "error" };
+  }
+
   return total;
+}
+
+/**
+ * Rebuild `.plur1bus/semantic-lens-index.json` for one vault from its link index
+ * and the currently active memories (scanned without vectors).
+ *
+ * @returns {Promise<{written: boolean, reason?: string, communities: number, members: number, edges: number}>}
+ */
+async function writeSemanticLensForVault({ db, semVaultCfg, batchSize, defaultAgentId, mutationPolicy }) {
+  const records = [];
+  const keep = (row) => records.push({
+    id: row.id,
+    category: row.category,
+    scope: row.scope,
+    agentId: row.agentId,
+    storedBy: row.storedBy,
+    importance: row.importance,
+    createdAt: row.createdAt,
+  });
+  if (typeof db.scanActiveBatches === "function") {
+    for await (const batch of db.scanActiveBatches({ batchSize })) for (const row of batch || []) keep(row);
+  } else {
+    for (const row of await db.scanActive()) keep(row);
+  }
+  const index = buildSemanticLensIndex({
+    linkIndex: loadLinkIndex(semVaultCfg.vaultPath),
+    records,
+    workspaceId: semVaultCfg.workspaceId || defaultAgentId || "",
+  });
+  const saved = saveSemanticLensIndex(semVaultCfg.vaultPath, index, { mutationPolicy });
+  return {
+    written: saved.written,
+    ...(saved.reason ? { reason: saved.reason } : {}),
+    communities: index.stats.communities,
+    members: index.stats.members,
+    edges: index.stats.edges,
+  };
 }
 
 export { runSemanticDiscoveryBatches };
