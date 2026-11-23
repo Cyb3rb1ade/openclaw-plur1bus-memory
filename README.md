@@ -2,9 +2,9 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.20.7 — OpenClaw 2026.8.1 or newer**
+**PLUR1BUS 7.20.8 — OpenClaw 2026.8.1 or newer**
 
-Current source version: **7.20.7**, running in production on an OpenClaw
+Current source version: **7.20.8**, running in production on an OpenClaw
 `2026.11.6` build. The declared compatibility floor is `openclaw@2026.8.1` and plugin
 API `>=2026.8.1`; the package is built against the immutable build baseline
 `openclaw@2026.8.2`. Each host release is checked against the full patch set
@@ -28,6 +28,21 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.20.8 — the time filter only answers "when did we talk"
+
+The recall used to drop every candidate whose `createdAt` fell outside a time
+phrase in the question. `createdAt` is when something was said, so that only
+fits questions about the conversation itself ("what did I tell you last
+week", "was haben wir gestern besprochen"). For "where was Calvin in the last
+week of October" or "which shoes did I clean last month" it threw away the
+evidence and kept fragments of the current day. Now only such
+conversation-time questions filter (window widened by 2 h, since auto-capture
+writes after the turn); event time, casual mentions, calendar dates and
+"after the X" anchors leave the recall unchanged. The parser also stops
+reading UUID fragments, line numbers and names like "Cyberpunk 2077" as years,
+and "last week of October 2026" is October. Without the filter the bench lost
+nothing and gained evidence for three LOCOMO and two LongMemEval questions.
 
 ### New in v7.20.7 — "yesterday" means the memory's yesterday
 
@@ -1066,7 +1081,7 @@ The index is written to `.plur1bus/code-index.json` and contains normalized file
 
 - **ACL / Access Control** — Agent- and workspace-scoped memory access. `searchByTopic`, `getCard`, and recall pipeline filter by ACL. Unauthorized access is logged.
 - **Feedback loop (`/mf`)** — Thumbs-up/down/neutral feedback on any memory result. Persisted per workspace.
-- **Temporal reasoning** — Queries like "last month", "3 days ago", "Q2 2026" parsed to concrete date ranges before boost/rerank.
+- **Temporal reasoning** — Queries like "last month" or "3 days ago" parsed to concrete date ranges before boost/rerank. Since 7.20.8 only questions about the conversation time ("what did I tell you last week") filter by them.
 - **Collaborative memory (`/share`)** — Copy any card into a workspace-shared pool with ACL protection.
 - **Query refinement** — Automatic query rewrite on poor first results, merged and deduplicated.
 
@@ -1217,7 +1232,7 @@ On an older host the installer refuses the package instead of deploying it:
 Install the published release through OpenClaw's package installer:
 
 ```bash
-openclaw plugins install clawhub:@cyb3rb1ade/plur1bus-memory@7.20.7 \
+openclaw plugins install clawhub:@cyb3rb1ade/plur1bus-memory@7.20.8 \
   --acknowledge-clawhub-risk --pin
 ```
 
@@ -1225,14 +1240,14 @@ The same release is on the npm-compatible registry, if your `@cyb3rb1ade`
 scope already points there:
 
 ```bash
-openclaw plugins install @cyb3rb1ade/plur1bus-memory@7.20.7 --pin
+openclaw plugins install @cyb3rb1ade/plur1bus-memory@7.20.8 --pin
 ```
 
 Or install the immutable GitHub Release tarball:
 
 ```bash
 openclaw plugins install \
-  https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/download/v7.20.7/cyb3rb1ade-plur1bus-memory-7.20.7.tgz
+  https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/download/v7.20.8/cyb3rb1ade-plur1bus-memory-7.20.8.tgz
 ```
 
 To build from this source checkout instead, produce a tarball and install that
@@ -1244,7 +1259,7 @@ npm ci
 npm test
 npm pack
 openclaw plugins install \
-  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.20.7.tgz --force
+  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.20.8.tgz --force
 ```
 
 Record the tarball's SHA-256 before transferring it. PLUR1BUS never patches

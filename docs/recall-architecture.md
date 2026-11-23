@@ -78,8 +78,15 @@ contract remain B12-P work; B12-Core does not alter initial vector recall.
 
 ### 4. Temporal filter
 
-Recognized time expressions constrain candidates to the relevant interval.
-Queries without a usable temporal expression continue unchanged.
+`createdAt` is when a memory was said, so a time expression constrains the
+candidates only when the query asks about the conversation time: a relative
+phrase (today, yesterday, N days/hours ago, last week/month, weekday) with a
+conversation cue in the same clause ("what did I tell you last week", "was
+haben wir gestern besprochen"), no future signal there and a message of at
+most 1,500 characters (`classifyTemporalQuery`, 7.20.8). The window is widened
+by 2 h on both sides and never removes every candidate. Event time, casual
+mentions, calendar dates and "after the X" anchors leave the candidates
+unchanged and are only logged. An explicit `validAt` disables this filter.
 
 ### 5. Canonical knowledge search
 

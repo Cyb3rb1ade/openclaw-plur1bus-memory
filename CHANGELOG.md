@@ -6,6 +6,18 @@ Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 
+## [7.20.8] — 2026-11-24
+
+### Fixed
+
+- The recall dropped every candidate whose `createdAt` lay outside a time phrase in the query (`parseTemporal` → `applyTemporalFilterSafe`). `createdAt` is when something was said, not when it happened. In production the filter cut the candidates for about 2.5 % of real user messages and was justified for about 1 % of those (a question about the conversation time); the model then got 1–14 instead of 15 memories, nearly all fragments of the current day. `classifyTemporalQuery` (`lib/temporal-parser.js`) now decides: the filter stays hard only for a relative phrase (today, yesterday, N days/hours ago, last week/month, weekday) with a conversation cue in the same clause ("was haben wir gestern besprochen", "what did I tell you last week"), no future signal there and a cleaned message of at most 1,500 characters. The window comes from that clause, widened by 2 h on both sides because auto-capture writes after the turn, and ends at `now` at the latest. Event time, casual mentions, calendar dates (month, month + year, year) and anchors ("after the X") no longer filter and get no boost; the 7.12.41 safety net stays. Bench without the filter, reranked: LOCOMO +3/−0 questions with their evidence in the prompt (68 → 71 of 82 evidence turns), LongMemEval +2/−0. Offline with the new classifier: 0 of 552 LOCOMO and 0 of 100 LongMemEval questions filter; of 3,623 real user messages from the last 60 days 1 does (the one rated justified), of 1,875 system prompts none.
+- Parser fixes (`parseTemporal`, same result shape plus `kind`): media envelopes (`[media attached: …]`, `[Audio transcript …]`, `[Image …]`) are removed before parsing, but not the voice-message text in the same line, as are code, URLs, paths, `file:line`, UUIDs and hex runs; UUID fragments and line numbers ("2990", "openclaw.json:2253") had been read as years. "seit gestern" / "since last week" are durations, not windows. "last week of October 2026" / "letzte Woche im Oktober" is that month, not the seven days before the question. A four-digit number is a year only with a preposition ("in 2025", "im Jahr", "seit", "until") or standing alone ("Was war 2025?"), not in names ("Cyberpunk 2077") or next to `-./:`. Month and weekday phrases are found after an earlier "im …" / "am …" that is not one.
+- Anchors are no longer resolved: per namespace one embedding call and one table read before the ACL check less; a timeout in that read failed the whole multi-namespace recall.
+
+### Changed
+
+- `runRecallPipeline` takes `temporalFilterMode`: `"intent"` (default), `"legacy"` (7.20.7 behaviour including its parser, for A/B runs in the bench) or `"off"`. There is no config key. A recognized phrase that does not filter is logged as `temporal phrase not used as filter (kind=…, reason=…, inWindow k/n)` without query text; a hard filter appends `kind=…` to the existing log lines.
+
 ## [7.20.7] — 2026-11-23
 
 ### Changed
