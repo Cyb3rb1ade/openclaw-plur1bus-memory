@@ -25,3 +25,6 @@ analysis/**/sample.jsonl
 analysis/**/results.jsonl
 analysis/**/snapshots/
 review-twins/
+
+# Eigener Reranker-Schluessel des Messstands — NIEMALS einchecken.
+.env.bench

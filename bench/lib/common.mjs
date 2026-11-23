@@ -49,8 +49,17 @@ export async function makeEmbeddings() {
 }
 
 export async function makeReranker({ timeoutMs = 2500 } = {}) {
+  // Nie den Schluessel des Gateways: am 23.11.2026 haben Messlaeufe ueber
+  // COHERE_API_KEY aus gateway.systemd.env das Monatslimit des Produktiv-
+  // Rerankers aufgebraucht. Der Messstand braucht einen eigenen Schluessel.
+  if (!process.env.BENCH_COHERE_API_KEY) {
+    try { loadEnv(`${BENCH}/.env.bench`); } catch { /* Datei fehlt: Fehler unten */ }
+  }
+  if (!process.env.BENCH_COHERE_API_KEY) {
+    throw new Error("BENCH_COHERE_API_KEY fehlt — der Messstand nutzt nicht den Cohere-Schluessel des Gateways.");
+  }
   const { CohereRerankerProvider } = await import(`${RELEASE}/lib/providers/reranker-cohere.js`);
-  return new CohereRerankerProvider({ apiKeyEnv: "COHERE_API_KEY", timeoutMs });
+  return new CohereRerankerProvider({ apiKeyEnv: "BENCH_COHERE_API_KEY", timeoutMs });
 }
 
 /**

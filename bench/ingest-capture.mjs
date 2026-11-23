@@ -8,13 +8,30 @@
  * und die Emotions-Stufen t2/t3 (t2 ist im Release ein ONNX-Stub, t3 haengt an
  * einem Anthropic-Provider und ist auf onlyWhenProviderAvailable gestellt).
  *
- * Usage: node ingest-capture.mjs locomo|lme [--limit N]
+ * Usage: node ingest-capture.mjs locomo|lme [--limit N] [--jev|--chunked]
+ *          [--suffix NAME] [--overwrite] [--legacy-roles]
+ *
+ *  --suffix NAME    Ziel db-capture-NAME/<locomo|lme>/ und Manifest
+ *                   results/ingest-capture-NAME-<which>.json (run.mjs leitet
+ *                   den Manifestnamen aus --db ab). Ohne --suffix wie bisher
+ *                   -jev / -chunked / leer.
+ *  --overwrite      Vorhandene Stores ersetzen. Ohne den Schalter bricht das
+ *                   Skript ab, BEVOR es eine API anfragt — writeStore loescht
+ *                   das Zielverzeichnis, ein versehentlicher Neulauf haette
+ *                   sonst den alten Store vernichtet.
+ *  --legacy-roles   LOCOMO wie bis 23.11.2026: speaker_b als "assistant".
+ *                   Nur zum Nachbauen alter Stores.
+ *
+ * Beispiel (Stand 23.11.2026, c2):
+ *   nice -n 10 node ingest-capture.mjs locomo --jev --suffix jev2
  */
-import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { readFileSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { BENCH, RELEASE, lancedb, loadEnv, makeEmbeddings, memoryRow, pMap, parseLocomoDate, parseLmeDate } from "./lib/common.mjs";
-const { planChunks } = await import(`${RELEASE}/lib/memory-chunking.js`);
+const { planChunks, expandForCaptureDecided } = await import(`${RELEASE}/lib/memory-chunking.js`);
+const { createJevChunkDecider, resolveJevApiKey } = await import(`${RELEASE}/lib/jev-chunk-decider.js`);
+const { randomUUID } = await import("node:crypto");
 
 loadEnv();
 const { categorizeMemoryWithReason } = await import(`${RELEASE}/lib/categorize.js`);
@@ -31,7 +48,12 @@ const EMBED_BATCH = 96;
 const SUMMARY_MAX_WORDS = 150;      // openclaw.json: summaryMaxWords
 const DUPLICATE_THRESHOLD = 0.95;   // openclaw.json: duplicateThreshold
 
-/** Wortweise Kuerzung — identisch zu generateSummary() im Capture-Skript. */
+/** Wortweise Kuerzung. NICHT identisch zu generateSummary() des Plugins
+ *  (lib/text-utils.js): diese hier zieht Leerraum zusammen, das Plugin laesst
+ *  ihn stehen und schneidet ueber maxWords an einer Satzgrenze. In
+ *  db-capture-jev2 betrifft das 53 von 1990 Summaries, nur doppelte
+ *  Leerzeichen (c4-summary-check.mjs, 23.11.2026). Bewusst nicht geaendert,
+ *  damit neue Stores mit db-capture-jev/jev2 vergleichbar bleiben. */
 function generateSummary(text, maxWords) {
   const words = text.replace(/\s+/g, " ").trim().split(" ");
   return words.slice(0, maxWords).join(" ") + (words.length > maxWords ? "..." : "");
@@ -49,10 +71,26 @@ const iso = (ms) => new Date(ms).toISOString().slice(0, 16).replace("T", " ");
  *  Store, in einem eigenen Verzeichnis — die bestehende Datenbank bleibt
  *  unangetastet und vergleichbar. */
 const CHUNKED = process.argv.includes("--chunked");
-const DB_SUFFIX = CHUNKED ? "-chunked" : "";
+/** --jev: wie captureChunkingMode "automatisch" im Betrieb — Jev entscheidet je
+ *  teilbarer Nachricht ganz / nur Teile / beides; Teile tragen chunkGroupId. */
+const JEV = process.argv.includes("--jev");
+const suffixArg = process.argv.indexOf("--suffix");
+const SUFFIX = suffixArg > -1 ? String(process.argv[suffixArg + 1] || "") : null;
+if (SUFFIX !== null && !/^[a-z0-9][a-z0-9-]*$/.test(SUFFIX)) throw new Error(`--suffix "${SUFFIX}": nur a-z, 0-9 und "-"`);
+const DB_SUFFIX = SUFFIX !== null ? `-${SUFFIX}` : JEV ? "-jev" : CHUNKED ? "-chunked" : "";
+const OVERWRITE = process.argv.includes("--overwrite");
+/** Bis 23.11.2026 wurde speaker_b als "assistant" gespeichert. Damit galt jede
+ *  zweite LOCOMO-Zeile als untrusted (decideEpistemicStatusForCapture: nur
+ *  role "user" ergibt "observed") und bekam im Recall den Epistemik-Abschlag
+ *  von -0,15. Bei LOCOMO sprechen zwei Menschen; produktiv kommt eine
+ *  Menschen-Nachricht als role "user" an. */
+const LEGACY_ROLES = process.argv.includes("--legacy-roles");
+const jevDecider = JEV ? createJevChunkDecider({ apiKey: resolveJevApiKey({}, process.env) }) : null;
+if (JEV && !jevDecider) throw new Error("--jev ohne TYPESAFE_API_KEY");
+const jevStats = { whole: 0, parts: 0, both: 0, split: 0 };
 
 /** Eine Zeile so bauen, wie der Capture-Hook sie baut (index.js:10560 ff.). */
-function captureRow({ id, text, vector, createdAt, agentId, role, origin, sourceTurnId }) {
+function captureRow({ id, text, vector, createdAt, agentId, role, origin, sourceTurnId, chunkGroupId = "" }) {
   const { category, reason } = categorizeMemoryWithReason(text);
   const importance = computeMemoryImportance({ text, category, categoryReason: reason, origin }).importance;
   const emotion = inferEmotionalValence(text, category);
@@ -68,6 +106,7 @@ function captureRow({ id, text, vector, createdAt, agentId, role, origin, source
     emotionalIntensity: emotion.emotionalIntensity,
     emotionalDominant: emotion.emotionalDominant,
     epistemicStatus: decideEpistemicStatusForCapture({ text, sourceMessageRole: role, origin, cutoffFailed: false }),
+    chunkGroupId,
   }, createdAt);
 }
 
@@ -114,7 +153,8 @@ function locomoUnits(sample) {
       units.push({
         id: `${sample.sample_id}:${turn.dia_id}`,
         createdAt: when,
-        role: turn.speaker === conv.speaker_a ? "user" : "assistant",
+        // Beide Sprecher sind Menschen → "user" (siehe LEGACY_ROLES).
+        role: LEGACY_ROLES && turn.speaker !== conv.speaker_a ? "assistant" : "user",
         text: `[${iso(when)}] ${turn.speaker}: ${turn.text || ""}${caption}`,
       });
     }
@@ -171,8 +211,23 @@ function chunkUnits(units) {
   return out;
 }
 
+/** Capture-Pfad des Betriebs: expandForCaptureDecided mit dem Jev-Decider. */
+async function jevUnits(units) {
+  const { items, split, decisions } = await expandForCaptureDecided(units, { enabled: true, makeGroupId: randomUUID, decide: jevDecider });
+  jevStats.split += split;
+  for (const k of Object.keys(decisions)) jevStats[k] += decisions[k];
+  const counter = new Map();
+  return items.map((item) => {
+    if (!item.chunkGroupId) return { ...item, sourceTurnId: item.id };
+    if (item.text === units.find((u) => u.id === item.id)?.text) return { ...item, sourceTurnId: item.id };
+    const k = counter.get(item.id) ?? 0;
+    counter.set(item.id, k + 1);
+    return { ...item, id: `${item.id}#${k}`, sourceTurnId: item.id };
+  });
+}
+
 async function ingestOne(storeName, rohUnits, agentId, dbSub) {
-  const units = CHUNKED ? chunkUnits(rohUnits) : rohUnits;
+  const units = JEV ? await jevUnits(rohUnits) : CHUNKED ? chunkUnits(rohUnits) : rohUnits;
   const vectors = await embedAll(embeddings, units.map((u) => u.text));
   const { kept, skipped } = dedup(units, vectors);
   const rows = kept.map(({ unit, vector }) => captureRow({ ...unit, vector, agentId, origin: "dm" }));
@@ -183,14 +238,28 @@ async function ingestOne(storeName, rohUnits, agentId, dbSub) {
   return rows.length;
 }
 
+/** Bricht ab, bevor irgendetwas angefragt oder geloescht wird. */
+function guardTargets(dbSub, names) {
+  if (OVERWRITE) return;
+  const existing = names.filter((n) => existsSync(join(BENCH, dbSub, n)));
+  const manifest = join(BENCH, `results/ingest-capture${DB_SUFFIX}-${which}.json`);
+  if (existing.length || existsSync(manifest)) {
+    console.error(`Abbruch: ${dbSub} enthaelt schon ${existing.length} Store(s)${existsSync(manifest) ? ` und ${manifest} existiert` : ""}. Neuen --suffix waehlen oder --overwrite angeben.`);
+    process.exit(1);
+  }
+}
+
 if (which === "locomo") {
   const data = JSON.parse(readFileSync(join(BENCH, "data/locomo10.json"), "utf8")).slice(0, LIMIT);
+  guardTargets(`db-capture${DB_SUFFIX}/locomo`, data.map((s) => s.sample_id));
+  console.log(`locomo → db-capture${DB_SUFFIX}/locomo, Rollen: ${LEGACY_ROLES ? "legacy (speaker_b = assistant)" : "beide Sprecher user"}, jev=${JEV}`);
   for (const sample of data) {
     const n = await ingestOne(sample.sample_id, locomoUnits(sample), "bench-locomo", `db-capture${DB_SUFFIX}/locomo`);
     console.log(`locomo ${sample.sample_id}: ${n} rows`);
   }
 } else if (which === "lme") {
   const data = JSON.parse(readFileSync(join(BENCH, "data/longmemeval_oracle.json"), "utf8")).slice(0, LIMIT);
+  guardTargets(`db-capture${DB_SUFFIX}/lme`, data.map((d) => d.question_id));
   let done = 0;
   await pMap(data, 4, async (item) => {
     await ingestOne(item.question_id, lmeUnits(item), "bench-lme", `db-capture${DB_SUFFIX}/lme`);
@@ -201,6 +270,6 @@ if (which === "locomo") {
   process.exit(2);
 }
 
-writeFileSync(join(BENCH, `results/ingest-capture${DB_SUFFIX}-${which}.json`), JSON.stringify({ when: new Date().toISOString(), stores: manifest.length, rows: totalRows, deduped: totalSkipped, manifest }, null, 2));
-console.log(`done: ${manifest.length} stores, ${totalRows} rows, ${totalSkipped} als Duplikat verworfen`);
+writeFileSync(join(BENCH, `results/ingest-capture${DB_SUFFIX}-${which}.json`), JSON.stringify({ when: new Date().toISOString(), roles: which === "locomo" ? (LEGACY_ROLES ? "legacy: speaker_b=assistant" : "beide Sprecher user") : "aus den Daten", jev: JEV ? jevStats : null, stores: manifest.length, rows: totalRows, deduped: totalSkipped, manifest }, null, 2));
+console.log(`done: ${manifest.length} stores, ${totalRows} rows, ${totalSkipped} als Duplikat verworfen${JEV ? `, jev ${JSON.stringify(jevStats)}` : ""}`);
 await embeddings.shutdown?.();
