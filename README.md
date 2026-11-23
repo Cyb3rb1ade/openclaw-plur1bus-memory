@@ -2,13 +2,13 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.20.2 — OpenClaw 2026.8.1 or newer**
+**PLUR1BUS 7.20.5 — OpenClaw 2026.8.1 or newer**
 
-Latest release: **7.20.2** ([GitHub Release](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/v7.20.2),
+Latest release: **7.20.5** ([GitHub Release](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/v7.20.5),
 ClawHub, npm). Releases are cut on the release line (`release/*`, tags
 `vX.Y.Z`). This branch, `main`, carries the engine/adapter layout and contains
-every release change through 7.20.2 as `port(<version>)` commits (#212, #280),
-so its package version is 7.20.2 as well. A build from `main` is still not the
+every release change through 7.20.5 as `port(<version>)` commits (#212, #280,
+#283), so its package version is 7.20.5 as well. A build from `main` is still not the
 release artifact: it also carries the unreleased engine/adapter work. The declared compatibility floor is
 `openclaw@2026.8.1` and plugin API `>=2026.8.1` (`openclaw.compat` in
 `package.json`); that floor is the only compatibility claim. The package is
@@ -34,6 +34,20 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.20.3 – v7.20.5 — Semantic Lens writer, chunked recall
+
+- **7.20.5:** a list item found by the search is replaced by its whole
+  message too; the comparison applies the split's list-marker rule. On 100
+  LongMemEval questions with Jev-split stores: 89 % (unsplit: 90 %).
+- **7.20.4:** split messages reach the prompt whole. The recall projection
+  dropped the fields that link a part to its message, so the chunk dedup rules
+  never ran; a part found by the search is now replaced by its whole message
+  (small-to-big).
+- **7.20.3:** the Semantic Lens index (`.plur1bus/semantic-lens-index.json`)
+  is written every night from the neighbour lists in `link-index.json`; it
+  never had a writer. Nightly semantic discovery works again: since June it
+  skipped every memory because the scan dropped LanceDB's vectors.
 
 ### New in v7.19.1 – v7.20.2 — fixes and operator settings
 
@@ -1176,14 +1190,14 @@ verify an install, see [docs/selftest.md](docs/selftest.md).
 Install the published release through OpenClaw's package installer:
 
 ```bash
-openclaw plugins install clawhub:@cyb3rb1ade/plur1bus-memory@7.20.2
+openclaw plugins install clawhub:@cyb3rb1ade/plur1bus-memory@7.20.5
 ```
 
 The same release is on npmjs.org (publishing steps in
 `docs/release-checklist.md`):
 
 ```bash
-openclaw plugins install npm:@cyb3rb1ade/plur1bus-memory@7.20.2 --pin
+openclaw plugins install npm:@cyb3rb1ade/plur1bus-memory@7.20.5 --pin
 ```
 
 Or install the immutable GitHub Release tarball. Download it, compare its
@@ -1191,7 +1205,7 @@ SHA-256 with the release's checksum, then:
 
 ```bash
 openclaw plugins install \
-  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.20.2.tgz \
+  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.20.5.tgz \
   --force --accept-capabilities
 ```
 
@@ -1204,7 +1218,7 @@ npm ci
 npm test
 npm pack
 openclaw plugins install \
-  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.20.2.tgz \
+  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.20.5.tgz \
   --force --accept-capabilities
 ```
 
