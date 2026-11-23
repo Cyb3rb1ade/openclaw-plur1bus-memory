@@ -1991,20 +1991,30 @@ class MemoryDB {
     return teile.length > 0 ? teile.join(" AND ") : "true";
   }
 
-  async getRecentForGraph({ limit = 100, sessionId = "", includeGlobalRecent = true, fields = null } = {}) {
+  async getRecentForGraph({ limit = 100, sessionId = "", includeGlobalRecent = true, fields = null, now = Date.now() } = {}) {
     await this.init();
     if (!this.table) return [];
     try {
-      let rows = await this._read(
-        this.table.query()
-          .where(this._buildRecentGraphWhere())
-          .limit(limit * 2)
-          .toArray(),
-        "MemoryDB.getRecentForGraph",
-      );
+      // LanceDB sortiert nicht. Bis 7.20.5 las diese Funktion die ersten
+      // limit*2 Zeilen in Speicherreihenfolge — bei grossen Tabellen die
+      // aeltesten — und sortierte erst danach. Jetzt: wachsende Zeitfenster
+      // ueber createdAt, nur schlanke Spalten, bis genug Zeilen da sind.
+      const felder = this.schemaFieldNames;
+      const hat = (name) => !felder || felder.size === 0 || felder.has(name);
+      const spalten = [...new Set(["id", "createdAt", "text", "sessionId", "sourceTurnId", ...(Array.isArray(fields) ? fields : [])])].filter(hat);
+      let rows = [];
+      for (const tage of [7, 30, 180, null]) {
+        const where = tage === null || !hat("createdAt")
+          ? this._buildRecentGraphWhere()
+          : `${this._buildRecentGraphWhere()} AND createdAt >= ${Math.floor(now - tage * 86_400_000)}`;
+        let query = this.table.query().where(where);
+        if (typeof query.select === "function") query = query.select(spalten);
+        rows = await this._read(query.limit(20_000).toArray(), "MemoryDB.getRecentForGraph");
+        if (rows.length >= limit || tage === null || !hat("createdAt")) break;
+      }
 
       // Sort by createdAt DESC
-      rows.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      rows.sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0));
 
       // If includeGlobalRecent: take top N regardless of session
       // If not: filter to same session first, fill rest with global
@@ -11779,8 +11789,10 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     limit: 100,
                     sessionId: event?.sessionId || event?.sessionKey || event?.runId || "",
                     includeGlobalRecent: true,
+                    // text: daraus leitet buildEdgesForSession die Themen ab,
+                    // die in der Tabelle nicht gespeichert sind.
                     fields: [
-                      "id", "createdAt", "sessionId", "topics", "entities", "emotionalDominant", "emotionalIntensity",
+                      "id", "createdAt", "text", "sessionId", "topics", "entities", "emotionalDominant", "emotionalIntensity",
                       "status", "epistemicStatus", "expiresAt", "scope", "agentId", "storedBy", "workspaceId", "workspaceKey", "ownerUserId",
                     ],
                   });
