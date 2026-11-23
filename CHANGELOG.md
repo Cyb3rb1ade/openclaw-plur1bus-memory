@@ -6,6 +6,12 @@ Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 
+## [7.20.5] — 2026-11-23
+
+### Fixed
+
+- Small-to-big missed the whole message of every list part. The structural split cuts list markers (`1.`, `-`, `*`, `•`, `1)`) off each item and joins an intro to the first item, so 16 % of all parts were not literally contained in their whole row; they stayed parts and kept taking their own slots. Parts and wholes are now compared through `comparableChunkText` (`lib/memory-chunking.js`), which applies the same marker rule as `findStructuralParts`. Measured on 100 LongMemEval questions with Jev-split stores: parts left in the 15 slots 177 → 0, distinct messages 12.6 → 13.8, accuracy 86 → 89 % (unsplit stores: 90 %).
+
 ## [7.20.4] — 2026-11-23
 
 ### Fixed
