@@ -2,11 +2,56 @@
  * Lauf: Recall über die echte PLUR1BUS-Pipeline → Antwortmodell → LLM-Judge.
  *
  * Usage: node run.mjs locomo|lme [--limit N] [--no-rerank] [--tag NAME]
+ *          [--db DIR] [--top-n N] [--candidate-top-k K] [--category locomo-catX[,locomo-catY...]]
+ *          [--render full|prod|prod2 (Komma-Liste)] [--prod2-release PFAD] [--repeat N] [--keep-date-prefix]
+ *          [--every K] [--ids ID,ID,...] [--concurrency <=4] [--prod-config PFAD] [--save-blocks] [--overwrite]
+ *
+ * Seit 23.11.2026 abends (Hebel a2):
+ *  --render prod2      Wie prod, aber alle Render-Funktionen (resolveEffectiveConfig,
+ *                      frameRecallConfidence, text-utils, formatRelevantMemoriesContext)
+ *                      kommen aus dem Plugin-Checkout unter --prod2-release statt
+ *                      aus PLUR1BUS_RELEASE. Recall und alle uebrigen Bausteine
+ *                      bleiben bei PLUR1BUS_RELEASE. Mit --render full,prod,prod2
+ *                      laufen alle drei auf byte-gleichem Recall. Weichen die
+ *                      effektiven Einstellungen von prod und prod2 voneinander ab,
+ *                      bricht der Lauf vor der ersten Anfrage ab.
+ *  --prod2-release P   Pflicht bei prod2, sonst verboten.
+ *  --ids a,b,c         Nur diese Fragen (z. B. conv-44#0,conv-47#4), fuer Kontrollen.
+ *
+ * Seit 23.11.2026 (c3/c4/c6):
+ *  --render full       Wie bisher: alle Treffer im Volltext als nummerierte
+ *                      Liste (Vorgabe).
+ *  --render prod       Der <relevant-memories>-Block, gebaut mit den echten
+ *                      Funktionen des installierten Plugins und den Werten,
+ *                      die resolveEffectiveConfig() aus der Live-Config macht
+ *                      (siehe renderProd unten).
+ *  --render full,prod  Beide Darstellungen im selben Lauf auf demselben Recall.
+ *  --repeat N          Antwort + Jury N-mal je Frage und Darstellung. Der Recall
+ *                      laeuft je Frage EINMAL und wird fuer alle Wiederholungen
+ *                      und Darstellungen wiederverwendet — gemessen wird also
+ *                      die Streuung von Antwortmodell und Jury, und die
+ *                      Darstellungen sind gepaart (byte-gleicher Recall).
+ *  Ausgabe             results/<which>-<tag>-<render>-r<k>.jsonl je
+ *                      Darstellung und Wiederholung, dazu
+ *                      results/<which>-<tag>.meta.json. Auswertung mit
+ *                      report-reps.mjs.
+ *  --keep-date-prefix  Nur prod: "[YYYY-MM-DD HH:MM] " im Text lassen (siehe
+ *                      stripDatePrefix).
+ *  --every K           Nur jede K-te Frage (feste, gestreute Stichprobe).
+ *  --save-blocks      Den gerenderten Block je Ergebniszeile mitschreiben.
+ *  --overwrite        Ergebnisdateien mit gleichem Tag ersetzen (sonst Abbruch).
+ *  Belege              D30:05 → D30:5; Belege, die es im Gespraech nicht gibt
+ *                      (conv-47 D4:36), fallen heraus (evidenceDropped).
+ *  Jury                Kein Jury-Cache: jedes Urteil ist ein eigener Aufruf,
+ *                      auch ueber Wiederholungen und Darstellungen hinweg.
  */
 import { readFileSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { BENCH, RELEASE, PROVIDERS, chatClient, lancedb, loadEnv, makeEmbeddings, makeReranker, pMap, withRetry, silentLogger, parseLocomoDate } from "./lib/common.mjs";
 
+// DeepSeek-Schluessel aus der eigenen Datei, VOR der Gateway-Umgebung
+// (loadEnv ueberschreibt nichts, was schon gesetzt ist).
+loadEnv("/root/.openclaw/credentials/deepseek.env");
 loadEnv();
 const { runRecallPipeline, mergeNamespaceRecallResults } = await import(`${RELEASE}/lib/recall-pipeline.js`);
 
@@ -18,7 +63,27 @@ const arg = (flag, fallback = null) => {
 const LIMIT = Number(arg("--limit", Infinity));
 const USE_RERANK = !process.argv.includes("--no-rerank");
 const TAG = arg("--tag", new Date().toISOString().replace(/[:.]/g, "-").slice(0, 16));
-const CONCURRENCY = Number(arg("--concurrency", 6));
+// Hoechstens 4 parallele API-Aufrufe je Skript (Vorgabe des Messstands).
+const CONCURRENCY = Math.max(1, Math.min(4, Number(arg("--concurrency", 4))));
+const RENDERS = String(arg("--render", "full")).split(",").map((s) => s.trim()).filter(Boolean);
+for (const r of RENDERS) if (!["full", "prod", "prod2"].includes(r)) throw new Error(`--render ${r}: erlaubt sind full, prod, prod2 (Komma-Liste)`);
+if (new Set(RENDERS).size !== RENDERS.length) throw new Error("--render: jede Darstellung nur einmal");
+// prod2: dieselbe Produktionsdarstellung, Render-Funktionen aus einem zweiten
+// Plugin-Checkout (z. B. ein Worktree mit geaenderter Block-Anweisung).
+const PROD2_RELEASE = arg("--prod2-release", null);
+if (RENDERS.includes("prod2") && !PROD2_RELEASE) throw new Error("--render prod2 braucht --prod2-release PFAD");
+if (PROD2_RELEASE && !RENDERS.includes("prod2")) throw new Error("--prod2-release ohne --render ...prod2");
+if (PROD2_RELEASE && !existsSync(join(PROD2_RELEASE, "lib/relevant-memory-context.js"))) {
+  throw new Error(`--prod2-release ${PROD2_RELEASE}: lib/relevant-memory-context.js fehlt`);
+}
+const IDS = arg("--ids", null);
+const ID_SET = IDS ? new Set(IDS.split(",").map((s) => s.trim()).filter(Boolean)) : null;
+const REPEAT = Math.max(1, Math.floor(Number(arg("--repeat", 1))));
+const KEEP_DATE_PREFIX = process.argv.includes("--keep-date-prefix");
+const EVERY = Math.max(1, Math.floor(Number(arg("--every", 1))));
+const PROD_CONFIG_PATH = arg("--prod-config", "/root/.openclaw/openclaw.json");
+// --save-blocks: den gerenderten Erinnerungsblock je Zeile mitschreiben (Pruefung, Nachanalyse).
+const SAVE_BLOCKS = process.argv.includes("--save-blocks");
 
 const PROVIDER = arg("--provider", "deepseek");
 const PROVIDER_CFG = PROVIDERS[PROVIDER];
@@ -55,6 +120,178 @@ const RECALL = {
 const client = chatClient(PROVIDER);
 const embeddings = await makeEmbeddings();
 const reranker = USE_RERANK ? await makeReranker({ timeoutMs: RECALL.rerankerTimeoutMs }) : null;
+
+// ─── Produktionsdarstellung (--render prod) ──────────────────────────────────
+//
+// Nachbau von index.js 7.20.6, before_prompt_build: Abbildung der Treffer auf
+// Prompt-Items (index.js ~13286), frameRecallConfidence (~13649),
+// fullTextTopRecords (~13662), semanticCompression (~13680),
+// formatRelevantMemoriesContext (~13709). Alle Bausteine sind die exportierten
+// Funktionen des installierten Plugins; nur die Verdrahtung steht hier.
+//
+// Die Werte kommen aus resolveEffectiveConfig() angewandt auf die Live-Config —
+// derselbe Aufruf, mit dem index.js:4585 seine cfg baut. Wichtig, weil das
+// Schema Vorgaben einsetzt, die der Code allein nicht zeigt: index.js prueft
+// `semanticCompression.enabled !== false` (also "an", wenn nichts gesetzt
+// ist), aber materializeNode() setzt recall.semanticCompression.enabled aus
+// openclaw.plugin.json auf false. Effektiv ist die Kompression in Produktion
+// AUS (Stand 23.11.2026), anders als die Diagnose (lv-prod-prompt) annahm.
+//
+// Nicht nachgebaut, weil im Messstand ohne Wirkung oder ohne Gegenstueck:
+// kanonische KNOWLEDGE.md-Treffer, Semantic Lens (kein Index im Workspace),
+// Graph/Assoziationen (taste gate wirkt nur auf graphSource "graph"),
+// Interpretations-Overlays, Widerspruchserkennung, CRR-Block, Persona/Stil,
+// temporalContext-Block, globalInjectMaxChars. Die TRUNCATED-RECALL-Anweisung
+// verweist auf memory_recall — dieses Werkzeug hat das Antwortmodell hier nicht.
+// PROD dient bei prod2 auch als Referenz fuer die Einstellungspruefung.
+const PROD = RENDERS.includes("prod") || RENDERS.includes("prod2") ? await loadProdRender(RELEASE) : null;
+const PROD2 = RENDERS.includes("prod2") ? await loadProdRender(PROD2_RELEASE) : null;
+if (PROD2) {
+  // prod2 soll genau wie prod rendern; nur die geladenen Funktionen duerfen
+  // sich unterscheiden. Laeuft die Live-Config durch das zweite
+  // resolveEffectiveConfig anders (anderes Schema in openclaw.plugin.json),
+  // waere der Vergleich nicht mehr gepaart.
+  const comparable = ({ pluginVersion, release, ...rest }) => JSON.stringify(rest);
+  if (comparable(PROD.settings) !== comparable(PROD2.settings)) {
+    console.error(`abort: prod2-Einstellungen weichen von prod ab\n prod:  ${comparable(PROD.settings)}\n prod2: ${comparable(PROD2.settings)}`);
+    process.exit(1);
+  }
+}
+
+/** index.js:913 (nicht exportiert) — wortgleich uebernommen. */
+function normalizeBoundedRecallInteger(value, fallback, minimum, maximum) {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(maximum, Math.max(minimum, Math.floor(value)));
+}
+
+async function loadProdRender(release) {
+  const { resolveEffectiveConfig } = await import(`${release}/lib/setup/config-contract.js`);
+  const { frameRecallConfidence } = await import(`${release}/lib/recall-confidence-framing.js`);
+  const { compressMemorySlotsForPrompt, generateSummary } = await import(`${release}/lib/text-utils.js`);
+  const { formatRelevantMemoriesContext, resolveFadedThreshold } = await import(`${release}/lib/relevant-memory-context.js`);
+  const raw = JSON.parse(readFileSync(PROD_CONFIG_PATH, "utf8"))?.plugins?.entries?.["memory-lancedb-namespaced"]?.config;
+  if (!raw) throw new Error(`${PROD_CONFIG_PATH}: plugins.entries.memory-lancedb-namespaced.config fehlt`);
+  const cfg = resolveEffectiveConfig(raw);
+  const recallCfg = cfg.recall || {};
+  const compressionCfg = recallCfg.semanticCompression || {};
+  const version = JSON.parse(readFileSync(join(release, "package.json"), "utf8")).version;
+  return {
+    fn: { frameRecallConfidence, compressMemorySlotsForPrompt, generateSummary, formatRelevantMemoriesContext },
+    settings: {
+      release,
+      pluginVersion: version,
+      configPath: PROD_CONFIG_PATH,
+      hedging: (cfg.recallHedging?.enabled ?? true) !== false,
+      hedgingOpts: cfg.recallHedging || {},
+      fullTextTopRecords: normalizeBoundedRecallInteger(recallCfg.fullTextTopRecords, 3, 0, 15),
+      fullTextMaxChars: normalizeBoundedRecallInteger(recallCfg.fullTextMaxChars, 2000, 400, 8000),
+      semanticCompression: compressionCfg.enabled !== false,
+      tokenBudget: normalizeBoundedRecallInteger(compressionCfg.tokenBudget, 240, 1, 1000),
+      memoriesMaxChars: recallCfg.memoriesMaxChars ?? 12_000,
+      fadedThreshold: resolveFadedThreshold(recallCfg),
+      summaryMaxWords: cfg.summaryMaxWords ?? 150,
+      keepDatePrefix: KEEP_DATE_PREFIX,
+    },
+  };
+}
+
+/**
+ * Produktive Zeilen tragen kein "[YYYY-MM-DD HH:MM] " im Text — das Datum
+ * kommt im Attribut created-at (volles ISO-Datum) an. Der Sprechername bleibt,
+ * weil bei LOCOMO zwei Menschen sprechen und sonst unklar waere, wer was sagt.
+ * Mit --keep-date-prefix bleibt das Praefix stehen; damit laesst sich ein
+ * Unterschied in Kat. 2 der Datumsdarstellung oder dem Rest zuordnen.
+ */
+const DATE_PREFIX = /^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\]\s*/;
+const stripDatePrefix = (s) => (KEEP_DATE_PREFIX ? s : s.replace(DATE_PREFIX, ""));
+
+/** Messstand-Darstellung bis 23.11.2026: nummerierte Volltexte. */
+function renderFull(memories) {
+  return { block: memories.map((m, i) => `${i + 1}. ${m.entry.text}`).join("\n"), promptMemories: memories.length, dropped: 0 };
+}
+
+function renderProd(memories, now, ctx = PROD) {
+  const { fn, settings: s } = ctx;
+  // index.js ~13286: Treffer → Prompt-Item.
+  const items = memories.map((r) => {
+    const text = typeof r.entry.text === "string" ? stripDatePrefix(r.entry.text) : "";
+    const summary = r.entry.summary ? stripDatePrefix(String(r.entry.summary)) : "";
+    return {
+      id: r.entry.id,
+      category: r.entry.category,
+      source: r.entry.origin || "dm",
+      display: summary || fn.generateSummary(text, s.summaryMaxWords),
+      fullText: text,
+      memoryStrength: r.entry.memoryStrength ?? 1.0,
+      graphSource: r.source,
+      depth: r.depth,
+      relevanceScore: r.score,
+      versionNumber: r.entry.versionNumber ?? 1,
+      previousVersion: r.entry.previousVersion || "",
+      supersededBy: r.entry.supersededBy || "",
+      updateSource: r.entry.updateSource || "",
+      updateEvidence: r.entry.updateEvidence || "",
+      reconsolidationConfidence: r.entry.reconsolidationConfidence ?? 0.0,
+      status: r.entry.status || "active",
+      versionCreatedAt: r.entry.versionCreatedAt ?? r.entry.createdAt ?? 0,
+      createdAt: r.entry.createdAt ?? 0,
+      updatedAt: r.entry.updatedAt ?? undefined,
+      lastRetrievedAt: r.entry.lastRetrievedAt ?? undefined,
+      memoryClass: r.entry.memoryClass || "standard",
+      validFrom: r.entry.validFrom ?? 0,
+      validUntil: r.entry.validUntil ?? 0,
+      epistemicStatus: r.entry.epistemicStatus,
+    };
+  });
+  // ~13649: Hedging der schwaechsten Treffer.
+  let framed = items;
+  try {
+    if (s.hedging) framed = fn.frameRecallConfidence(items, s.hedgingOpts).items;
+  } catch { framed = items; }
+  // ~13662: Spitzentreffer mit gespeichertem Volltext.
+  const fullTextIds = new Set();
+  for (const item of framed) {
+    if (fullTextIds.size >= s.fullTextTopRecords) break;
+    if (item?.fullText && item.memoryClass !== "dream" && item.category !== "canonical") fullTextIds.add(item.id);
+  }
+  for (const item of framed) {
+    if (!fullTextIds.has(item.id)) continue;
+    item.display = item.fullText;
+    item.displayMaxChars = s.fullTextMaxChars;
+    item.keepFullText = true;
+  }
+  // ~13680: semantische Kompression der uebrigen Treffer.
+  let promptItems = framed;
+  let dropped = 0;
+  if (s.semanticCompression) {
+    const compressible = framed.filter((item) => !item.keepFullText);
+    const slots = fn.compressMemorySlotsForPrompt(compressible.map((item) => ({
+      entry: { id: item.id, text: item.display || "", summary: item.display || "", category: item.category, memoryClass: item.memoryClass },
+    })), s.tokenBudget);
+    let k = 0;
+    promptItems = framed.flatMap((item) => {
+      if (item.keepFullText) return [item];
+      const slot = slots[k++];
+      if (!slot) { dropped++; return []; }
+      return [{ ...item, display: slot }];
+    });
+  }
+  // ~13709: der eigentliche Block. now = Fragezeitpunkt, sonst stimmen die
+  // age-Angaben nicht.
+  const block = fn.formatRelevantMemoriesContext(promptItems, {
+    fadedThreshold: s.fadedThreshold,
+    maxTotalChars: s.memoriesMaxChars,
+    now,
+  });
+  const promptMemories = (block.match(/<memory-record /g) || []).length;
+  return { block, promptMemories, dropped };
+}
+
+function renderBlock(render, memories, now) {
+  if (render === "prod") return renderProd(memories, now, PROD);
+  if (render === "prod2") return renderProd(memories, now, PROD2);
+  return renderFull(memories);
+}
 
 // Die GPT-5-Familie lehnt max_tokens und temperature ab und will
 // max_completion_tokens; GPT-4o umgekehrt. Deshalb pro Familie getrennt.
@@ -172,10 +409,13 @@ function judgePrompt(task, question, answer, response, abstention) {
   return `I will give you a question, a correct answer, and a response from a model. Please answer yes if the response contains the correct answer. Otherwise, answer no. If the response is equivalent to the correct answer or contains all the intermediate steps to get the correct answer, you should also answer yes. If the response only contains a subset of the information required by the answer, answer no. \n\nQuestion: ${question}\n\nCorrect Answer: ${answer}\n\nModel Response: ${response}\n\nIs the model response correct? Answer yes or no only.`;
 }
 
-function answerMessages(question, memories, nowIso, judgeTask) {
-  const block = memories.length
-    ? memories.map((m, i) => `${i + 1}. ${m.entry.text}`).join("\n")
-    : "(no memories retrieved)";
+/**
+ * Antwortprompt ("alle Punkte", Stand 23.11.2026) — wortgleich zu vorher. Seit
+ * c4 bekommt er den fertigen Erinnerungsblock (renderFull oder renderProd)
+ * statt der Trefferliste; bei full ist der Block byte-gleich zu frueher.
+ */
+function answerMessages(question, renderedBlock, nowIso, judgeTask) {
+  const block = renderedBlock || "(no memories retrieved)";
   // Preference-Fragen sind Empfehlungsbitten, keine Faktenfragen. Die knappe
   // Antwortanweisung laesst sie auf "I don't know" kollabieren, obwohl der
   // Recall die noetigen Vorlieben geliefert hat — bewertet wird hier, ob die
@@ -235,6 +475,30 @@ async function recall(storeDir, query, now, agentId) {
   return { memories, ms: Date.now() - started, rerankApplied: reranker ? !rerankFallback : false };
 }
 
+/**
+ * Seit c3 wird der Recall je Frage EINMAL berechnet und fuer alle
+ * Wiederholungen und Darstellungen verwendet. Fiele der Reranker dabei aus,
+ * truege jede Wiederholung denselben Ausfall — darum bis zu zwei weitere
+ * Versuche, bevor der Lauf mit rerankApplied=false weitergeht.
+ */
+const RECALL_RERANK_RETRIES = 2;
+async function recallWithRetry(storeDir, query, now, agentId) {
+  let res;
+  for (let attempt = 0; attempt <= RECALL_RERANK_RETRIES; attempt++) {
+    res = await recall(storeDir, query, now, agentId);
+    res.attempts = attempt + 1;
+    if (!reranker || res.rerankApplied) return res;
+    await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+  }
+  return res;
+}
+
+/** "D30:05" → "D30:5" (wie lv-prod-lib.mjs). */
+const normEvidence = (raw) => {
+  const m = /^D(\d+):(\d+)$/.exec(String(raw).trim());
+  return m ? `D${Number(m[1])}:${Number(m[2])}` : String(raw).trim();
+};
+
 function buildTasks() {
   if (which === "locomo") {
     const data = JSON.parse(readFileSync(join(BENCH, "data/locomo10.json"), "utf8"));
@@ -250,9 +514,17 @@ function buildTasks() {
         .filter((k) => /^session_\d+_date_time$/.test(k))
         .map((k) => parseLocomoDate(sample.conversation[k])));
       const askedAt = lastSession + 86400000;
+      const diaIds = new Set();
+      for (const k of Object.keys(sample.conversation).filter((x) => /^session_\d+$/.test(x))) {
+        for (const t of sample.conversation[k]) diaIds.add(t.dia_id);
+      }
       for (const [index, qa] of sample.qa.entries()) {
         const adversarial = qa.category === 5;
+        // c6: Belege einheitlich normalisieren; nicht existierende fallen heraus.
+        const ev = [...new Set((qa.evidence || []).map(normEvidence))];
+        const evidenceDropped = ev.filter((e) => !diaIds.has(e)).map((e) => `${sample.sample_id}:${e}`);
         tasks.push({
+          evidenceDropped,
           id: `${sample.sample_id}#${index}`,
           store: join(BENCH, DB_ROOT, "locomo", sample.sample_id),
           agentId: "bench-locomo",
@@ -261,7 +533,7 @@ function buildTasks() {
           category: `locomo-cat${qa.category}`,
           judgeTask: "multi-session",
           abstention: adversarial,
-          evidence: (qa.evidence || []).map((e) => `${sample.sample_id}:${e}`),
+          evidence: ev.filter((e) => diaIds.has(e)).map((e) => `${sample.sample_id}:${e}`),
           now: askedAt,
         });
       }
@@ -291,63 +563,140 @@ function buildTasks() {
 }
 
 const allTasks = buildTasks();
-// --category locomo-cat1 beschraenkt den Lauf auf eine Kategorie.
+// --category locomo-cat1 beschraenkt den Lauf auf eine Kategorie, eine
+// Komma-Liste (locomo-cat1,locomo-cat2,...) auf mehrere (seit 23.11.2026).
 const CATEGORY = arg("--category", null);
-const tasks = allTasks.filter((t) => existsSync(t.store) && (!CATEGORY || t.category === CATEGORY)).slice(0, LIMIT);
-const EXPECTED = { locomo: 1986, lme: 500 }[which];
-if (!Number.isFinite(LIMIT) && tasks.length !== EXPECTED) {
+const CATEGORIES = CATEGORY ? new Set(CATEGORY.split(",").map((s) => s.trim()).filter(Boolean)) : null;
+const tasks = allTasks
+  .filter((t) => existsSync(t.store) && (!CATEGORIES || CATEGORIES.has(t.category)))
+  .filter((t) => !ID_SET || ID_SET.has(t.id))
+  .filter((_, i) => i % EVERY === 0)
+  .slice(0, LIMIT);
+if (ID_SET) {
+  const missing = [...ID_SET].filter((id) => !tasks.some((t) => t.id === id));
+  if (missing.length) {
+    console.error(`abort: --ids ohne passende Frage (Store fehlt oder Kategorie gefiltert): ${missing.join(", ")}`);
+    process.exit(1);
+  }
+}
+// Vollstaendigkeitspruefung: erwartet werden alle Fragen der Datendatei. Bis
+// 23.11.2026 stand hier fest 1986 (alle zehn LOCOMO-Gespraeche) — mit den drei
+// verschobenen Gespraechen brach jeder Lauf ohne --limit ab.
+const EXPECTED = which === "locomo"
+  ? JSON.parse(readFileSync(join(BENCH, "data/locomo10.json"), "utf8")).reduce((n, s) => n + s.qa.length, 0)
+  : JSON.parse(readFileSync(join(BENCH, "data/longmemeval_oracle.json"), "utf8")).length;
+const FILTERED = Number.isFinite(LIMIT) || CATEGORY || EVERY > 1 || ID_SET;
+if (!FILTERED && tasks.length !== EXPECTED) {
   console.error(`abort: ${tasks.length} questions with an existing store, expected ${EXPECTED} — ingest incomplete`);
   process.exit(1);
 }
-console.log(`${which}: ${tasks.length} questions, db=${DB_ROOT}, rerank=${USE_RERANK}, topN=${TOP_N}, candidateTopK=${CANDIDATE_TOP_K}, provider=${PROVIDER}, answer=${ANSWER_MODEL}, judge=${JUDGE_MODEL}`);
+console.log(`${which}: ${tasks.length} questions, db=${DB_ROOT}, rerank=${USE_RERANK}, topN=${TOP_N}, candidateTopK=${CANDIDATE_TOP_K}, provider=${PROVIDER}, answer=${ANSWER_MODEL}, judge=${JUDGE_MODEL}, render=${RENDERS.join("+")}, repeat=${REPEAT}, concurrency=${CONCURRENCY}`);
+if (PROD) console.log(`prod-render (resolveEffectiveConfig, Plugin ${PROD.settings.pluginVersion}): ${JSON.stringify(PROD.settings)}`);
+if (PROD2) console.log(`prod2-render (Render-Funktionen aus ${PROD2.settings.release}, Plugin ${PROD2.settings.pluginVersion}; Einstellungen gleich prod)`);
 
-const outPath = join(BENCH, `results/${which}-${TAG}.jsonl`);
-writeFileSync(outPath, "");
+// Je Darstellung und Wiederholung eine eigene Datei. Vorhandene Ergebnisse
+// werden nicht ueberschrieben.
+const outPaths = new Map();
+for (let rep = 1; rep <= REPEAT; rep++) {
+  for (const render of RENDERS) outPaths.set(`${render}#${rep}`, join(BENCH, `results/${which}-${TAG}-${render}-r${rep}.jsonl`));
+}
+const metaPath = join(BENCH, `results/${which}-${TAG}.meta.json`);
+const clash = [...outPaths.values(), metaPath].filter((p) => existsSync(p));
+if (clash.length && !process.argv.includes("--overwrite")) {
+  console.error(`abort: ${clash.length} Ergebnisdatei(en) mit Tag "${TAG}" existieren schon (${clash[0]} …) — anderen --tag waehlen oder --overwrite.`);
+  process.exit(1);
+}
+for (const p of outPaths.values()) writeFileSync(p, "");
+writeFileSync(metaPath, JSON.stringify({
+  when: new Date().toISOString(), which, tag: TAG, argv: process.argv.slice(2), questions: tasks.length,
+  db: DB_ROOT, rerank: USE_RERANK, recall: RECALL, renders: RENDERS, repeat: REPEAT, keepDatePrefix: KEEP_DATE_PREFIX,
+  every: EVERY, category: CATEGORY, provider: PROVIDER, answerModel: ANSWER_MODEL, judgeModel: JUDGE_MODEL,
+  ids: IDS, release: RELEASE, prodRender: PROD?.settings ?? null, prod2Render: PROD2?.settings ?? null, files: Object.fromEntries(outPaths),
+}, null, 1));
+
+// Ein aufgeteilter Store fuehrt Teilstuecke als "<original>#0", "#1" usw.
+// Der Beleg gilt als gefunden, sobald IRGENDEIN Teilstueck der
+// Originalzeile im Kontext liegt — sonst zaehlte die Aufteilung als
+// Verschlechterung, obwohl sie dieselbe Stelle liefert.
+const trifft = (e, id) => (e.endsWith(":") ? id.startsWith(e) : id === e || id.startsWith(`${e}#`));
+
 let done = 0;
 const results = await pMap(tasks, CONCURRENCY, async (task) => {
-  let record;
+  const base = { id: task.id, category: task.category, abstention: task.abstention };
+  const out = [];
+  let rec;
   try {
-    const { memories, ms, rerankApplied } = await recall(task.store, task.question, task.now, task.agentId);
-    const ids = memories.map((m) => m.entry.id);
-    // Ein aufgeteilter Store fuehrt Teilstuecke als "<original>#0", "#1" usw.
-    // Der Beleg gilt als gefunden, sobald IRGENDEIN Teilstueck der
-    // Originalzeile im Kontext liegt — sonst zaehlte die Aufteilung als
-    // Verschlechterung, obwohl sie dieselbe Stelle liefert.
-    const trifft = (e, id) => (e.endsWith(":") ? id.startsWith(e) : id === e || id.startsWith(`${e}#`));
-    const evidenceHit = task.evidence.length
-      ? task.evidence.some((e) => ids.some((id) => trifft(e, id)))
-      : null;
-    const nowIso = new Date(task.now).toISOString().slice(0, 16).replace("T", " ");
-    const response = await chat(ANSWER_MODEL, answerMessages(task.question, memories, nowIso, task.judgeTask));
-    const verdict = await chat(JUDGE_MODEL, [{ role: "user", content: judgePrompt(task.judgeTask, task.question, task.gold, response, task.abstention) }], 5);
-    // Ein leeres Urteil ist KEIN "nein". Es bedeutet, dass die Jury nicht
-    // geantwortet hat, und gehoert damit unter die Fehler — sonst sinkt die
-    // Quote, ohne dass jemand eine Frage falsch beantwortet haette.
-    const judgeFailed = verdict.trim() === "";
-    record = {
-      id: task.id, category: task.category, abstention: task.abstention,
-      question: task.question, gold: task.gold, response,
-      correct: !judgeFailed && /^yes/i.test(verdict.trim()), verdict, recalled: ids.length,
-      ...(judgeFailed ? { error: "judge returned empty verdict", judgeFailed: true } : {}),
-      evidenceHit, recallMs: ms, rerankApplied, topN: TOP_N, provider: PROVIDER, answerModel: ANSWER_MODEL, judgeModel: JUDGE_MODEL, db: DB_ROOT,
-    };
+    rec = await recallWithRetry(task.store, task.question, task.now, task.agentId);
   } catch (error) {
-    record = { id: task.id, category: task.category, abstention: task.abstention, error: String(error?.message || error), correct: false, evidenceHit: null };
+    // Ohne Recall keine Antwort: in JEDER Datei eine Fehlerzeile, damit die
+    // Dateien deckungsgleich bleiben.
+    for (const [key, path] of outPaths) {
+      const [render, rep] = key.split("#");
+      const record = { ...base, render, rep: Number(rep), error: `recall: ${String(error?.message || error)}`, correct: false, evidenceHit: null };
+      appendFileSync(path, `${JSON.stringify(record)}\n`);
+      out.push(record);
+    }
+    if (++done % 50 === 0) console.log(`${done}/${tasks.length}`);
+    return out;
   }
-  appendFileSync(outPath, `${JSON.stringify(record)}\n`);
+  const { memories, ms, rerankApplied, attempts } = rec;
+  const ids = memories.map((m) => m.entry.id);
+  const evidenceHit = task.evidence.length
+    ? task.evidence.some((e) => ids.some((id) => trifft(e, id)))
+    : null;
+  const nowIso = new Date(task.now).toISOString().slice(0, 16).replace("T", " ");
+  const blocks = new Map(RENDERS.map((render) => [render, renderBlock(render, memories, task.now)]));
+  // Wiederholungen aussen, Darstellungen innen: beide Darstellungen einer
+  // Wiederholung laufen zeitlich direkt nacheinander.
+  for (let rep = 1; rep <= REPEAT; rep++) {
+    for (const render of RENDERS) {
+      const { block, promptMemories, dropped } = blocks.get(render);
+      let record;
+      try {
+        const response = await chat(ANSWER_MODEL, answerMessages(task.question, memories.length ? block : "", nowIso, task.judgeTask));
+        const verdict = await chat(JUDGE_MODEL, [{ role: "user", content: judgePrompt(task.judgeTask, task.question, task.gold, response, task.abstention) }], 5);
+        // Ein leeres Urteil ist KEIN "nein". Es bedeutet, dass die Jury nicht
+        // geantwortet hat, und gehoert damit unter die Fehler — sonst sinkt die
+        // Quote, ohne dass jemand eine Frage falsch beantwortet haette.
+        const judgeFailed = verdict.trim() === "";
+        record = {
+          ...base, render, rep,
+          question: task.question, gold: task.gold, response,
+          correct: !judgeFailed && /^yes/i.test(verdict.trim()), verdict, recalled: ids.length,
+          ...(judgeFailed ? { error: "judge returned empty verdict", judgeFailed: true } : {}),
+          evidenceHit, evidence: task.evidence, ...(task.evidenceDropped?.length ? { evidenceDropped: task.evidenceDropped } : {}),
+          recalledIds: ids, promptMemories, droppedFromPrompt: dropped, blockChars: block.length,
+          ...(SAVE_BLOCKS ? { block } : {}),
+          recallMs: ms, recallAttempts: attempts, rerankApplied, topN: TOP_N, provider: PROVIDER, answerModel: ANSWER_MODEL, judgeModel: JUDGE_MODEL, db: DB_ROOT,
+        };
+      } catch (error) {
+        record = { ...base, render, rep, error: String(error?.message || error), correct: false, evidenceHit };
+      }
+      appendFileSync(outPaths.get(`${render}#${rep}`), `${JSON.stringify(record)}\n`);
+      out.push(record);
+    }
+  }
   if (++done % 50 === 0) console.log(`${done}/${tasks.length}`);
-  return record;
+  return out;
 });
 
-const ok = results.filter((r) => r.correct).length;
-const errors = results.filter((r) => r.error).length;
-const judgeFailed = results.filter((r) => r.judgeFailed).length;
 // Bewertet wird nur, was auch beurteilt wurde. Fehler stehen daneben, damit
 // ein stiller Ausfall nicht als schlechtes Ergebnis durchgeht.
-const scored = results.length - errors;
-console.log(`\n${which}: ${ok}/${scored} = ${(100 * ok / Math.max(scored, 1)).toFixed(1)} % (errors: ${errors}, davon leere Urteile: ${judgeFailed}, Wiederholungen nach Abbruch: ${truncationRetries})`);
-if (errors > results.length * 0.02) {
-  console.log(`WARNUNG: ${(100 * errors / results.length).toFixed(1)} % der Fragen wurden nicht bewertet — das Ergebnis ist nur eingeschraenkt vergleichbar.`);
+const flat = results.flat();
+console.log("");
+for (const [key, path] of outPaths) {
+  const [render, rep] = key.split("#");
+  const rows = flat.filter((r) => r.render === render && r.rep === Number(rep));
+  const ok = rows.filter((r) => r.correct).length;
+  const errors = rows.filter((r) => r.error).length;
+  const judgeFailed = rows.filter((r) => r.judgeFailed).length;
+  const scored = rows.length - errors;
+  console.log(`${which} ${render} r${rep}: ${ok}/${scored} = ${(100 * ok / Math.max(scored, 1)).toFixed(1)} % (errors: ${errors}, davon leere Urteile: ${judgeFailed}) → ${path}`);
+  if (errors > rows.length * 0.02) {
+    console.log(`WARNUNG: ${(100 * errors / Math.max(rows.length, 1)).toFixed(1)} % der Fragen in ${render} r${rep} wurden nicht bewertet — nur eingeschraenkt vergleichbar.`);
+  }
 }
-console.log(`→ ${outPath}`);
+const noRerank = flat.filter((r) => r.rep === 1 && r.render === RENDERS[0] && r.rerankApplied === false).length;
+console.log(`Wiederholungen nach Abbruch: ${truncationRetries}; Fragen ohne Rerank trotz Wiederholung: ${noRerank}`);
+console.log(`→ meta ${metaPath}`);
 await embeddings.shutdown?.();

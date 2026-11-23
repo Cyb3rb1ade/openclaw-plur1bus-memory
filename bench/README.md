@@ -64,6 +64,41 @@ nach LongMemEval-Regel als falsch wertet. Mehr Recall-Plätze (30 statt 15,
 Pool 100 statt 40) hoben die Fragen mit allen Belegen von 35 auf 51 von 82,
 die Trefferquote aber nicht (47,6 → 48,8 %).
 
+## Messstand ab 7.20.6 (23.11.2026)
+
+Neue Schalter in `run.mjs`:
+
+- `--render full|prod|prod2` (Komma-Liste): `full` ist die Messstand-Darstellung,
+  `prod` rendert den Block wie die Produktion (`resolveEffectiveConfig` aus
+  `openclaw.json`, `formatRelevantMemoriesContext`). `prod2` rendert wie `prod`
+  mit den Render-Funktionen aus `--prod2-release PFAD` — so lassen sich zwei
+  Blockfassungen auf byte-gleichem Recall vergleichen.
+- `--repeat N` wiederholt Antwort und Jury N-mal je Frage und Darstellung; der
+  Recall läuft einmal. `--category` nimmt eine Komma-Liste, `--ids` einzelne
+  Fragen, `--save-blocks` schreibt den gerenderten Block mit.
+- `ingest-capture.mjs --jev` baut die Stores über den Capture-Pfad mit
+  Jev-Aufteilung; Sprecher kommen als `role: user` an.
+- `report-reps.mjs <präfix> [<präfix> …]` wertet Wiederholungen aus
+  (Mittel, Spanne, je Kategorie) und rechnet zusätzlich ohne die Fragen aus
+  [`excluded.json`](excluded.json): falsche Musterantworten und Artefakte der
+  Jahresverschiebung. Ausgeschlossen wird nur in der Auswertung.
+- `shift-data.py` (in `data/` ausführen) verschiebt LOCOMO conv-44/47/50 und
+  LongMemEval oracle ins Jahr 2026, damit kein mehrjähriger Decay wirkt.
+
+Reranker und Einbettungen laufen nur mit eigenen Schlüsseln
+(`BENCH_COHERE_API_KEY`, `BENCH_OPENAI_API_KEY`, aus der Umgebung oder
+`.env.bench`); `makeReranker` und `makeEmbeddings` brechen sonst ab. Am 23.11.2026
+haben Messläufe über den Gateway-Schlüssel das Monatslimit des Produktiv-
+Rerankers aufgebraucht.
+
+Basis 7.20.6, LOCOMO Kat. 1–4 (431 Fragen), `db-capture-jev2`, topN 15,
+Pool 40, 3 Wiederholungen:
+
+| Darstellung | Ergebnis | ohne Ausschlüsse |
+|---|---|---|
+| `full` | 72,2 % (71,0–73,3) | 75,8 % |
+| `prod` | 71,2 % (70,5–71,9) | 74,7 % |
+
 ## Vergleichbarkeit mit anderen Systemen
 
 Gemeldete LOCOMO-Werte liegen zwischen 58 % und 96 %, und die Anbieter streiten

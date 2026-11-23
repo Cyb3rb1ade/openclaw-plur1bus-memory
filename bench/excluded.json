@@ -1,0 +1,36 @@
+{
+  "stand": "2026-11-23",
+  "beschreibung": "LOCOMO-Fragen (conv-44/47/50, data/locomo10.json mit Jahresverschiebung), die report-reps.mjs zusaetzlich OHNE ausweist. Quelle: Diagnose-Workflow (results/lv-*). Die Fragen bleiben im Lauf; ausgeschlossen wird nur in der Auswertung. Kennungen wie run.mjs sie schreibt: <sample_id>#<Index in qa>.",
+  "gruppen": {
+    "gold-falsch": "Musterantwort oder Frage widerspricht dem Gespraech.",
+    "verschiebung": "Artefakt der Jahresverschiebung (+3/+4 Jahre, shift-data.py): die Musterantwort wurde im Original-Kalender aus einem Wochentag berechnet (\"last Sunday\", \"next Sunday\", \"the weekend\"); nach der Verschiebung liegt derselbe Wochentag auf einem anderen Datum. Bleibt, weil c5 (Wochenverschiebung) nicht umgesetzt ist, siehe BENCH-NOTES.md.",
+    "grenzfall": "Wochen-/Wochenendgrenze: \"last week\"/\"last Friday\" relativ zur Session; ob die Musterantwort nach der Verschiebung noch stimmt, haengt an der Lesart der Woche.",
+    "gold-fragwuerdig": "Kat. 4: Frage verwechselt den Sprecher (Beleg sagt Dave, Frage fragt nach Calvin). Kat. 3: spekulative Musterantwort, die das Gespraech nicht hergibt.",
+    "beleg-fehlt": "Angegebener Beleg existiert im Gespraech nicht."
+  },
+  "fragen": [
+    { "id": "conv-44#5", "gruppe": "gold-falsch", "notiz": "D4:1 (3. Mai) sagt \"last week\" -> letzte Aprilwoche; Gold \"first week of May\"." },
+    { "id": "conv-47#31", "gruppe": "gold-falsch", "notiz": "D16:9 Abflug uebermorgen (11. Juli), D16:13 Rueckkehr 20. Juli -> 9 Tage; Gold 19 Tage." },
+    { "id": "conv-47#37", "gruppe": "gold-falsch", "notiz": "D17:28 spricht James (\"my sister and my dogs\"); Frage fragt nach John." },
+    { "id": "conv-47#61", "gruppe": "gold-falsch", "notiz": "Frage nennt Oktober 2027 (Original 2023), das Ereignis liegt am 31. Oktober 2026 (Original 2022)." },
+    { "id": "conv-44#11", "gruppe": "verschiebung", "notiz": "\"Last Sunday\" relativ zu D8 (13. Juni); Gold 11. Juni stimmt nur im Kalender 2023." },
+    { "id": "conv-47#48", "gruppe": "verschiebung", "notiz": "\"next Sunday\" relativ zu D23 (4. Sept.); Gold 11. Sept. stimmt nur im Kalender 2022." },
+    { "id": "conv-47#66", "gruppe": "verschiebung", "notiz": "\"weekend\" vor D31 (7. Nov.); Gold 5.-6. Nov. stimmt nur im Kalender 2022." },
+    { "id": "conv-44#22", "gruppe": "verschiebung", "notiz": "\"the weekend\" nach D14 (4. Aug.); \"first weekend of August\" stimmt nur im Kalender 2023." },
+    { "id": "conv-44#4", "gruppe": "verschiebung", "notiz": "\"last week\" vor D3 (16. April); Gold \"April 3rd to 9th\" ist die Kalenderwoche 2023." },
+    { "id": "conv-44#37", "gruppe": "verschiebung", "notiz": "\"last week\" vor D25 (24. Okt.); Gold \"between October 19 and 24\" haengt am Wochentag 2023." },
+    { "id": "conv-47#10", "gruppe": "grenzfall", "notiz": "\"last week\" vor D5 (12. April); Gold \"first week of April\"." },
+    { "id": "conv-50#12", "gruppe": "grenzfall", "notiz": "\"last week\" vor D7 (31. Mai); Gold \"last week of May\"." },
+    { "id": "conv-50#50", "gruppe": "grenzfall", "notiz": "\"Last week\" vor D23 (15. Okt.); Gold \"first week of October\"." },
+    { "id": "conv-50#48", "gruppe": "grenzfall", "notiz": "\"Last Friday\" vor D22 (8. Okt.); Frage nach dem \"first weekend of October\"." },
+    { "id": "conv-50#137", "gruppe": "gold-fragwuerdig", "notiz": "Kat. 4, D26:6 spricht Dave (erste Car Show mit 10); Frage nach Calvin." },
+    { "id": "conv-50#151", "gruppe": "gold-fragwuerdig", "notiz": "Kat. 4, D30:1 Dave hat mit Fotografie angefangen; Frage nach Calvin." },
+    { "id": "conv-50#88", "gruppe": "gold-fragwuerdig", "notiz": "Kat. 4, D10:3 Dave verabredet Spaziergaenge; Frage nach Calvin." },
+    { "id": "conv-44#43", "gruppe": "gold-fragwuerdig", "notiz": "Kat. 3, Gold \"Minnesota\" laesst sich aus dem Gespraech nicht ableiten." },
+    { "id": "conv-44#44", "gruppe": "gold-fragwuerdig", "notiz": "Kat. 3, Gold \"Voyageurs National Park\" laesst sich aus dem Gespraech nicht ableiten." },
+    { "id": "conv-44#52", "gruppe": "gold-fragwuerdig", "notiz": "Kat. 3, Gold (Vogelhaus) ist eine von vielen moeglichen Antworten." },
+    { "id": "conv-44#53", "gruppe": "gold-fragwuerdig", "notiz": "Kat. 3, Gold (Park Ranger) ist eine von vielen moeglichen Antworten." },
+    { "id": "conv-47#38", "gruppe": "beleg-fehlt", "notiz": "Kat. 1, Beleg D4:36 existiert nicht (Session 4 hat 25 Turns); run.mjs fuehrt ihn als evidenceDropped." }
+  ],
+  "belegnormalisierung": "run.mjs und lv-prod-lib.mjs normalisieren Belege einheitlich: D30:05 -> D30:5 (conv-50#69); nicht existierende Belege (conv-47 D4:36) fallen aus der Trefferpruefung und stehen als evidenceDropped in der Ergebniszeile."
+}
