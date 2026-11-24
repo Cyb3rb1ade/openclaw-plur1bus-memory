@@ -1000,7 +1000,14 @@
             "type": "string"
           },
           "model": {
-            "type": "string"
+            "type": "string",
+            "description": "Reranker model. Cohere default rerank-v3.5; Rerank 4/5 models (e.g. rerank-v5.0-fast, rerank-v5.0-pro) use the same v2 request."
+          },
+          "maxDocChars": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 1400,
+            "description": "Cohere only: each document sent to the reranker is cut to this many characters (minus whatever the query uses beyond 400 characters, never below 300), so query plus document stay under the 500 tokens Cohere bills as one document. Only the text sent to Cohere is cut; recall output and the local fallback see the full text. 0 = no cut."
           },
           "candidates": {
             "type": "number"
