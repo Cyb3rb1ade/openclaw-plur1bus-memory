@@ -140,6 +140,68 @@ describe("neo vector cache (7.20.9)", () => {
     assert.ok(neoVectorCacheStats().coldReads <= 2, "missing vectors are read in few large blocks");
   });
 
+  // Pruefung F2 (Laufzeit): die Skalarprodukte laufen je vier Vektoren in
+  // einem Durchlauf. Jeder Score muss bitgleich zur Formel von 7.20.8 sein
+  // (ein Loop, dot und norm in derselben Reihenfolge, double-Akkumulator).
+  it("scores bit-identically to the 7.20.8 cosine (grouped dot products)", async () => {
+    const cosine7208 = (queryVector, vector) => {
+      const query = Float64Array.from(queryVector, (value) => Number(value));
+      let queryNorm = 0;
+      for (let i = 0; i < query.length; i++) queryNorm += query[i] * query[i];
+      queryNorm = Math.sqrt(queryNorm);
+      const typed = Float32Array.from(vector);
+      if (typed.length !== query.length || queryNorm === 0) return NaN;
+      let dot = 0;
+      let norm = 0;
+      for (let i = 0; i < typed.length; i++) {
+        const v = typed[i];
+        dot += query[i] * v;
+        norm += v * v;
+      }
+      if (norm === 0) return NaN;
+      return dot / (queryNorm * Math.sqrt(norm));
+    };
+    const root = makeTempDir("neo-vcache-dot-");
+    const store = createNeoStore(root, "ws");
+    // 23 Vektoren (23 mod 4 = 3, der Rest laeuft einzeln) mit Betraegen ueber
+    // zwoelf Groessenordnungen, Subnormalen und einem Nullvektor.
+    const next = prng(2611);
+    const ids = Array.from({ length: 23 }, (_, i) => `ws-dot-${String(i).padStart(2, "0")}`);
+    const vectors = Object.fromEntries(ids.map((id, i) => {
+      if (i === 5) return [id, Array(DIMS).fill(0)];
+      if (i === 9) return [id, Array.from({ length: DIMS }, (_, d) => Math.fround(d % 2 ? 1e-40 : 3e-39))];
+      return [id, Array.from({ length: DIMS }, () => Math.fround(10 ** (next() * 12 - 6) * (next() < 0.15 ? -1 : 1)))];
+    }));
+    await seed(store, ids, vectors);
+    // Ein Vektor mit falscher Laenge direkt im Sidecar: zaehlt als withVector,
+    // ergibt NaN und erscheint nie als Treffer.
+    const short = candidate("ws-dot-short", 0);
+    store.appendCandidates([short]);
+    const { index, path } = vectorFile(store);
+    const shortBytes = Buffer.from(Float32Array.from({ length: DIMS / 2 }, () => 0.5).buffer);
+    index.entries["ws-dot-short"] = { offset: statSync(path).size, length: shortBytes.length, dims: DIMS / 2 };
+    appendFileSync(path, shortBytes);
+    writeFileSync(store.paths.vectorIndex, JSON.stringify(index));
+    for (let q = 0; q < 6; q++) {
+      const query = Array.from({ length: DIMS }, () => Math.fround(10 ** (next() * 8 - 4)));
+      for (const result of [search(store, query), search(store, query), uncached(store, query)]) {
+        assert.equal(result.withVector, 24, "every stored vector counts, the short one too");
+        const expected = ids.map((id) => [id, cosine7208(query, vectors[id])]).filter(([, sim]) => Number.isFinite(sim) && sim >= 0);
+        assert.equal(result.hits.length, expected.length);
+        assert.ok(!result.hits.some((hit) => hit.item.id === "ws-dot-short" || hit.item.id === ids[5]));
+        for (const hit of result.hits) {
+          const reference = cosine7208(query, vectors[hit.item.id]);
+          assert.ok(Object.is(hit.similarity, reference), `${hit.item.id}: ${hit.similarity} vs ${reference}`);
+          assert.ok(Object.is(cosine7208(query, hit.item.embedding), reference), "the returned vector is the stored float32 vector");
+        }
+      }
+    }
+    // Anfragenorm 0: alle Scores NaN, keine Treffer, withVector unveraendert.
+    const zero = search(store, Array(DIMS).fill(0));
+    assert.equal(zero.withVector, 24);
+    assert.equal(zero.hits.length, 0);
+  });
+
   it("hands out copies: mutating a hit embedding does not touch the cache", async () => {
     const root = makeTempDir("neo-vcache-copy-");
     const { store } = await seededStore(root, "ws", 5);
