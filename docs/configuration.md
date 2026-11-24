@@ -400,11 +400,15 @@ Regelsatz `clean-v1` (lib/embedding-text.js, eingefroren; eine Änderung wird
 Sprachnachrichten (`[Audio transcript (…)]: "…"`) und Medien-Köpfe
 (`[Audio]`, `User text:`, `Transcript:`), Medien- und Anhang-Stummel als ganze
 Zeile (`[User schickte audio …]`), Kanal-Köpfe alter Eingangsumschläge
-(`[Telegram … id:…]`), Platzhalterzeilen (`[visible thinking]`,
-`[visible toolCall: …]`) und `<think>`-Blöcke, Bühnenanweisungen aus einer
-festen Wortliste (`[räuspert sich]`, `(lacht)`, `(Pause)` …) und Füllwörter
-(ähm, äh, hm, mhm …). Klammern mit anderem Inhalt bleiben stehen. Bleibt nur
-Hülle übrig, wird der Rohtext eingebettet (`raw`).
+(`[Telegram … id:…]`, nur mit `id:` und nicht als Linktext),
+Platzhalterzeilen (`[visible thinking]`, `[visible toolCall: …]`) und
+`<think>`-Blöcke, Bühnenanweisungen aus einer festen Wortliste (in eckigen
+Klammern wie `[räuspert sich]`, in runden wie `(lacht)` oder `(Pause)` nur in
+einem Transkript; nie als Linktext oder direkt hinter einem Bezeichner) und
+Füllwörter (ähm, äh, hm, mhm …) nur als eigenes Wort zwischen Leerraum und
+Satzzeichen (nicht in URLs, Pfaden, Bezeichnern, nicht als Einheit hinter
+einer Zahl, nicht großgeschrieben mitten im Satz). Klammern mit anderem
+Inhalt bleiben stehen. Bleibt nur Hülle übrig, wird der Rohtext eingebettet (`raw`).
 
 Die Anfrage des Auto-Recalls verliert nur die Hüllen (Zeitstempel, Metadaten,
 Transkript-Umschlag, Stummel), nicht Füllwörter oder Bühnenanweisungen: Sie

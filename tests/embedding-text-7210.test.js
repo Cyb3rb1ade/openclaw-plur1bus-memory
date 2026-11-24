@@ -73,8 +73,35 @@ describe("cleanTextForEmbedding — Regelsatz clean-v1", () => {
 
   it("onRule meldet jede entfernte Stelle", () => {
     const hits = [];
-    cleanTextForEmbedding("[2026-11-24 09:43] Ähm (lacht) ok das passt", { onRule: (rule) => hits.push(rule) });
+    cleanTextForEmbedding("[2026-11-24 09:43] Ähm [lacht] ok das passt", { onRule: (rule) => hits.push(rule) });
     assert.deepEqual(hits.sort(), ["filler", "stageDirection", "timestamp"]);
+  });
+
+  it("Regeln greifen nur in ihrem Format: Inhalt in URLs, Pfaden, Klammern und Links bleibt", () => {
+    for (const text of [
+      "https://hm.com/de/sale",
+      "/opt/hm/config.yaml",
+      "Das ERM-Modell und der UH-60 sind fertig.",
+      "Morgen 100 hm Höhenunterschied auf 12 km.",
+      "Schreib an hm@example.com, Modul erm_model, H&M: hm & co",
+      "Kontakt: Egbert Ehm/UB, Egbert Ehm hat angerufen.",
+      "Spotify (Musik), Netflix",
+      "Fieber (Husten) seit Montag",
+      "Strg+P (Pause) drücken",
+      "pitch (music) is a perceptual property",
+      "[Musik](https://example.com/musik)",
+      "while (true) sleep(pause);",
+      "[Telegram Bot API](https://core.telegram.org/bots/api)",
+      "[Signal-Gruppe Familie] Eva kommt um 18 Uhr",
+    ]) {
+      assert.equal(cleanTextForEmbedding(text), text, text);
+    }
+    // Echte Füllwörter, Bühnenanweisungen und Kanal-Köpfe gehen weiter.
+    assert.equal(cleanTextForEmbedding("Das ist so ähm: weiter. Hm."), "Das ist so: weiter.");
+    assert.equal(cleanTextForEmbedding("[Telegram Christian id:55736530 +5m] Hallo"), "Hallo");
+    assert.equal(cleanTextForEmbedding("[Audio transcript (de)]: \"Christian: Das ist witzig (lacht) und dann\""), "Christian: Das ist witzig und dann");
+    assert.equal(cleanTextForEmbedding("[Audio]\nTranscript:\nDas ist witzig (lacht) und dann"), "Das ist witzig und dann");
+    assert.equal(cleanQueryForEmbedding("[Telegram Bot API](https://core.telegram.org/bots/api) erklären", { enabled: true }), "[Telegram Bot API](https://core.telegram.org/bots/api) erklären");
   });
 
   it("envelopesOnly lässt Füllwörter und Bühnenanweisungen stehen", () => {
