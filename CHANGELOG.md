@@ -6,6 +6,18 @@ Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 
+## [7.20.9] — 2026-11-24
+
+### Fixed
+
+- The Neo prelude before every auto-recall (`searchNeoCandidatesGlobal`) read each eligible candidate vector with its own `readSync` (main ~3300, bernhardine ~5600 x 12 kB per recall). The host drops the page cache every hour (`/etc/cron.hourly/free`), so these reads mostly went to disk and blocked the main thread for 1.3–10 s (`global=…ms` in the prelude log line); on 24.11. at 08:26 and 09:44 the recall timed out without a memory block. The vectors now stay in a process-wide cache: per vector file (device, inode, birth time) a map id → `Float32Array` plus its squared norm, a hit only when offset and length match the current `vector-index.json`. Appends stay visible (new ids are misses), a re-embedded id is a miss, a new inode, a smaller file or a generation switch after compaction drops that file's entries. Missing vectors are read sorted by offset in blocks of up to 16 MiB (gaps up to 1 MiB are read along); only vectors read completely and below the file size at open time are cached, anything else is read as before and not cached.
+- The vector index cache now also keys on the inode (the index is replaced atomically, so every rewrite has a new inode).
+- Measured on copies of the three production Neo workspaces, 5 German queries, same options as the gateway (topK 30, minSimilarity 0.35); hits, order, scores and vectors are bit-identical to 7.20.8 for all 301 hits. Global search per call, 7.20.8 → 7.20.9: fresh process with cold page cache main 1554 → 483 ms, bernhardine 2202 → 1089 ms, heisenberg 116 → 161 ms; warm (median of 25) main 142 → 38 ms, bernhardine 231 → 77 ms, heisenberg 10 → 6 ms; after a page-cache drop in a running process main 1095 → 48 ms, bernhardine 2076 → 97 ms (7379 ms in a run with disk contention), heisenberg 56 → 4 ms. When the worker has rewritten `vector-index.json` since the last recall, the index reparse adds about 50 ms for bernhardine (135 ms median). The cache holds 9182 vectors, 115 MB, for all three workspaces.
+
+### Changed
+
+- New environment variable `PLUR1BUS_NEO_VECTOR_CACHE_MAX_BYTES` (default 512 MiB for all workspaces in the process, `0` turns the cache off and restores the 7.20.8 read path); above the limit the least recently used vectors are evicted down to 90 %. `searchNeoCandidatesGlobal` returns per-call counters in `vectorCache` (hits, misses, loaded, uncached, coldReads, coldBytes), logged at debug level as `plur1bus-neo: global vector cache …`; the info line is unchanged. `neoVectorCacheStats()` and `resetNeoVectorCache()` are exported.
+
 ## [7.20.8] — 2026-11-24
 
 ### Fixed

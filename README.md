@@ -2,9 +2,9 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.20.8 — OpenClaw 2026.8.1 or newer**
+**PLUR1BUS 7.20.9 — OpenClaw 2026.8.1 or newer**
 
-Current source version: **7.20.8**, running in production on an OpenClaw
+Current source version: **7.20.9**, running in production on an OpenClaw
 `2026.11.6` build. The declared compatibility floor is `openclaw@2026.8.1` and plugin
 API `>=2026.8.1`; the package is built against the immutable build baseline
 `openclaw@2026.8.2`. Each host release is checked against the full patch set
@@ -28,6 +28,19 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.20.9 — the Neo prelude keeps its vectors in memory
+
+Before every auto-recall the Neo prelude compares the question with all
+candidate vectors of the workspace. Until 7.20.8 it read each of them from
+disk, one call per vector; once the page cache was dropped that took seconds
+on the main thread and could push the whole recall over its time limit. The
+vectors now stay in a process-wide cache (512 MiB for all workspaces,
+`PLUR1BUS_NEO_VECTOR_CACHE_MAX_BYTES`, `0` turns it off). New vectors,
+re-embeddings, compaction and replaced or shortened files are detected, and a
+cold start reads the vectors in a few large blocks. Results are bit-identical
+to 7.20.8; on the production data the search takes 40–100 ms instead of
+1–2 s after a page-cache drop.
 
 ### New in v7.20.8 — the time filter only answers "when did we talk"
 
@@ -1234,7 +1247,7 @@ On an older host the installer refuses the package instead of deploying it:
 Install the published release through OpenClaw's package installer:
 
 ```bash
-openclaw plugins install clawhub:@cyb3rb1ade/plur1bus-memory@7.20.8 \
+openclaw plugins install clawhub:@cyb3rb1ade/plur1bus-memory@7.20.9 \
   --acknowledge-clawhub-risk --pin
 ```
 
@@ -1242,14 +1255,14 @@ The same release is on the npm-compatible registry, if your `@cyb3rb1ade`
 scope already points there:
 
 ```bash
-openclaw plugins install @cyb3rb1ade/plur1bus-memory@7.20.8 --pin
+openclaw plugins install @cyb3rb1ade/plur1bus-memory@7.20.9 --pin
 ```
 
 Or install the immutable GitHub Release tarball:
 
 ```bash
 openclaw plugins install \
-  https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/download/v7.20.8/cyb3rb1ade-plur1bus-memory-7.20.8.tgz
+  https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/download/v7.20.9/cyb3rb1ade-plur1bus-memory-7.20.9.tgz
 ```
 
 To build from this source checkout instead, produce a tarball and install that
@@ -1261,7 +1274,7 @@ npm ci
 npm test
 npm pack
 openclaw plugins install \
-  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.20.8.tgz --force
+  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.20.9.tgz --force
 ```
 
 Record the tarball's SHA-256 before transferring it. PLUR1BUS never patches
