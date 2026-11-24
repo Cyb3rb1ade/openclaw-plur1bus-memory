@@ -1,6 +1,6 @@
 # The PLUR1BUS engine API
 
-**Contract version 1.13.0** · frozen at 1.0.0 on 2026-09-22, amended fourteen times
+**Contract version 1.17.0** · frozen at 1.0.0 on 2026-09-22, amended seventeen times
 under the amendment policy · source of truth: `types/engine.d.ts`
 
 This document explains the contract; `types/engine.d.ts` *is* the contract, and
@@ -165,6 +165,13 @@ own changelog:
   (unimport of a run unlinks that run's links, the card stays) and
   `Engine.capabilities` (`{ memoryLink: true }`). Additive members only. See
   [Link in 1.16.0](#link-in-1160) below.
+- **1.17.0** — `AdminOps.reembedding.validate({ id })`: the coordinator's
+  existing `validating` → `ready_to_switch` step (source versions unchanged,
+  target generation check, semantic recall probe with the target provider)
+  is now on the facade, so a host that owns its switch can finish a
+  migration. A failed validation rejects with the reason and leaves the
+  record in `validating`; nothing is switched. The engine's own
+  `switch`/`rollback` are unchanged. Additive member only.
 
 ## The two halves
 
@@ -2047,7 +2054,8 @@ involved):
   `Engine.memory.share`/`.forget`; `admin.obsidian.{detect,prepare,confirm}`
   and `admin.migrate` have their own engine-side implementations (see
   [AdminOps in 1.6.0](#adminops-in-160-obsidian-migrate-the-deprecated-aliases)
-  above); `admin.reembedding.{plan,apply,resume,status}` and
+  above); `admin.reembedding.{plan,apply,resume,validate,status}` (`validate`
+  since 1.17.0) and
   `admin.workspacePolicy.*` were already wired to real coordinators.
 - `status()` reports `{ ready: true, degraded, agents: openedAgents.size,
   contract: "1.9.0", storeSchema: { current, expected }, jobs, models,
@@ -2062,7 +2070,7 @@ involved):
 Everything else — `recall`, `capture`, `checkpoint`, `memory.*` (1.5.0/1.6.0),
 `jobs.run`/`history`, `jobs.health` (1.8.0), `tools`, `embedding.embed`/
 `rerank`/`identities`/`probe`/`serve` (1.7.0), `models.status`/`.warm`
-(1.8.0), `channels`, `admin.reembedding.plan`/`apply`/`resume`/`status`,
+(1.8.0), `channels`, `admin.reembedding.plan`/`apply`/`resume`/`validate`/`status`,
 `admin.workspacePolicy.*`, `admin.share`/`.forget`/`.obsidian.*`/`.migrate` —
 works against a plain `HostServices` with no adapter involved, per
 `tests/engine-contract.test.js`.
