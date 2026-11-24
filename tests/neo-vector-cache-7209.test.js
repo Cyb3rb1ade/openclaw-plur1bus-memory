@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { appendFileSync, readFileSync, readdirSync, renameSync, statSync, truncateSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, openSync, readFileSync, readdirSync, renameSync, statSync, truncateSync, utimesSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -213,6 +213,61 @@ describe("neo vector cache (7.20.9)", () => {
     assert.equal(after.hits[0].item.id, ids[4]);
     assertUnitSimilarity(after.hits[0]);
     assert.equal(after.vectorCache.misses, 6);
+  });
+
+  // Pruefung F2: ext4 vergibt nach unlink+create im selben Tick dieselbe
+  // Inode und Birthtime, ein Ueberschreiben mit "w" oder "r+" behaelt beide.
+  // Die Datei-Identitaet allein haelt den Cache dann fuer gueltig.
+  for (const mode of ["r+", "w"]) {
+    it(`detects a vector file overwritten in place ("${mode}", same inode and birthtime)`, async () => {
+      const root = makeTempDir("neo-vcache-overwrite-");
+      const { store, ids } = await seededStore(root, "ws", 6);
+      const query = vectorFor(4711);
+      const warm = search(store, query);
+      assert.equal(warm.vectorCache.misses, 6);
+      const { index, path } = vectorFile(store);
+      const before = statSync(path);
+      const bytes = Buffer.from(readFileSync(path));
+      ids.forEach((id, i) => Buffer.from(Float32Array.from(vectorFor(7000 + i)).buffer).copy(bytes, index.entries[id].offset));
+      Buffer.from(Float32Array.from(query).buffer).copy(bytes, index.entries[ids[2]].offset);
+      const fd = openSync(path, mode);
+      try { writeSync(fd, bytes, 0, bytes.length, 0); } finally { closeSync(fd); }
+      // Ein echtes Ueberschreiben liegt zeitlich nach dem Laden; der Test
+      // setzt die mtime ausdruecklich, damit er nicht am Tick haengt.
+      const later = new Date(before.mtimeMs + 5000);
+      utimesSync(path, later, later);
+      const after = statSync(path);
+      assert.equal(after.ino, before.ino, "same inode");
+      assert.equal(after.birthtimeMs, before.birthtimeMs, "same birthtime");
+      assert.equal(after.size, before.size, "same size");
+      const result = assertSameAsUncached(store, query, "overwritten bytes win over the cache");
+      assert.equal(result.hits[0].item.id, ids[2]);
+      assertUnitSimilarity(result.hits[0]);
+      assert.equal(result.vectorCache.verifyFailed, 1, "the sample check caught the overwrite");
+      assert.equal(result.vectorCache.misses, 6, "all vectors are read again");
+      const again = search(store, query);
+      assert.equal(again.vectorCache.hits, 6, "the new content is cached");
+      assert.equal(again.vectorCache.verified + again.vectorCache.verifyFailed, 0, "unchanged file, no second check");
+    });
+  }
+
+  it("an append passes the sample check and keeps every cached vector", async () => {
+    const root = makeTempDir("neo-vcache-verify-");
+    const { store } = await seededStore(root, "ws", 40);
+    const query = vectorFor(31337);
+    const first = search(store, query);
+    assert.equal(first.vectorCache.verified, 0, "a new file record needs no check");
+    const steady = search(store, query);
+    assert.equal(steady.vectorCache.verified + steady.vectorCache.verifyFailed, 0, "no check while the file is unchanged");
+    await seed(store, ["ws-appended"], { "ws-appended": vectorFor(4040) });
+    const after = assertSameAsUncached(store, query, "results after the append");
+    assert.equal(after.vectorCache.verified, 1, "the changed file was checked once");
+    assert.equal(after.vectorCache.verifyFailed, 0);
+    assert.equal(after.vectorCache.hits, 40);
+    assert.equal(after.vectorCache.misses, 1, "only the appended vector is read");
+    const stats = neoVectorCacheStats();
+    assert.equal(stats.invalidated, 0, "nothing was dropped");
+    assert.equal(stats.verified, 1);
   });
 
   it("invalidates when the vector file shrinks below a cached vector", async () => {
