@@ -434,17 +434,28 @@ Das Skript wählt Zeilen mit `embeddingTextMode = 'raw'` (Standard nur
 nicht, stellt es nur den Modus um (kein API-Aufruf); sonst bettet es über den
 Embedding-Provider des Plugins neu ein (`--batch-size`, `--min-interval-ms`,
 `--max-rows`). Geschrieben werden nur `vector` und `embeddingTextMode`; je
-Block prüft es, dass alle anderen Spalten gleich geblieben sind, am Ende
-Zeilenzahl, fehlende Vektoren und die Kosinus-Verteilung alt/neu, danach
-`table.optimize()` (`--no-optimize` schaltet ab; bei `--max-rows` erst nach
-dem letzten Teil). Im Produktivpfad verlangt
+Block prüft es, dass alle anderen Spalten gleich geblieben sind, vor jedem
+Schreiben den Median des Kosinus alt/neu über alle Blöcke des Laufs (unter
+`--min-cosine`, Standard 0,2, bricht es ab, bevor der Block geschrieben wird:
+Vektoren aus einem fremden Raum bei gleicher Dimension, etwa ein falsches
+Modell oder ein `OPENAI_BASE_URL` in der Shell; `0` schaltet ab), am Ende
+Zeilenzahl und fehlende Vektoren, danach `table.optimize()` (`--no-optimize`
+schaltet ab; bei `--max-rows` erst nach dem letzten Teil). Im Produktivpfad verlangt
 `--apply` einen gestoppten Gateway, ein ausgeliefertes Plugin ≥ 7.20.10 und
 einen Snapshot unter `~/.openclaw/.snapshots` mit denselben LanceDB-Versionen
 wie live. Jeder Lauf schreibt `started`/`committed`/`failed` per
 `appendDestructiveOpLog` in den Workspace des Agenten; Checkpoint und Bericht
-liegen unter `memory/reembed-clean/`. Ein abgebrochener oder gestaffelter Lauf
-wird mit demselben Aufruf und demselben Snapshot fortgesetzt; live darf dann
-mehr Versionen haben als der Snapshot, aber keine fehlen. Der Probelauf vom 24.11.2026: main 1.039 Zeilen neu
+liegen unter `memory/reembed-clean/`. Der Checkpoint entsteht vor dem ersten
+Schreibzugriff und hält nach jedem Block den Versionsstand der Tabelle fest.
+Ein abgebrochener oder gestaffelter Lauf wird mit demselben Aufruf und
+demselben Snapshot fortgesetzt, solange live genau diesen Stand hat (live hat
+dann mehr Versionen als der Snapshot, alle von diesem Lauf). Hat dazwischen
+jemand anderes geschrieben (Gateway zwischen zwei Teilläufen) oder wurde ein
+Block hart abgebrochen (SIGKILL, OOM), bricht das Skript ab: dann bei
+gestopptem Gateway einen frischen Snapshot ziehen und mit ihm neu starten, er
+wird die neue Basis. Der Gateway bleibt deshalb zwischen Teilläufen gestoppt.
+Ctrl-C oder SIGTERM beenden den laufenden Block und schreiben `failed` und den
+Checkpoint; ein zweites Signal beendet sofort. Der Probelauf vom 24.11.2026: main 1.039 Zeilen neu
 (≈ 154.000 Tokens), bernhardine 2.311 (≈ 249.000), heisenberg 19; der Rest
 nur Modus.
 

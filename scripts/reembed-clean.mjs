@@ -33,6 +33,8 @@
  *   --batch-size <n>          Texte je Provider-Aufruf (Standard 64, max 512)
  *   --min-interval-ms <n>     Pause zwischen Provider-Aufrufen (Standard 250)
  *   --max-rows <n>            höchstens so viele Zeilen neu einbetten (gestaffelter Lauf)
+ *   --min-cosine <x>          Abbruch vor dem Schreiben, wenn der Median des Kosinus alt/neu
+ *                             darunter liegt (Standard 0.2, 0 = aus; falsches Modell/Endpoint)
  *   --snapshot <dir>          Snapshot von scripts/backup-snapshot.sh (Pflicht im Produktivpfad)
  *   --workspace-dir <dir>     Ziel des Audit-Logs (Standard: Workspace des Agenten laut openclaw.json)
  *   --openclaw-home <dir>     Standard: $OPENCLAW_HOME bzw. ~/.openclaw (wie backup-snapshot.sh)
@@ -51,8 +53,16 @@
  * Jeder Lauf schreibt "started"/"committed"/"failed" per appendDestructiveOpLog.
  * Wiederaufnahme: mit demselben Aufruf (auch demselben --snapshot) erneut
  * starten — verarbeitete Zeilen sind nicht mehr 'raw'; der Checkpoint hält
- * Modus, Auswahl, Tabelle und Snapshot fest, damit kein Lauf Modi mischt. Beim
- * Fortsetzen genügt, dass live alle Versionen des Snapshots enthält.
+ * Modus, Auswahl, Tabelle, Snapshot und die LanceDB-Versionen nach dem
+ * letzten eigenen Schreibzugriff fest (geschrieben vor dem ersten
+ * Schreibzugriff und nach jedem Block). Fortgesetzt wird mit demselben
+ * Snapshot nur, wenn live genau diese Versionen hat; hat ein anderer Schreiber
+ * (Gateway zwischen zwei Teilläufen) oder ein harter Abbruch mitten im Block
+ * (SIGKILL, OOM) etwas geschrieben, bricht das Skript ab und verlangt einen
+ * frischen Snapshot, der dann die neue Basis ist. Ctrl-C/SIGTERM beendet den
+ * laufenden Block, schreibt "failed" und den Checkpoint; ein zweites Signal
+ * beendet sofort (danach ist ein frischer Snapshot nötig). Zwischen
+ * Teilläufen bleibt der Gateway gestoppt, sonst ebenfalls frischer Snapshot.
  * table.optimize() läuft erst, wenn alle Zeilen durch sind.
  */
 
@@ -81,6 +91,9 @@ const MIN_PLUGIN_VERSION = [7, 20, 10];
 const DEFAULT_BATCH_SIZE = 64;
 const MAX_BATCH_SIZE = 512;
 const DEFAULT_MIN_INTERVAL_MS = 250;
+// Zufallsvektoren (fremder Raum) liegen bei 3072 Dimensionen um |cos| < 0,05;
+// Rohtext und bereinigter Text desselben Modells deutlich darüber.
+const DEFAULT_MIN_COSINE = 0.2;
 const MODE_ONLY_CHUNK = 500;
 const EXAMPLE_LIMIT = 8;
 // Grobe Schätzung für Deutsch/Englisch mit cl100k-artigen Tokenizern.
@@ -125,6 +138,7 @@ export function parseArgs(argv) {
     batchSize: DEFAULT_BATCH_SIZE,
     minIntervalMs: DEFAULT_MIN_INTERVAL_MS,
     maxRows: null,
+    minCosine: DEFAULT_MIN_COSINE,
     snapshot: "",
     workspaceDir: "",
     openclawHome: "",
@@ -163,6 +177,12 @@ export function parseArgs(argv) {
       case "--batch-size": options.batchSize = positiveInt(value(i, arg), arg, MAX_BATCH_SIZE); i += 1; break;
       case "--min-interval-ms": options.minIntervalMs = positiveInt(value(i, arg), arg, 60_000); i += 1; break;
       case "--max-rows": options.maxRows = positiveInt(value(i, arg), arg); i += 1; break;
+      case "--min-cosine": {
+        const raw = value(i, arg); i += 1;
+        const n = Number(raw);
+        if (!/^\d*\.?\d+$/.test(raw) || !Number.isFinite(n) || n < 0 || n > 1) throw new Error("--min-cosine must be a number between 0 and 1");
+        options.minCosine = n; break;
+      }
       case "--snapshot": options.snapshot = resolve(value(i, arg)); i += 1; break;
       case "--workspace-dir": options.workspaceDir = resolve(value(i, arg)); i += 1; break;
       case "--openclaw-home": options.openclawHome = resolve(value(i, arg)); i += 1; break;
@@ -316,12 +336,19 @@ function lanceVersions(dir) {
   return existsSync(dir) ? readdirSync(dir).sort() : null;
 }
 
+/** Zahl und Hash der LanceDB-Versionsdateien (Checkpoint-Vergleich beim Fortsetzen). */
+function versionState(dir) {
+  const list = lanceVersions(dir) || [];
+  return { count: list.length, sha256: sha256(list.join("\n")) };
+}
+
 /**
  * Prüft, dass der Snapshot (Layout von scripts/backup-snapshot.sh) dieselben
  * LanceDB-Versionen der Tabelle enthält wie live — bei gestopptem Gateway der
  * Beweis, dass er aktuell ist. Beim Fortsetzen eines unfertigen Laufs
- * (allowSuperset) genügt es, dass live alle Versionen des Snapshots enthält:
- * die zusätzlichen hat der frühere Teil dieses Laufs geschrieben.
+ * (allowSuperset) genügt es, dass live alle Versionen des Snapshots enthält;
+ * dass die zusätzlichen von diesem Lauf stammen, prüft runAgent vorher am
+ * Versionsstand im Checkpoint.
  */
 function verifySnapshot(snapshotDir, { openclawHome, base, agent, isProd, allowSuperset = false }) {
   const problems = [];
@@ -512,6 +539,7 @@ async function runAgent(agent, ctx) {
   // Checkpoint vor dem Snapshot-Abgleich lesen: ein unfertiger Lauf (Abbruch
   // oder --max-rows) hat seit dem Snapshot selbst Versionen geschrieben.
   const tablePath = join(agentDir, `${TABLE_NAME}.lance`);
+  const versionsDir = join(tablePath, "_versions");
   const checkpointPath = join(outDir, `${agent}.checkpoint.json`);
   const previous = readCheckpoint(checkpointPath);
   const resuming = Boolean(previous && previous.done !== true);
@@ -521,11 +549,23 @@ async function runAgent(agent, ctx) {
     }
     report.resumedFrom = previous.updatedAt;
   }
+  // Fortsetzen mit demselben Snapshot: live muss genau den Versionsstand nach
+  // dem letzten eigenen Schreibzugriff haben. Sonst hat jemand anderes
+  // geschrieben (Gateway zwischen zwei Teilläufen) oder ein Block wurde hart
+  // abgebrochen — ein Rollback auf den alten Snapshot verlöre dann Daten.
+  const sameSnapshot = resuming && (previous.snapshot || null) === (options.snapshot || null);
+  if (sameSnapshot) {
+    const live = versionState(versionsDir);
+    const recorded = previous.lanceVersions;
+    if (!recorded || recorded.count !== live.count || recorded.sha256 !== live.sha256) {
+      throw new Error(`table changed since the last checkpoint (live ${live.count} versions, checkpoint ${recorded?.count ?? "none"}): another writer or an interrupted write; take a fresh snapshot (scripts/backup-snapshot.sh, gateway stopped) and run again with it${options.snapshot ? "" : `, or move ${checkpointPath} away`}`);
+    }
+  }
   if (options.snapshot) {
     // Mehr Versionen als der Snapshot nur beim Fortsetzen mit genau dem Snapshot,
-    // der vor dem ersten Teil des Laufs geprüft wurde.
-    const allowSuperset = resuming && previous.snapshot === options.snapshot;
-    const snap = verifySnapshot(options.snapshot, { openclawHome, base, agent, isProd, allowSuperset });
+    // der vor dem ersten Teil des Laufs geprüft wurde; ein anderer (frischer)
+    // Snapshot muss live genau entsprechen und wird die neue Basis.
+    const snap = verifySnapshot(options.snapshot, { openclawHome, base, agent, isProd, allowSuperset: sameSnapshot });
     report.preconditions.snapshot = snap;
     if (!snap.ok) throw new Error(`snapshot does not match the current state: ${snap.problems.join("; ")}`);
   }
@@ -537,10 +577,18 @@ async function runAgent(agent, ctx) {
     renameSync(checkpointPath, `${checkpointPath}.${String(previous.updatedAt || "done").replace(/[^0-9A-Za-z]/g, "")}`);
   }
   const checkpoint = resuming ? previous : {
-    version: 1, agent, table: tablePath, textMode, stripSpeaker: cleanCfg.stripSpeaker, snapshot: options.snapshot || null,
+    version: 2, agent, table: tablePath, textMode, stripSpeaker: cleanCfg.stripSpeaker, snapshot: options.snapshot || null,
     statusFilter: options.status, startedAt: new Date(now).toISOString(), batches: 0, rowsReembedded: 0, rowsModeOnly: 0, providerCalls: 0, done: false,
   };
-  const saveCheckpoint = () => {
+  if (resuming && !sameSnapshot) {
+    checkpoint.snapshot = options.snapshot || null;
+    report.preconditions.rebasedOnSnapshot = true;
+  }
+  checkpoint.version = 2;
+  // refreshVersions: false nur, wenn ein fremder Schreiber nicht auszuschließen
+  // ist (Kopie mit laufendem Gateway) — dann bleibt der letzte eigene Stand.
+  const saveCheckpoint = ({ refreshVersions = true } = {}) => {
+    if (refreshVersions) checkpoint.lanceVersions = versionState(versionsDir);
     checkpoint.updatedAt = new Date((runtime.now ? runtime.now() : Date.now())).toISOString();
     writeJson(checkpointPath, checkpoint);
   };
@@ -555,12 +603,45 @@ async function runAgent(agent, ctx) {
   const rowsBefore = report.preconditions.table.rows;
   const cosines = [];
   const progress = { reembedded: 0, modeOnly: 0, providerCalls: 0 };
-  audit({ result: "started", planned: report.counts, estimate: report.estimate });
+  // Ctrl-C/SIGTERM: den laufenden Block zu Ende bringen, dann über den
+  // catch-Zweig "failed" und den Checkpoint schreiben. Ein zweites Signal
+  // beendet sofort (Standardverhalten).
+  const signals = runtime.signals || process;
+  let stopSignal = null;
+  const handlers = {};
+  const detachSignals = () => {
+    for (const [sig, handler] of Object.entries(handlers)) signals.removeListener(sig, handler);
+  };
+  for (const sig of ["SIGINT", "SIGTERM"]) {
+    handlers[sig] = () => {
+      if (stopSignal) {
+        detachSignals();
+        if (signals === process) process.kill(process.pid, sig);
+        return;
+      }
+      stopSignal = sig;
+      (runtime.stderr || process.stderr).write(`reembed-clean: ${sig} received, stopping after the current block (again to stop at once)\n`);
+    };
+    signals.on(sig, handlers[sig]);
+  }
+  const checkStop = () => {
+    if (stopSignal) throw new Error(`interrupted by ${stopSignal}; stopped after the last complete block`);
+  };
   try {
+    audit({ result: "started", planned: report.counts, estimate: report.estimate });
+  } catch (error) {
+    detachSignals();
+    throw error;
+  }
+  try {
+    // Checkpoint vor dem ersten Schreibzugriff: ein harter Abbruch im ersten
+    // Block lässt sonst keinen Stand zurück, an dem ein Neustart prüfen kann.
+    saveCheckpoint();
     if (!hasModeColumn) {
       if (!options.addColumn) throw new Error("column embeddingTextMode is missing — start plugin 7.20.10 once or pass --add-column");
       await table.addColumns([{ name: "embeddingTextMode", valueSql: "'raw'" }]);
       report.preconditions.modeColumn = "added";
+      saveCheckpoint();
     }
 
     // Provider vor dem ersten Schreibzugriff prüfen (Dimension der Tabelle).
@@ -572,6 +653,7 @@ async function runAgent(agent, ctx) {
 
     // 1. Nur Modus: Texte, an denen die Bereinigung nichts ändert.
     for (let i = 0; i < plan.modeOnly.length; i += MODE_ONLY_CHUNK) {
+      checkStop();
       const ids = plan.modeOnly.slice(i, i + MODE_ONLY_CHUNK);
       const before = new Map((await readRowsByIds(table, ids)).map((r) => [r.id, rowFingerprint(r, { withVector: true })]));
       const list = ids.map((id) => `'${safeRowId(id)}'`).join(",");
@@ -589,6 +671,7 @@ async function runAgent(agent, ctx) {
 
     // 2. Neu einbetten.
     for (let i = 0; i < limited.length; i += options.batchSize) {
+      checkStop();
       const batch = limited.slice(i, i + options.batchSize);
       const ids = batch.map((r) => r.id);
       const beforeRows = new Map((await readRowsByIds(table, ids)).map((r) => [r.id, r]));
@@ -603,6 +686,22 @@ async function runAgent(agent, ctx) {
         }
         return { id: r.id, vector, embeddingTextMode: textMode };
       });
+      // Kosinus alt/neu vor dem Schreiben: Vektoren aus einem fremden Raum
+      // (falsches Modell, OPENAI_BASE_URL in der Shell) bei gleicher Dimension
+      // liegen um 0. Geprüft wird der Median über alle Blöcke dieses Laufs
+      // einschließlich des neuen, also schon vor dem ersten Schreiben.
+      const blockCosines = [];
+      for (const update of updates) {
+        const oldVector = toArray(beforeRows.get(update.id)?.vector);
+        if (oldVector && oldVector.length === update.vector.length) blockCosines.push(cosine(oldVector, update.vector));
+      }
+      if (options.minCosine > 0 && blockCosines.length > 0) {
+        const median = quantiles([...cosines, ...blockCosines]).median;
+        if (median < options.minCosine) {
+          throw new Error(`old/new cosine median ${median} is below --min-cosine ${options.minCosine}; wrong embedding model or endpoint? This block was not written`);
+        }
+      }
+      checkStop();
       const result = await table.mergeInsert("id").whenMatchedUpdateAll().execute(updates);
       if (Number(result?.numInsertedRows || 0) !== 0) throw new Error("merge inserted rows — aborting");
       const afterRows = await readRowsByIds(table, ids);
@@ -611,12 +710,11 @@ async function runAgent(agent, ctx) {
         if (!old) throw new Error(`row ${row.id} appeared during the run`);
         if (rowFingerprint(old) !== rowFingerprint(row)) throw new Error(`row changed beyond vector/embeddingTextMode: ${row.id}`);
         if (row.embeddingTextMode !== textMode) throw new Error(`mode not set for ${row.id}`);
-        const oldVector = toArray(old.vector);
         const newVector = toArray(row.vector);
         if (!newVector || newVector.length !== tableDims) throw new Error(`vector missing after write: ${row.id}`);
-        if (oldVector) cosines.push(cosine(oldVector, newVector));
       }
       if (afterRows.length !== batch.length) throw new Error(`readback count ${afterRows.length} != ${batch.length}`);
+      cosines.push(...blockCosines);
       progress.reembedded += batch.length;
       checkpoint.rowsReembedded += batch.length;
       checkpoint.batches += 1;
@@ -635,6 +733,7 @@ async function runAgent(agent, ctx) {
       remainingRaw,
       expectedRemainingRaw: plan.envelopeOnly.length + plan.invalidId + (plan.reembed.length - limited.length),
       cosineOldNew: quantiles(cosines),
+      minCosine: options.minCosine,
     };
     if (rowsAfter !== rowsBefore) throw new Error(`row count changed: ${rowsBefore} → ${rowsAfter}`);
     if (nullVectors !== 0) throw new Error(`${nullVectors} rows without vector`);
@@ -642,6 +741,7 @@ async function runAgent(agent, ctx) {
     // Kompaktieren erst, wenn alles durch ist: zwischen Teilläufen würde
     // optimize() die Versionen umschichten, auf die der Snapshot-Abgleich baut.
     if (options.optimize && complete) {
+      checkStop();
       const stats = await table.optimize();
       report.optimize = { fragmentsRemoved: Number(stats?.compaction?.fragmentsRemoved || 0), fragmentsAdded: Number(stats?.compaction?.fragmentsAdded || 0) };
       const rowsAfterOptimize = await table.countRows();
@@ -662,13 +762,17 @@ async function runAgent(agent, ctx) {
     }
     if (!written) process.stderr.write("reembed-clean: audit entry 'failed' not written\n");
     try {
-      saveCheckpoint();
+      // Bei gestopptem Gateway schreibt nur dieser Prozess: der Stand auf der
+      // Platte ist der eigene. Mit laufendem Gateway (Kopie) bleibt der letzte
+      // geprüfte Stand, ein Neustart verlangt dann einen frischen Snapshot.
+      saveCheckpoint({ refreshVersions: !gateway.running });
     } catch (cpError) {
       process.stderr.write(`reembed-clean: checkpoint write failed: ${redactError(cpError).message}\n`);
     }
     error.report = report;
     throw error;
   } finally {
+    detachSignals();
     if (embedder?.shutdown) {
       try {
         await embedder.shutdown();

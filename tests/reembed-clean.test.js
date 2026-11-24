@@ -2,6 +2,7 @@
 // Kleine LanceDB-Tabellen in einem Temp-Verzeichnis, Fake-Embedder, keine API.
 import { before, describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as lancedb from "@lancedb/lancedb";
@@ -69,7 +70,8 @@ function fakeEmbedder({ failOnCall = 0, dims = DIM } = {}) {
       embedBatch: async (texts) => {
         calls.push([...texts]);
         if (failOnCall && calls.length === failOnCall) throw new Error("provider down");
-        return texts.map((t) => [t.length, 1, 0.5, 0.25]);
+        // Nahe am alten Vektor [0.1, 0.2, 0.3, 0.4] (Kosinus ~0,99), aber nicht gleich.
+        return texts.map((t) => [0.1, 0.2, 0.3, 0.4 + t.length / 1000]);
       },
     }),
   };
@@ -94,6 +96,10 @@ describe("parseArgs", () => {
     assert.throws(() => parseArgs(["--agent", "../x"]), /Invalid agent ID/);
     assert.throws(() => parseArgs(["--agent", "main", "--status", "deleted"]), /active or all/);
     assert.throws(() => parseArgs(["--agent", "main", "--embedding-api-key-env", "lower"]), /valid environment variable/);
+    assert.throws(() => parseArgs(["--agent", "main", "--min-cosine", "1.5"]), /--min-cosine/);
+    assert.throws(() => parseArgs(["--agent", "main", "--min-cosine", "abc"]), /--min-cosine/);
+    assert.equal(parseArgs(["--agent", "main"]).minCosine, 0.2);
+    assert.equal(parseArgs(["--agent", "main", "--min-cosine", "0"]).minCosine, 0);
     const opts = parseArgs(["--agent", "main", "--agent", "bernhardine", "--batch-size", "8", "--strip-speaker"]);
     assert.deepEqual(opts.agents, ["main", "bernhardine"]);
     assert.equal(opts.apply, false);
@@ -238,6 +244,70 @@ describe("runCli --apply (Kopie außerhalb des OpenClaw-Homes)", () => {
     assert.deepEqual(audit, ["started", "failed", "started", "committed"]);
   });
 
+  it("Vektoren aus einem fremden Raum: Abbruch vor dem Schreiben, --min-cosine 0 schaltet ab", async () => {
+    const base = freshDir("cos");
+    await makeTable(base, "main");
+    const before = await readAll(base, "main");
+    const orthogonal = {
+      create: async () => ({ model: "fake", dimensions: DIM, embedBatch: async (texts) => texts.map(() => [-0.4, 0.3, -0.2, 0.1]) }),
+    };
+    const ws = freshDir("ws");
+    const args = ["--agent", "main", "--apply", "--base", base, "--openclaw-home", freshDir("home"), "--workspace-dir", ws, "--out", freshDir("out"), "--min-interval-ms", "0"];
+    const err = sink();
+    assert.equal(await runCli(args, { stdout: sink(), stderr: err, gatewayState: stopped, createEmbedder: orthogonal.create }), 1);
+    assert.match(err.text, /cosine median 0 is below --min-cosine 0\.2/);
+    const after = await readAll(base, "main");
+    for (const id of [IDS.audio, IDS.filler]) {
+      assert.deepEqual(after.get(id).vector, before.get(id).vector, "kein Vektor geschrieben");
+      assert.equal(after.get(id).embeddingTextMode, "raw");
+    }
+    const audit = readFileSync(join(ws, ".adaptive-learning", "destructive-ops.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l).result);
+    assert.deepEqual(audit, ["started", "failed"]);
+
+    const base2 = freshDir("cos-off");
+    await makeTable(base2, "main");
+    assert.equal(await runCli(["--agent", "main", "--apply", "--base", base2, "--openclaw-home", freshDir("home"), "--workspace-dir", freshDir("ws"), "--out", freshDir("out"), "--min-interval-ms", "0", "--min-cosine", "0"], {
+      stdout: sink(), stderr: sink(), gatewayState: stopped, createEmbedder: orthogonal.create,
+    }), 0);
+  });
+
+  it("Checkpoint liegt vor dem ersten Schreibzugriff; SIGINT beendet nach dem Block mit failed und Checkpoint", async () => {
+    const base = freshDir("sig");
+    const ws = freshDir("ws");
+    const out = freshDir("out");
+    await makeTable(base, "main");
+    const signals = new EventEmitter();
+    const checkpointFile = join(out, "main.checkpoint.json");
+    let seenAtFirstCall = null;
+    const embedder = {
+      create: async () => ({
+        model: "fake",
+        dimensions: DIM,
+        embedBatch: async (texts) => {
+          if (!seenAtFirstCall) {
+            seenAtFirstCall = JSON.parse(readFileSync(checkpointFile, "utf8"));
+            signals.emit("SIGINT");
+          }
+          return texts.map((t) => [0.1, 0.2, 0.3, 0.4 + t.length / 1000]);
+        },
+      }),
+    };
+    const args = ["--agent", "main", "--apply", "--base", base, "--openclaw-home", freshDir("home"), "--workspace-dir", ws, "--out", out, "--batch-size", "1", "--min-interval-ms", "0", "--no-optimize"];
+    const err = sink();
+    assert.equal(await runCli(args, { stdout: sink(), stderr: err, gatewayState: stopped, createEmbedder: embedder.create, signals }), 1);
+    assert.equal(seenAtFirstCall.done, false);
+    assert.ok(seenAtFirstCall.lanceVersions?.count > 0, "Versionsstand im Checkpoint");
+    assert.match(err.text, /interrupted by SIGINT/);
+    assert.equal(signals.listenerCount("SIGINT"), 0, "Handler wieder entfernt");
+    const partial = await readAll(base, "main");
+    for (const id of [IDS.audio, IDS.filler]) assert.equal(partial.get(id).embeddingTextMode, "raw", "der unterbrochene Block wurde nicht geschrieben");
+    // Fortsetzen mit demselben Aufruf
+    assert.equal(await runCli(args, { stdout: sink(), stderr: sink(), gatewayState: stopped, createEmbedder: fakeEmbedder().create, signals }), 0);
+    const audit = readFileSync(join(ws, ".adaptive-learning", "destructive-ops.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l).result);
+    assert.deepEqual(audit, ["started", "failed", "started", "committed"]);
+    assert.equal((await readAll(base, "main")).get(IDS.audio).embeddingTextMode, "clean-v1");
+  });
+
   it("ein unfertiger Checkpoint mit anderem Modus wird nicht weitergeführt", async () => {
     const base = freshDir("mode");
     const out = freshDir("out");
@@ -372,6 +442,44 @@ describe("runCli --apply im Produktivpfad (<base> unter dem OpenClaw-Home)", () 
     const errFresh = sink();
     assert.equal(await runCli(args, { ...rt, stderr: errFresh, createEmbedder: fakeEmbedder().create }), 1);
     assert.match(errFresh.text, /LanceDB versions differ/);
+  });
+
+  it("ein fremder Schreiber zwischen zwei Teilläufen: Abbruch, ein frischer Snapshot wird die neue Basis", async () => {
+    const { home, base } = await prodSetup();
+    const snap = snapshotOf(home, base, "plur1bus-staged-foreign");
+    const args = ["--agent", "main", "--apply", "--openclaw-home", home, "--min-interval-ms", "0", "--max-rows", "1", "--batch-size", "1", "--json"];
+    const rt = { stderr: sink(), gatewayState: stopped, livePluginVersion: () => "7.20.10", createEmbedder: fakeEmbedder().create };
+    assert.equal(await runCli([...args, "--snapshot", snap], { ...rt, stdout: sink() }), 0);
+    // Gateway lief dazwischen und hat eine Zeile geändert.
+    const t = await (await lancedb.connect(join(base, "main"))).openTable("memories");
+    await t.update({ where: `id = '${IDS.plain}'`, values: { category: "config" } });
+    const err = sink();
+    assert.equal(await runCli([...args, "--snapshot", snap], { ...rt, stdout: sink(), stderr: err }), 1);
+    assert.match(err.text, /table changed since the last checkpoint .*take a fresh snapshot/);
+    const fresh = snapshotOf(home, base, "plur1bus-staged-fresh");
+    const out = sink();
+    assert.equal(await runCli([...args, "--snapshot", fresh], { ...rt, stdout: out }), 0);
+    const [report] = JSON.parse(out.text);
+    assert.equal(report.preconditions.rebasedOnSnapshot, true);
+    assert.equal(report.preconditions.snapshot.lanceVersions.identical, true);
+    const checkpoint = JSON.parse(readFileSync(join(home, "memory", "reembed-clean", "main.checkpoint.json"), "utf8"));
+    assert.equal(checkpoint.snapshot, fresh);
+    assert.equal(checkpoint.done, true);
+  });
+
+  it("ein Abbruch ohne Schreibzugriff öffnet keine Lücke für fremde Versionen", async () => {
+    const { home, base } = await prodSetup();
+    const snap = snapshotOf(home, base, "plur1bus-dims-foreign");
+    const args = ["--agent", "main", "--apply", "--openclaw-home", home, "--snapshot", snap, "--min-interval-ms", "0"];
+    const rt = { stdout: sink(), gatewayState: stopped, livePluginVersion: () => "7.20.10" };
+    const err = sink();
+    assert.equal(await runCli(args, { ...rt, stderr: err, createEmbedder: fakeEmbedder({ dims: 3 }).create }), 1);
+    assert.match(err.text, /dimensions 3 do not match/);
+    const t = await (await lancedb.connect(join(base, "main"))).openTable("memories");
+    await t.update({ where: `id = '${IDS.plain}'`, values: { category: "config" } });
+    const err2 = sink();
+    assert.equal(await runCli(args, { ...rt, stderr: err2, createEmbedder: fakeEmbedder().create }), 1);
+    assert.match(err2.text, /table changed since the last checkpoint/);
   });
 
   it("ein gestaffelter Lauf (--max-rows) kompaktiert erst am Ende", async () => {
