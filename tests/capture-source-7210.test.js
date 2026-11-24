@@ -91,11 +91,13 @@ describe("Herkünfte und Schema", () => {
     assert.match(source, /origin: \{ type: "string", enum: MEMORY_ORIGINS,/);
   });
 
-  it("die neuen Herkünfte gelten nicht als vom Menschen beobachtet", () => {
-    for (const origin of ["subagent", "helper", "inter_session"]) {
+  it("die neuen Herkünfte sind nur Kennzeichnung: epistemischer Status wie 7.20.9", () => {
+    for (const origin of ["subagent", "helper", "inter_session", "dm", "group"]) {
+      assert.equal(decideEpistemicStatusForCapture({ text: "Recherchiere den OKX-Stand", sourceMessageRole: "user", origin }), "observed", origin);
+    }
+    for (const origin of ["cron", "internal", "dream"]) {
       assert.equal(decideEpistemicStatusForCapture({ text: "Recherchiere den OKX-Stand", sourceMessageRole: "user", origin }), "untrusted", origin);
     }
-    assert.equal(decideEpistemicStatusForCapture({ text: "Ich trinke gern Tee", sourceMessageRole: "user", origin: "dm" }), "observed");
   });
 });
 
