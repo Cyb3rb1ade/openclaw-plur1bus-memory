@@ -370,6 +370,68 @@ einen OpenAI-kompatiblen Embedding-Provider. Der SDK-Standard von zehn Minuten
 ließ eine hängende Anfrage einen Recall bis zum Worker-Timeout blockieren. Der
 Provider wiederholt fehlgeschlagene Batches selbst; das SDK wiederholt nicht.
 
+### Bereinigte Einbettung (7.20.10)
+
+Roh speichern, bereinigt einbetten: Neue Erinnerungen (Capture nach dem Turn,
+`memory_store`, Store-Merges) behalten ihren Text wörtlich, der Vektor entsteht
+aus einer bereinigten Kopie. Die Spalte `embeddingTextMode` hält fest, woraus
+der Vektor stammt: `raw` (gespeicherter Text, Bestand), `clean-v1` oder
+`clean-v1-nospeaker`.
+
+| Key | Typ | Default | Beschreibung |
+|-----|-----|---------|--------------|
+| `embedding.cleanText.enabled` | `boolean` | `true` | Bereinigt einbetten. `false` bettet wie bisher den gespeicherten Text ein (`raw`). |
+| `embedding.cleanText.stripSpeaker` | `boolean` | `false` | Auch das Rollenpräfix (`User:`/`Assistant:`) und den Sprecher direkt hinter einem Transkript-Umschlag (`Christian:`) weglassen (`clean-v1-nospeaker`). Bleibt aus, bis gemessen ist. |
+
+Regelsatz `clean-v1` (lib/embedding-text.js, eingefroren; eine Änderung wird
+`clean-v2`): führender Zeitstempel (`[2026-11-24 09:43]`,
+`[Tue 2026-11-24 09:43 GMT+1]`), Metadatenblöcke des Hosts
+(`Conversation info (untrusted metadata):` mit JSON), Umschlag der
+Sprachnachrichten (`[Audio transcript (…)]: "…"`) und Medien-Köpfe
+(`[Audio]`, `User text:`, `Transcript:`), Medien- und Anhang-Stummel als ganze
+Zeile (`[User schickte audio …]`), Kanal-Köpfe alter Eingangsumschläge
+(`[Telegram … id:…]`), Platzhalterzeilen (`[visible thinking]`,
+`[visible toolCall: …]`) und `<think>`-Blöcke, Bühnenanweisungen aus einer
+festen Wortliste (`[räuspert sich]`, `(lacht)`, `(Pause)` …) und Füllwörter
+(ähm, äh, hm, mhm …). Klammern mit anderem Inhalt bleiben stehen. Bleibt nur
+Hülle übrig, wird der Rohtext eingebettet (`raw`).
+
+Die Anfrage des Auto-Recalls verliert nur die Hüllen (Zeitstempel, Metadaten,
+Transkript-Umschlag, Stummel), nicht Füllwörter oder Bühnenanweisungen: Sie
+ist kurz und live, und derselbe Anfragevektor sucht auch im Neo-Index, dessen
+Vektoren roh bleiben. Rerank, Echo-Prüfung und alle anderen Stufen lesen
+weiter die unveränderte Anfrage; `memory_recall`/`memory_search` und der
+Messstand betten die Anfrage wie bisher ein.
+
+Bis der Bestand migriert ist, vergleicht die Duplikatprüfung beim Capture
+bereinigte neue Vektoren mit rohen alten; einzelne Beinahe-Dubletten können
+in dieser Zeit durchrutschen.
+
+**Bestand migrieren** (`scripts/reembed-clean.mjs`, je Agent):
+
+```bash
+node scripts/reembed-clean.mjs --agent main --dry-run          # Anzahl, Regeln, Tokens, Kosten, maskierte Beispiele
+./scripts/backup-snapshot.sh                                    # bei gestopptem Gateway
+node scripts/reembed-clean.mjs --agent main --apply --snapshot ~/.openclaw/.snapshots/plur1bus-YYYYMMDD-HHMMSS
+```
+
+Das Skript wählt Zeilen mit `embeddingTextMode = 'raw'` (Standard nur
+`status = 'active'`, `--status all` für alle). Ändert die Bereinigung den Text
+nicht, stellt es nur den Modus um (kein API-Aufruf); sonst bettet es über den
+Embedding-Provider des Plugins neu ein (`--batch-size`, `--min-interval-ms`,
+`--max-rows`). Geschrieben werden nur `vector` und `embeddingTextMode`; je
+Block prüft es, dass alle anderen Spalten gleich geblieben sind, am Ende
+Zeilenzahl, fehlende Vektoren und die Kosinus-Verteilung alt/neu, danach
+`table.optimize()` (`--no-optimize` schaltet ab). Im Produktivpfad verlangt
+`--apply` einen gestoppten Gateway, ein ausgeliefertes Plugin ≥ 7.20.10 und
+einen Snapshot unter `~/.openclaw/.snapshots` mit denselben LanceDB-Versionen
+wie live. Jeder Lauf schreibt `started`/`committed`/`failed` per
+`appendDestructiveOpLog` in den Workspace des Agenten; Checkpoint und Bericht
+liegen unter `memory/reembed-clean/`. Ein abgebrochener Lauf wird mit demselben
+Aufruf fortgesetzt. Der Probelauf vom 24.11.2026: main 1.042 Zeilen neu
+(≈ 155.000 Tokens), bernhardine 2.311 (≈ 249.000), heisenberg 19; der Rest
+nur Modus.
+
 ### Embedding-Dimensionen
 
 Die PLUR1BUS-Operator-Ansicht trennt Embedding- und Reranker-Modelle. Fuer

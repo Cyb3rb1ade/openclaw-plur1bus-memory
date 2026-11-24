@@ -259,6 +259,23 @@
             "minimum": 1000,
             "description": "Per-request timeout for remote embedding calls (OpenAI-compatible providers). Unset means 15000 ms; the SDK default of ten minutes let a stalled request block a recall until the worker timeout."
           },
+          "cleanText": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "7.20.10: store raw, embed clean. New memories keep their text verbatim; the vector is computed from a cleaned copy without leading timestamps, host metadata blocks, voice-transcript and media envelopes, hidden-block placeholder lines, a fixed list of stage directions and filler words (rule set clean-v1, column embeddingTextMode). The auto-recall query loses only the envelopes. Existing rows keep their vectors until scripts/reembed-clean.mjs re-embeds them.",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true,
+                "description": "Embed the cleaned text (default true). false embeds the stored text as before (embeddingTextMode raw)."
+              },
+              "stripSpeaker": {
+                "type": "boolean",
+                "default": false,
+                "description": "Also drop the role prefix (User:/Assistant:) and the speaker right after a voice-transcript envelope (mode clean-v1-nospeaker). Default false until measured."
+              }
+            }
+          },
           "local": {
             "type": "object",
             "additionalProperties": false,

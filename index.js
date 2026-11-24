@@ -301,6 +301,7 @@ import {
   resolveSessionEchoCutoff,
 } from "./lib/recall-pipeline.js";
 import { isContentFreeHostEnvelope, resolveQualityWeightingConfig } from "./lib/recall-quality.js";
+import { cleanQueryForEmbedding, prepareEmbeddingText, resolveEmbeddingCleanTextConfig } from "./lib/embedding-text.js";
 import { applyRecallBudget, resolveRecallBudget } from "./lib/recall-budget.js";
 import {
   createRecallDecisionTrace,
@@ -1657,6 +1658,9 @@ class MemoryDB {
     // 7.20.10: LanceDB lehnt Appends ab, denen eine Spalte fehlt; Tabellen
     // ohne die Spalte filtert schemaFieldNames unten wieder heraus.
     if (normalized.sessionKey == null) normalized.sessionKey = "";
+    // 7.20.10: Aus welchem Text der Vektor stammt (lib/embedding-text.js).
+    // Ohne Angabe: der gespeicherte Text ("raw").
+    if (normalized.embeddingTextMode == null || normalized.embeddingTextMode === "") normalized.embeddingTextMode = "raw";
     if (!this.schemaFieldNames) return normalized;
     const filtered = {};
     for (const [key, value] of Object.entries(normalized)) {
@@ -1800,6 +1804,10 @@ class MemoryDB {
             // Auto-Recall lässt Erinnerungen aus, die im laufenden Gespräch
             // noch im Kontext stehen. '' = unbekannt (Bestand, memory_store).
             { name: 'sessionKey', valueSql: "''" },
+            // 7.20.10: Text der Einbettung — 'raw' (gespeicherter Text) oder
+            // 'clean-v1'/'clean-v1-nospeaker' (lib/embedding-text.js). Bestand
+            // = 'raw'; scripts/reembed-clean.mjs bettet ihn bereinigt neu ein.
+            { name: 'embeddingTextMode', valueSql: "'raw'" },
           ];
 
           for (const col of allColumns) {
@@ -1907,6 +1915,7 @@ class MemoryDB {
             validFrom: 0,
             validUntil: 0,
             sessionKey: "",
+            embeddingTextMode: "raw",
           },
         ]), "MemoryDB.createTable", "created-table", false);
       }
@@ -5409,6 +5418,9 @@ const plugin = {
     // 7.20.10: Qualitätsgewicht im Auto-Recall (recall.qualityWeighting,
     // Default an, Untergrenze 0,35). memory_recall/memory_search bleiben ungewichtet.
     const qualityWeightingCfg = resolveQualityWeightingConfig(cfg.recall?.qualityWeighting);
+    // 7.20.10: roh speichern, bereinigt einbetten (embedding.cleanText,
+    // Default an, Sprecherpräfix bleibt). Spalte embeddingTextMode.
+    const embeddingCleanTextCfg = resolveEmbeddingCleanTextConfig(cfg.embedding?.cleanText);
     const neoFormatOptions = (idempotencyKey) => ({
       idempotencyKey: idempotencyKey || undefined,
       volatileStateAnnotation: volatileStateAnnotationCfg,
@@ -7045,7 +7057,9 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
       });
       try {
         return await pool.withWriteDb(storeAgentId, async (storeDb) => {
-        const vector = await embeddings.embed(params.text, { agentId: storeAgentId });
+        // 7.20.10: bereinigt einbetten, wörtlich speichern (lib/embedding-text.js).
+        const storeEmbedInput = prepareEmbeddingText(params.text, embeddingCleanTextCfg);
+        const vector = await embeddings.embed(storeEmbedInput.text, { agentId: storeAgentId });
         const categoryResult = params.category
           ? { category: params.category, reason: "caller-provided" }
           : categorizeMemoryWithReason(params.text);
@@ -7189,9 +7203,10 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   return null;
                 }
                 const mergedImportance = Math.max(importance, authoritativeCandidate.importance ?? 0.5);
-                const mergedVector = await embeddings.embed(mergeResult.mergedText, { agentId: storeAgentId });
+                const mergedEmbedInput = prepareEmbeddingText(mergeResult.mergedText, embeddingCleanTextCfg);
+                const mergedVector = await embeddings.embed(mergedEmbedInput.text, { agentId: storeAgentId });
                 const mergedValidTime = combineValidTimeForMerge(authoritativeCandidate, { validFrom: capturedValidFrom, validUntil: capturedValidUntil });
-                const mergedEntry = applyDynamicsDefaults({ id: replacementId, text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: mergedImportance, category, createdAt: Date.now(), mergedFrom: JSON.stringify(durableMergeLineage(authoritativeCandidate)), expiresAt, ...ownershipFields, ...durableMergeEpistemicMetadata(authoritativeCandidate), sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, validFrom: mergedValidTime.validFrom, validUntil: mergedValidTime.validUntil }, Date.now(), halfLifeOverrides, { flashbulbEncodingEnabled });
+                const mergedEntry = applyDynamicsDefaults({ id: replacementId, text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: mergedImportance, category, createdAt: Date.now(), mergedFrom: JSON.stringify(durableMergeLineage(authoritativeCandidate)), expiresAt, ...ownershipFields, ...durableMergeEpistemicMetadata(authoritativeCandidate), sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, validFrom: mergedValidTime.validFrom, validUntil: mergedValidTime.validUntil, embeddingTextMode: mergedEmbedInput.mode }, Date.now(), halfLifeOverrides, { flashbulbEncodingEnabled });
                 return { mergedEntry, mergeResult, mergedImportance };
               },
             });
@@ -7217,7 +7232,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
 
         // 3. Normal store
         const summary = generateSummary(params.text, summaryMaxWords);
-        const entry = applyDynamicsDefaults({ id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, ...ownershipFields, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, validFrom: capturedValidFrom, validUntil: capturedValidUntil, epistemicStatus: decideEpistemicStatusForCapture({ text: params.text, sourceMessageRole: "", origin, cutoffFailed: !epistemicCutoffBoot.ok }) }, Date.now(), halfLifeOverrides, { flashbulbEncodingEnabled });
+        const entry = applyDynamicsDefaults({ id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, ...ownershipFields, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, validFrom: capturedValidFrom, validUntil: capturedValidUntil, embeddingTextMode: storeEmbedInput.mode, epistemicStatus: decideEpistemicStatusForCapture({ text: params.text, sourceMessageRole: "", origin, cutoffFailed: !epistemicCutoffBoot.ok }) }, Date.now(), halfLifeOverrides, { flashbulbEncodingEnabled });
         await storeDb.store(entry);
         if (riCfg.enabled) {
           setImmediate(() => {
@@ -11505,9 +11520,13 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 api.logger.info(`memory-lancedb-namespaced: chunking split ${chunkPlan.split} of ${preppedOk.length} item(s) into ${chunkPlan.parts} part(s), ${chunkPlan.needsLlm} would need a model${decided} for agent=${agentId}`);
               }
             }
+            // 7.20.10: Vektor aus dem bereinigten Text (lib/embedding-text.js),
+            // gespeichert wird weiter p.text. Die Map ist nach Einbettungstext
+            // geschlüsselt; embeddingTextMode wandert in die Zeile.
+            const embedInputs = new Map(validPreps.map((p) => [p, prepareEmbeddingText(p.text, embeddingCleanTextCfg)]));
             const textToVector = new Map();
             if (validPreps.length > 0 && typeof embeddings.embedBatch === "function") {
-              const textsToEmbed = validPreps.map((p) => p.text);
+              const textsToEmbed = [...new Set(validPreps.map((p) => embedInputs.get(p).text))];
               try {
                 for (let i = 0; i < textsToEmbed.length; i += batchSize) {
                   throwIfCaptureAborted();
@@ -11536,16 +11555,17 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             // EINER Dedup-Gruppe, und DEFAULT_MAX_PER_GROUP = 2 haette hoechstens
             // zwei davon durchgelassen statt "Ganzes und bis zu zwei Teile".
             const prepared = await Promise.all(validPreps.map(async (p) => {
-              let vector = textToVector.get(p.text);
+              const embedInput = embedInputs.get(p);
+              let vector = textToVector.get(embedInput.text);
               if (!vector) {
                 try {
-                  vector = await embeddings.embed(p.text, { agentId });
+                  vector = await embeddings.embed(embedInput.text, { agentId });
                 } catch (err) {
                   api.logger.warn(`memory-lancedb-namespaced: embed failed for capture item: ${String(err)}`);
                   return { it: p.it, text: p.text, chunkGroupId: p.chunkGroupId || "", vector: null, ok: false };
                 }
               }
-              return { it: p.it, text: p.text, chunkGroupId: p.chunkGroupId || "", vector, ok: true };
+              return { it: p.it, text: p.text, chunkGroupId: p.chunkGroupId || "", vector, embeddingTextMode: embedInput.mode, ok: true };
             }));
             throwIfCaptureAborted();
 
@@ -11606,6 +11626,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   chunkGroupId: p.chunkGroupId || "",
                   sourceMessageRole: p.it.role || "",
                   sessionKey: captureSessionKey,
+                  embeddingTextMode: p.embeddingTextMode || "raw",
                   epistemicStatus: decideEpistemicStatusForCapture({
                     text: p.text,
                     sourceMessageRole: p.it.role || "",
@@ -12257,7 +12278,9 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 maxTextPreviewChars: traceCfg.maxTextPreviewChars ?? 160,
                 maxCandidates: traceCfg.maxCandidates ?? 50,
               });
-              const vector = await embeddings.embed(params.text, { agentId });
+              // 7.20.10: bereinigt einbetten, wörtlich speichern (lib/embedding-text.js).
+              const storeEmbedInput = prepareEmbeddingText(params.text, embeddingCleanTextCfg);
+              const vector = await embeddings.embed(storeEmbedInput.text, { agentId });
               const workspaceKey = ownershipFields.workspaceKey;
               const categoryResult = params.category
                 ? { category: params.category, reason: "caller-provided" }
@@ -12397,7 +12420,8 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                         return null;
                       }
                       const mergedImportance = Math.max(importance, authoritativeCandidate.importance ?? 0.5);
-                      const mergedVector = await embeddings.embed(mergeResult.mergedText, { agentId });
+                      const mergedEmbedInput = prepareEmbeddingText(mergeResult.mergedText, embeddingCleanTextCfg);
+                      const mergedVector = await embeddings.embed(mergedEmbedInput.text, { agentId });
                       const { emotion: mergedEmotion, emotionStatus: mergedEmotionStatus } = await classifyEmotionForStore(mergeResult.mergedText, { agentId, importance: mergedImportance });
                       const mergedMoodContext = emotionalPool.snapshot(agentId);
                       const mergedValidTime = combineValidTimeForMerge(authoritativeCandidate, { validFrom: capturedValidFrom, validUntil: capturedValidUntil });
@@ -12412,6 +12436,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                         moodContextAtCapture: serializeEmotionalValence(mergedMoodContext),
                         emotionStatus: mergedEmotionStatus,
                         validFrom: mergedValidTime.validFrom, validUntil: mergedValidTime.validUntil,
+                        embeddingTextMode: mergedEmbedInput.mode,
                       }, Date.now(), halfLifeOverrides, { intensityHalfLifeFactor: emotionIntensityHalfLifeFactor, flashbulbEncodingEnabled });
                       return { mergedEntry, mergeResult, mergedImportance };
                     },
@@ -12452,6 +12477,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 moodContextAtCapture: serializeEmotionalValence(moodContext),
                 emotionStatus,
                 validFrom: capturedValidFrom, validUntil: capturedValidUntil,
+                embeddingTextMode: storeEmbedInput.mode,
               }, Date.now(), halfLifeOverrides, { intensityHalfLifeFactor: emotionIntensityHalfLifeFactor, flashbulbEncodingEnabled });
               await db.store(entry);
               if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.stored", timestamp: new Date().toISOString(), agentId, memoryId: entry.id, text: params.text.slice(0, 200), category, origin, reason: "stored", relatedId: null });
@@ -13089,7 +13115,10 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               let queryVector = null;
               const embedStartedAt = Date.now();
               try {
-                const embedPromise = Promise.resolve(typeof embeddings.embedQuery === "function" ? embeddings.embedQuery(event.prompt, { agentId: requester.requesterAgentId }) : embeddings.embed(event.prompt, { agentId: requester.requesterAgentId }));
+                // 7.20.10: derselbe Einbettungstext wie im LanceDB-Recall
+                // (embeddingQuery), damit der Embedding-Cache trifft.
+                const neoEmbedQuery = cleanQueryForEmbedding(event.prompt, embeddingCleanTextCfg);
+                const embedPromise = Promise.resolve(typeof embeddings.embedQuery === "function" ? embeddings.embedQuery(neoEmbedQuery, { agentId: requester.requesterAgentId }) : embeddings.embed(neoEmbedQuery, { agentId: requester.requesterAgentId }));
                 let embedTimer = null;
                 const embedTimeout = new Promise((resolve) => { embedTimer = setTimeout(() => resolve(NEO_EMBED_TIMEOUT), neoGlobalRecall.embedTimeoutMs); });
                 try {
@@ -13323,6 +13352,9 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             // Kanonische Treffer zusaetzlich zu maxPromptMemories (7.20.6).
             canonicalOutsideLimit: true,
             autoRecallPolicy: autoRecallPolicyOptions,
+            // 7.20.10: Anfragevektor ohne Hüllen (Transkript-Umschlag,
+            // Zeitstempel, Metadaten); Rerank und Echo-Prüfung lesen weiter query.
+            embeddingQuery: cleanQueryForEmbedding(event.prompt, embeddingCleanTextCfg),
             phaseTimer: timer,
             softBudgetFallback,
             embeddings,

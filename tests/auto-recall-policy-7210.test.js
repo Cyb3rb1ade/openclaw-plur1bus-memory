@@ -244,7 +244,8 @@ describe("Verdrahtung in index.js", () => {
 
   it("Spalte sessionKey: Migration mit valueSql, Bootstrap-Zeile, Default im Schreibpfad", () => {
     assert.match(source, /\{ name: 'sessionKey', valueSql: "''" \}/);
-    assert.match(source, /validUntil: 0,\n\s*sessionKey: "",\n\s*\},\n\s*\]\), "MemoryDB\.createTable"/);
+    // Weitere Spalten (embeddingTextMode, 7.20.10) dürfen folgen.
+    assert.match(source, /validUntil: 0,\n\s*sessionKey: "",\n(?:\s*\w+: "[^"\n]*",\n)*\s*\},\n\s*\]\), "MemoryDB\.createTable"/);
     assert.match(source, /if \(normalized\.sessionKey == null\) normalized\.sessionKey = "";/);
   });
 

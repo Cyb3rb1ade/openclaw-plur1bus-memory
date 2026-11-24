@@ -94,6 +94,8 @@ const TABLE_NAME = "memories";
       "validUntil",
       // 7.20.10: Sitzung des Captures für den Auto-Recall.
       "sessionKey",
+      // 7.20.10: Text der Einbettung (raw/clean-v1).
+      "embeddingTextMode",
     ];
 
     for (const col of v6Columns) {
@@ -129,6 +131,7 @@ const TABLE_NAME = "memories";
     assert.equal(typeof oldRow.validFrom, "bigint", "migrated LanceDB int64 validFrom must exercise the native BigInt path");
     assert.equal(typeof oldRow.validUntil, "bigint", "migrated LanceDB int64 validUntil must exercise the native BigInt path");
     assert.strictEqual(oldRow.sessionKey, "", "default sessionKey = empty (Bestand: keine Sitzung bekannt)");
+    assert.strictEqual(oldRow.embeddingTextMode, "raw", "default embeddingTextMode = raw (Bestand: Vektor aus dem gespeicherten Text)");
 
     // 6. Verify idempotency: init() again should not throw
     await memoryDb.init();
@@ -209,6 +212,7 @@ const TABLE_NAME = "memories";
         validFrom: 0,
         validUntil: 0,
         sessionKey: "",
+        embeddingTextMode: "raw",
       },
     ]);
 
@@ -322,5 +326,20 @@ const TABLE_NAME = "memories";
     const sessionRows = await memoryDb.table.query().toArray();
     assert.equal(sessionRows.find((r) => r.id === "fresh-session").sessionKey, "agent:main:telegram:direct:1");
     assert.equal(sessionRows.find((r) => r.id === "fresh-1").sessionKey, "", "store() ohne sessionKey schreibt den Default");
+
+    // 7.20.10: embeddingTextMode kommt mit, ein Writer ohne das Feld bekommt "raw".
+    await memoryDb.store({
+      id: "fresh-clean",
+      text: "[Tue 2026-11-24 09:43 GMT+1] Ähm, captured with a clean vector",
+      vector: new Float32Array(VECTOR_DIM).fill(0.5),
+      importance: 0.5,
+      category: "fact",
+      createdAt: Date.now(),
+      embeddingTextMode: "clean-v1",
+    });
+    const modeRows = await memoryDb.table.query().toArray();
+    assert.equal(modeRows.find((r) => r.id === "fresh-clean").embeddingTextMode, "clean-v1");
+    assert.equal(modeRows.find((r) => r.id === "fresh-clean").text, "[Tue 2026-11-24 09:43 GMT+1] Ähm, captured with a clean vector", "der Text bleibt wörtlich");
+    assert.equal(modeRows.find((r) => r.id === "fresh-1").embeddingTextMode, "raw", "store() ohne embeddingTextMode schreibt den Default");
   });
 });

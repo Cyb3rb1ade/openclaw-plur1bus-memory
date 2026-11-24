@@ -53,6 +53,7 @@ BREAKING_CHANGE_AUDIT.md
 !scripts/auto-capture-lancedb.mjs
 !scripts/build-code-index.mjs
 !scripts/reindex-provider.mjs
+!scripts/reembed-clean.mjs
 !scripts/embed-promoted-memories.mjs
 !scripts/install-memory-system.sh
 !scripts/provider-wizard.mjs
