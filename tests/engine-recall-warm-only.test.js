@@ -424,6 +424,39 @@ describe("RecallQuery.warmOnly (E5 Task 9)", () => {
       await engine.close({ budgetMs: 5_000 });
     }
   });
+
+  it("7.20.8: an anchor phrase starts no anchor lookup, warm or real", async () => {
+    // Up to 7.20.7 "after the X" embedded X and read the table a second time
+    // (before the ACL check), on the warm path as well.
+    const workspace = makeTempDir("t9-h-ws-");
+    const host = createStubHost({
+      stateDir: makeTempDir("t9-h-state-"),
+      workspaceDir: async () => workspace,
+      logger: { info() {}, warn() {}, error() {}, debug() {} },
+    });
+    const embeddings = recordingEmbedder();
+    const baseDbPath = join(makeTempDir("t9-h-root-"), "lancedb-namespaced");
+    const engine = createEngine(host, config(baseDbPath, { neo: { enabled: false } }), { internals: { embeddings } });
+    const anchorQuery = "what happened after the roadmap review";
+    try {
+      await internalsOf(engine).pool.withWriteDb(AGENT, async (db) => {
+        await db.init();
+        await db.store({ text: "The roadmap review is on Tuesday.", vector: vector(), category: "fact", createdAt: Date.now(), storedBy: AGENT });
+      });
+      const warm = await engine.recall({ query: anchorQuery, principal, agent, signal: new AbortController().signal, warmOnly: true });
+      assert.equal(warm.degraded, null);
+      const warmQueries = textsOf(embeddings.calls.embedQuery);
+      assert.ok(warmQueries.includes(anchorQuery), `the warm pipeline embedded the query: ${JSON.stringify(warmQueries)}`);
+      // The anchor lookup embedded its reference ("roadmap review") with embed().
+      assert.deepEqual(textsOf(embeddings.calls.embed), [], "the warm path embeds no anchor reference");
+      const real = await engine.recall({ query: anchorQuery, principal, agent, signal: new AbortController().signal });
+      assert.equal(real.degraded, null);
+      const all = [...textsOf(embeddings.calls.embedQuery), ...textsOf(embeddings.calls.embed)];
+      assert.ok(!all.includes("roadmap review"), `the real recall embeds no anchor reference: ${JSON.stringify(all)}`);
+    } finally {
+      await engine.close({ budgetMs: 5_000 });
+    }
+  });
 });
 
 describe("createNeoStore readOnly (E5 Task 9)", () => {
