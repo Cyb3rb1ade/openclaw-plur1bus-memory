@@ -422,13 +422,15 @@ Embedding-Provider des Plugins neu ein (`--batch-size`, `--min-interval-ms`,
 `--max-rows`). Geschrieben werden nur `vector` und `embeddingTextMode`; je
 Block prüft es, dass alle anderen Spalten gleich geblieben sind, am Ende
 Zeilenzahl, fehlende Vektoren und die Kosinus-Verteilung alt/neu, danach
-`table.optimize()` (`--no-optimize` schaltet ab). Im Produktivpfad verlangt
+`table.optimize()` (`--no-optimize` schaltet ab; bei `--max-rows` erst nach
+dem letzten Teil). Im Produktivpfad verlangt
 `--apply` einen gestoppten Gateway, ein ausgeliefertes Plugin ≥ 7.20.10 und
 einen Snapshot unter `~/.openclaw/.snapshots` mit denselben LanceDB-Versionen
 wie live. Jeder Lauf schreibt `started`/`committed`/`failed` per
 `appendDestructiveOpLog` in den Workspace des Agenten; Checkpoint und Bericht
-liegen unter `memory/reembed-clean/`. Ein abgebrochener Lauf wird mit demselben
-Aufruf fortgesetzt. Der Probelauf vom 24.11.2026: main 1.039 Zeilen neu
+liegen unter `memory/reembed-clean/`. Ein abgebrochener oder gestaffelter Lauf
+wird mit demselben Aufruf und demselben Snapshot fortgesetzt; live darf dann
+mehr Versionen haben als der Snapshot, aber keine fehlen. Der Probelauf vom 24.11.2026: main 1.039 Zeilen neu
 (≈ 154.000 Tokens), bernhardine 2.311 (≈ 249.000), heisenberg 19; der Rest
 nur Modus.
 

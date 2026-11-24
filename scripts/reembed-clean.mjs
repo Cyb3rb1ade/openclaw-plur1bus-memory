@@ -49,8 +49,11 @@
  * (ältere Versionen schreiben Zeilen ohne die neue Spalte), frischer Snapshot
  * unter <openclaw-home>/.snapshots mit denselben LanceDB-Versionen wie live.
  * Jeder Lauf schreibt "started"/"committed"/"failed" per appendDestructiveOpLog.
- * Wiederaufnahme: einfach erneut starten — verarbeitete Zeilen sind nicht mehr
- * 'raw'; der Checkpoint hält Modus und Auswahl fest, damit kein Lauf Modi mischt.
+ * Wiederaufnahme: mit demselben Aufruf (auch demselben --snapshot) erneut
+ * starten — verarbeitete Zeilen sind nicht mehr 'raw'; der Checkpoint hält
+ * Modus, Auswahl, Tabelle und Snapshot fest, damit kein Lauf Modi mischt. Beim
+ * Fortsetzen genügt, dass live alle Versionen des Snapshots enthält.
+ * table.optimize() läuft erst, wenn alle Zeilen durch sind.
  */
 
 import { execFileSync } from "node:child_process";
@@ -316,9 +319,11 @@ function lanceVersions(dir) {
 /**
  * Prüft, dass der Snapshot (Layout von scripts/backup-snapshot.sh) dieselben
  * LanceDB-Versionen der Tabelle enthält wie live — bei gestopptem Gateway der
- * Beweis, dass er aktuell ist.
+ * Beweis, dass er aktuell ist. Beim Fortsetzen eines unfertigen Laufs
+ * (allowSuperset) genügt es, dass live alle Versionen des Snapshots enthält:
+ * die zusätzlichen hat der frühere Teil dieses Laufs geschrieben.
  */
-function verifySnapshot(snapshotDir, { openclawHome, base, agent, isProd }) {
+function verifySnapshot(snapshotDir, { openclawHome, base, agent, isProd, allowSuperset = false }) {
   const problems = [];
   if (!existsSync(join(snapshotDir, "manifest.json"))) problems.push("manifest.json missing");
   if (isProd) {
@@ -335,9 +340,18 @@ function verifySnapshot(snapshotDir, { openclawHome, base, agent, isProd }) {
   const live = lanceVersions(join(base, agent, `${TABLE_NAME}.lance`, "_versions"));
   const snap = snapAgent ? lanceVersions(join(snapAgent, `${TABLE_NAME}.lance`, "_versions")) : null;
   const identical = Boolean(live && snap) && live.length === snap.length && live.every((v, i) => v === snap[i]);
+  // Mengen-Inklusion: die Dateinamen sortieren nicht numerisch ("10…" < "9…").
+  const liveSet = new Set(live || []);
+  const superset = Boolean(live && snap) && snap.every((v) => liveSet.has(v));
   if (!snapAgent) problems.push(`no ${agent}/${TABLE_NAME}.lance in snapshot`);
-  else if (!identical) problems.push(`LanceDB versions differ (live ${live?.length ?? "-"}, snapshot ${snap?.length ?? "-"})`);
-  return { snapshot: snapshotDir, ok: problems.length === 0, problems, lanceVersions: { live: live?.length ?? 0, snapshot: snap?.length ?? 0, identical } };
+  else if (!identical && !(allowSuperset && superset)) problems.push(`LanceDB versions differ (live ${live?.length ?? "-"}, snapshot ${snap?.length ?? "-"})`);
+  return {
+    snapshot: snapshotDir,
+    ok: problems.length === 0,
+    problems,
+    lanceVersions: { live: live?.length ?? 0, snapshot: snap?.length ?? 0, identical },
+    ...(allowSuperset && superset && !identical ? { resumedWithSupersetSnapshot: true } : {}),
+  };
 }
 
 function loadOpenclawConfig(openclawHome) {
@@ -495,8 +509,23 @@ async function runAgent(agent, ctx) {
     if (!versionAtLeast(liveVersion, MIN_PLUGIN_VERSION)) throw new Error(`live plugin ${liveVersion || "unknown"} is older than 7.20.10 — deploy first (older versions cannot write rows with embeddingTextMode)`);
     if (!options.snapshot) throw new Error("production apply requires --snapshot <dir> from scripts/backup-snapshot.sh taken after the gateway stopped");
   }
+  // Checkpoint vor dem Snapshot-Abgleich lesen: ein unfertiger Lauf (Abbruch
+  // oder --max-rows) hat seit dem Snapshot selbst Versionen geschrieben.
+  const tablePath = join(agentDir, `${TABLE_NAME}.lance`);
+  const checkpointPath = join(outDir, `${agent}.checkpoint.json`);
+  const previous = readCheckpoint(checkpointPath);
+  const resuming = Boolean(previous && previous.done !== true);
+  if (resuming) {
+    if (previous.textMode !== textMode || previous.statusFilter !== options.status || (previous.table && previous.table !== tablePath)) {
+      throw new Error(`unfinished checkpoint uses ${previous.textMode}/${previous.statusFilter} on ${previous.table || "?"}; finish it with the same settings or move ${checkpointPath} away`);
+    }
+    report.resumedFrom = previous.updatedAt;
+  }
   if (options.snapshot) {
-    const snap = verifySnapshot(options.snapshot, { openclawHome, base, agent, isProd });
+    // Mehr Versionen als der Snapshot nur beim Fortsetzen mit genau dem Snapshot,
+    // der vor dem ersten Teil des Laufs geprüft wurde.
+    const allowSuperset = resuming && previous.snapshot === options.snapshot;
+    const snap = verifySnapshot(options.snapshot, { openclawHome, base, agent, isProd, allowSuperset });
     report.preconditions.snapshot = snap;
     if (!snap.ok) throw new Error(`snapshot does not match the current state: ${snap.problems.join("; ")}`);
   }
@@ -504,18 +533,11 @@ async function runAgent(agent, ctx) {
   if (!workspaceDir || !existsSync(workspaceDir)) throw new Error("no workspace directory for the audit log; pass --workspace-dir");
   report.preconditions.auditLog = join(workspaceDir, ".adaptive-learning", "destructive-ops.jsonl");
 
-  const checkpointPath = join(outDir, `${agent}.checkpoint.json`);
-  const previous = readCheckpoint(checkpointPath);
-  if (previous && previous.done !== true) {
-    if (previous.textMode !== textMode || previous.statusFilter !== options.status) {
-      throw new Error(`unfinished checkpoint uses ${previous.textMode}/${previous.statusFilter}; finish it with the same settings or move ${checkpointPath} away`);
-    }
-    report.resumedFrom = previous.updatedAt;
-  } else if (previous) {
+  if (previous && !resuming) {
     renameSync(checkpointPath, `${checkpointPath}.${String(previous.updatedAt || "done").replace(/[^0-9A-Za-z]/g, "")}`);
   }
-  const checkpoint = previous && previous.done !== true ? previous : {
-    version: 1, agent, table: join(agentDir, `${TABLE_NAME}.lance`), textMode, stripSpeaker: cleanCfg.stripSpeaker,
+  const checkpoint = resuming ? previous : {
+    version: 1, agent, table: tablePath, textMode, stripSpeaker: cleanCfg.stripSpeaker, snapshot: options.snapshot || null,
     statusFilter: options.status, startedAt: new Date(now).toISOString(), batches: 0, rowsReembedded: 0, rowsModeOnly: 0, providerCalls: 0, done: false,
   };
   const saveCheckpoint = () => {
@@ -616,13 +638,16 @@ async function runAgent(agent, ctx) {
     };
     if (rowsAfter !== rowsBefore) throw new Error(`row count changed: ${rowsBefore} → ${rowsAfter}`);
     if (nullVectors !== 0) throw new Error(`${nullVectors} rows without vector`);
-    if (options.optimize) {
+    const complete = plan.reembed.length === limited.length;
+    // Kompaktieren erst, wenn alles durch ist: zwischen Teilläufen würde
+    // optimize() die Versionen umschichten, auf die der Snapshot-Abgleich baut.
+    if (options.optimize && complete) {
       const stats = await table.optimize();
       report.optimize = { fragmentsRemoved: Number(stats?.compaction?.fragmentsRemoved || 0), fragmentsAdded: Number(stats?.compaction?.fragmentsAdded || 0) };
       const rowsAfterOptimize = await table.countRows();
       if (rowsAfterOptimize !== rowsBefore) throw new Error(`row count changed by optimize: ${rowsBefore} → ${rowsAfterOptimize}`);
     }
-    checkpoint.done = plan.reembed.length === limited.length;
+    checkpoint.done = complete;
     saveCheckpoint();
     report.progress = progress;
     audit({ result: "committed", progress, verification: report.verification });

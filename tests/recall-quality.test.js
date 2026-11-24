@@ -78,6 +78,9 @@ describe("computeRecallQualityWeight", () => {
     const r = weigh("[visible thinking]\nOkay, dann bleibt alles im Speicher und wir lösen es über das Ranking.", { sourceMessageRole: "assistant" });
     assert.deepEqual(r.rules, ["thinkingPrefix", "assistantClaim"]);
     assert.equal(weigh("Der Marker „[visible thinking]“ stand im Recall-Block mitten im Satz.").rules.includes("thinkingPrefix"), false, "Zitat mitten im Satz");
+    // Ein erwähntes <think> ohne Abschluss ist kein Block: der Text bleibt ganz.
+    assert.deepEqual(weigh("Die <think>-Blöcke von Qwen blenden wir aus, der Inhalt danach zählt aber voll für das Ranking.").rules, []);
+    assert.deepEqual(weigh("<think>intern</think>Die Antwort steht fest, Version 7.20.10 ist ausgeliefert und läuft.").rules, ["thinkingPrefix"]);
   });
 
   it("Untergrenze konfigurierbar, Gewicht nie über 1", () => {

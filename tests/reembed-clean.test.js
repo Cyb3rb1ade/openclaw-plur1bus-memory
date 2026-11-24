@@ -350,6 +350,45 @@ describe("runCli --apply im Produktivpfad (<base> unter dem OpenClaw-Home)", () 
     assert.ok(existsSync(join(home, "workspace", ".adaptive-learning", "destructive-ops.jsonl")));
     assert.ok(existsSync(join(home, "memory", "reembed-clean", "main.checkpoint.json")));
   });
+
+  it("ein abgebrochener Lauf lässt sich mit demselben Snapshot fortsetzen", async () => {
+    const { home, base } = await prodSetup();
+    const snap = snapshotOf(home, base, "plur1bus-resume");
+    const args = ["--agent", "main", "--apply", "--openclaw-home", home, "--snapshot", snap, "--batch-size", "1", "--min-interval-ms", "0"];
+    const rt = { stdout: sink(), gatewayState: stopped, livePluginVersion: () => "7.20.10" };
+    const err = sink();
+    assert.equal(await runCli(args, { ...rt, stderr: err, createEmbedder: fakeEmbedder({ failOnCall: 2 }).create }), 1);
+    assert.match(err.text, /provider down/);
+    const out = sink();
+    const second = fakeEmbedder();
+    assert.equal(await runCli([...args, "--json"], { ...rt, stdout: out, stderr: sink(), createEmbedder: second.create }), 0);
+    const [report] = JSON.parse(out.text);
+    assert.equal(report.preconditions.snapshot.resumedWithSupersetSnapshot, true);
+    assert.equal(second.calls.length, 1, "nur die restliche Zeile");
+    const checkpoint = JSON.parse(readFileSync(join(home, "memory", "reembed-clean", "main.checkpoint.json"), "utf8"));
+    assert.equal(checkpoint.done, true);
+    assert.equal(checkpoint.snapshot, snap);
+    // Ein neuer Lauf mit dem alten Snapshot ist kein Fortsetzen mehr: live hat jetzt mehr Versionen.
+    const errFresh = sink();
+    assert.equal(await runCli(args, { ...rt, stderr: errFresh, createEmbedder: fakeEmbedder().create }), 1);
+    assert.match(errFresh.text, /LanceDB versions differ/);
+  });
+
+  it("ein gestaffelter Lauf (--max-rows) kompaktiert erst am Ende", async () => {
+    const { home, base } = await prodSetup();
+    const snap = snapshotOf(home, base, "plur1bus-staged");
+    const args = ["--agent", "main", "--apply", "--openclaw-home", home, "--snapshot", snap, "--min-interval-ms", "0", "--max-rows", "1", "--json"];
+    const rt = { stderr: sink(), gatewayState: stopped, livePluginVersion: () => "7.20.10", createEmbedder: fakeEmbedder().create };
+    let out = sink();
+    assert.equal(await runCli(args, { ...rt, stdout: out }), 0);
+    let [report] = JSON.parse(out.text);
+    assert.equal(report.optimize, undefined, "Teillauf ohne optimize()");
+    out = sink();
+    assert.equal(await runCli(args, { ...rt, stdout: out }), 0);
+    [report] = JSON.parse(out.text);
+    assert.equal(report.preconditions.snapshot.resumedWithSupersetSnapshot, true);
+    assert.ok(report.optimize, "letzter Teil kompaktiert");
+  });
 });
 
 function readdirReport(dir) {
