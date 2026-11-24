@@ -457,8 +457,10 @@ jemand anderes geschrieben (Gateway zwischen zwei Teilläufen) oder wurde ein
 Block hart abgebrochen (SIGKILL, OOM), bricht das Skript ab: dann bei
 gestopptem Gateway einen frischen Snapshot ziehen und mit ihm neu starten, er
 wird die neue Basis. Der Gateway bleibt deshalb zwischen Teilläufen gestoppt.
-Ctrl-C oder SIGTERM beenden den laufenden Block und schreiben `failed` und den
-Checkpoint; ein zweites Signal beendet sofort. Der Probelauf vom 24.11.2026 (Regeln
+Ctrl-C oder SIGTERM beenden den laufenden Block, schreiben `failed` und den
+Checkpoint und beenden den ganzen Lauf: weitere `--agent` werden nicht mehr
+begonnen (im Bericht `skipped: interrupted`); ein zweites Signal beendet
+sofort. Der Probelauf vom 24.11.2026 (Regeln
 dieses Releases): main 1.075 Zeilen neu
 (≈ 156.000 Tokens), bernhardine 2.310 (≈ 247.000), heisenberg 19; der Rest
 nur Modus. In den 1.075 stecken die 27 Talk-Mode-Zeilen von main (die anderen

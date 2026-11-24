@@ -317,6 +317,75 @@ describe("runCli --apply (Kopie außerhalb des OpenClaw-Homes)", () => {
     assert.equal((await readAll(base, "main")).get(IDS.audio).embeddingTextMode, "clean-v1");
   });
 
+  it("ein Signal beendet den ganzen Lauf: weitere Agenten werden nicht begonnen (Befund REEMBED-SIGINT-MULTI)", async () => {
+    const base = freshDir("sig-multi");
+    const ws = freshDir("ws");
+    const out = freshDir("out");
+    const agents = ["main", "bernhardine", "heisenberg"];
+    for (const agent of agents) await makeTable(base, agent);
+    const signals = new EventEmitter();
+    let calls = 0;
+    let listenersAfterSecond = null;
+    const embedder = {
+      create: async () => ({
+        model: "fake",
+        dimensions: DIM,
+        embedBatch: async (texts) => {
+          calls += 1;
+          // main: zwei Blöcke (batch-size 1); erster Block von bernhardine: zweimal SIGINT.
+          if (calls === 3) {
+            signals.emit("SIGINT");
+            signals.emit("SIGINT");
+            listenersAfterSecond = signals.listenerCount("SIGINT");
+          }
+          return texts.map((t) => [0.1, 0.2, 0.3, 0.4 + t.length / 1000]);
+        },
+      }),
+    };
+    const args = [...agents.flatMap((a) => ["--agent", a]), "--apply", "--base", base, "--openclaw-home", freshDir("home"), "--workspace-dir", ws, "--out", out, "--batch-size", "1", "--min-interval-ms", "0", "--no-optimize", "--json"];
+    const stdout = sink();
+    const err = sink();
+    assert.equal(await runCli(args, { stdout, stderr: err, gatewayState: stopped, createEmbedder: embedder.create, signals }), 1);
+    assert.equal(calls, 3, "nach dem Signal kein weiterer Provider-Aufruf");
+    assert.equal(listenersAfterSecond, 0, "das zweite Signal nimmt die Handler sofort weg");
+    assert.equal(signals.listenerCount("SIGINT") + signals.listenerCount("SIGTERM"), 0);
+    const reports = JSON.parse(stdout.text);
+    assert.deepEqual(reports.map((r) => [r.agent, r.error ?? "ok"]), [
+      ["main", "ok"],
+      ["bernhardine", "interrupted by SIGINT; stopped after the last complete block"],
+      ["heisenberg", "skipped (interrupted by SIGINT)"],
+    ]);
+    assert.equal(reports[2].skipped, "interrupted");
+    assert.match(err.text, /skipped heisenberg/);
+    assert.equal((await readAll(base, "main")).get(IDS.audio).embeddingTextMode, "clean-v1");
+    const bern = await readAll(base, "bernhardine");
+    for (const id of [IDS.audio, IDS.filler]) assert.equal(bern.get(id).embeddingTextMode, "raw", "unterbrochener Block nicht geschrieben");
+    const heis = await readAll(base, "heisenberg");
+    assert.ok([...heis.values()].every((r) => r.embeddingTextMode === "raw"), "heisenberg unberührt, auch keine Modus-Umstellung");
+    const audit = readFileSync(join(ws, ".adaptive-learning", "destructive-ops.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    assert.deepEqual(audit.map((e) => `${e.agentId}:${e.result}`), ["main:started", "main:committed", "bernhardine:started", "bernhardine:failed"]);
+    assert.equal(existsSync(join(out, "heisenberg.checkpoint.json")), false);
+  });
+
+  it("ein Signal während der Vorprüfungen beginnt den Agenten nicht", async () => {
+    const base = freshDir("sig-pre");
+    const ws = freshDir("ws");
+    await makeTable(base, "main");
+    const signals = new EventEmitter();
+    const gatewayState = () => {
+      signals.emit("SIGTERM");
+      return stopped();
+    };
+    const err = sink();
+    const code = await runCli(["--agent", "main", "--apply", "--base", base, "--openclaw-home", freshDir("home"), "--workspace-dir", ws, "--out", freshDir("out"), "--min-interval-ms", "0"], {
+      stdout: sink(), stderr: err, gatewayState, createEmbedder: fakeEmbedder().create, signals,
+    });
+    assert.equal(code, 1);
+    assert.match(err.text, /interrupted by SIGTERM/);
+    assert.equal(existsSync(join(ws, ".adaptive-learning", "destructive-ops.jsonl")), false, "kein started/failed");
+    assert.ok([...(await readAll(base, "main")).values()].every((r) => r.embeddingTextMode === "raw"));
+  });
+
   it("ein unfertiger Checkpoint mit anderem Modus wird nicht weitergeführt", async () => {
     const base = freshDir("mode");
     const out = freshDir("out");

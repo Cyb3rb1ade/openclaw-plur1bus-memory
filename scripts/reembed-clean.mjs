@@ -60,8 +60,10 @@
  * (Gateway zwischen zwei Teilläufen) oder ein harter Abbruch mitten im Block
  * (SIGKILL, OOM) etwas geschrieben, bricht das Skript ab und verlangt einen
  * frischen Snapshot, der dann die neue Basis ist. Ctrl-C/SIGTERM beendet den
- * laufenden Block, schreibt "failed" und den Checkpoint; ein zweites Signal
- * beendet sofort (danach ist ein frischer Snapshot nötig). Zwischen
+ * laufenden Block, schreibt "failed" und den Checkpoint und beendet den ganzen
+ * Lauf: weitere --agent werden nicht mehr begonnen ("skipped: interrupted" im
+ * Bericht). Ein zweites Signal beendet sofort (danach ist ein frischer
+ * Snapshot nötig), auch bei mehreren Agenten. Zwischen
  * Teilläufen bleibt der Gateway gestoppt, sonst ebenfalls frischer Snapshot.
  * table.optimize() läuft erst, wenn alle Zeilen durch sind.
  */
@@ -461,6 +463,8 @@ async function readRowsByIds(table, ids) {
  */
 async function runAgent(agent, ctx) {
   const { options, runtime, lancedb, cleanCfg, textMode, openclawHome, base, outDir, pluginConfig, hostConfig } = ctx;
+  // Stopp-Zustand des ganzen Laufs (runCli): ein Signal gilt für alle Agenten.
+  const stop = ctx.stop || { signal: null };
   const now = runtime.now ? runtime.now() : Date.now();
   const report = {
     agent,
@@ -603,36 +607,14 @@ async function runAgent(agent, ctx) {
   const rowsBefore = report.preconditions.table.rows;
   const cosines = [];
   const progress = { reembedded: 0, modeOnly: 0, providerCalls: 0 };
-  // Ctrl-C/SIGTERM: den laufenden Block zu Ende bringen, dann über den
-  // catch-Zweig "failed" und den Checkpoint schreiben. Ein zweites Signal
-  // beendet sofort (Standardverhalten).
-  const signals = runtime.signals || process;
-  let stopSignal = null;
-  const handlers = {};
-  const detachSignals = () => {
-    for (const [sig, handler] of Object.entries(handlers)) signals.removeListener(sig, handler);
-  };
-  for (const sig of ["SIGINT", "SIGTERM"]) {
-    handlers[sig] = () => {
-      if (stopSignal) {
-        detachSignals();
-        if (signals === process) process.kill(process.pid, sig);
-        return;
-      }
-      stopSignal = sig;
-      (runtime.stderr || process.stderr).write(`reembed-clean: ${sig} received, stopping after the current block (again to stop at once)\n`);
-    };
-    signals.on(sig, handlers[sig]);
-  }
+  // Ctrl-C/SIGTERM (Handler in runCli): den laufenden Block zu Ende bringen,
+  // dann über den catch-Zweig "failed" und den Checkpoint schreiben.
   const checkStop = () => {
-    if (stopSignal) throw new Error(`interrupted by ${stopSignal}; stopped after the last complete block`);
+    if (stop.signal) throw new Error(`interrupted by ${stop.signal}; stopped after the last complete block`);
   };
-  try {
-    audit({ result: "started", planned: report.counts, estimate: report.estimate });
-  } catch (error) {
-    detachSignals();
-    throw error;
-  }
+  // Ein Signal während der Vorprüfungen: diesen Agenten gar nicht beginnen.
+  checkStop();
+  audit({ result: "started", planned: report.counts, estimate: report.estimate });
   try {
     // Checkpoint vor dem ersten Schreibzugriff: ein harter Abbruch im ersten
     // Block lässt sonst keinen Stand zurück, an dem ein Neustart prüfen kann.
@@ -772,7 +754,6 @@ async function runAgent(agent, ctx) {
     error.report = report;
     throw error;
   } finally {
-    detachSignals();
     if (embedder?.shutdown) {
       try {
         await embedder.shutdown();
@@ -800,8 +781,10 @@ function summaryLine(r) {
  * @param {{stdout?: object, stderr?: object, createEmbedder?: Function, gatewayState?: Function,
  *   livePluginVersion?: Function, now?: Function, lancedb?: object,
  *   signals?: import("node:events").EventEmitter}} [runtime]
- *   signals: Quelle für SIGINT/SIGTERM (Standard process), in Tests ein EventEmitter.
- * @returns {Promise<number>} Exit-Code
+ *   signals: Quelle für SIGINT/SIGTERM (Standard process), in Tests ein
+ *   EventEmitter. Bei --apply beendet das erste Signal den laufenden Block und
+ *   den ganzen Lauf (übrige Agenten "skipped: interrupted"), das zweite sofort.
+ * @returns {Promise<number>} Exit-Code (1 auch nach einem Signal)
  */
 export async function runCli(argv, runtime = {}) {
   const stdout = runtime.stdout || process.stdout;
@@ -832,17 +815,56 @@ export async function runCli(argv, runtime = {}) {
   const lancedb = runtime.lancedb || await import("@lancedb/lancedb");
   const reports = [];
   let code = 0;
-  for (const agent of options.agents) {
-    try {
-      const report = await runAgent(agent, { options, runtime, lancedb, cleanCfg, textMode, openclawHome, base, outDir, pluginConfig, hostConfig: config });
-      reports.push(report);
-    } catch (error) {
-      code = 1;
-      const report = error.report || { agent };
-      report.error = redactError(error).message;
-      reports.push(report);
-      stderr.write(`reembed-clean ${agent} failed: ${report.error}\n`);
+  // Ctrl-C/SIGTERM gelten für den ganzen Lauf, nicht je Agent: mit Handlern je
+  // Agent beendete ein Signal nur den laufenden Agenten, die übrigen --agent liefen
+  // danach komplett (Provider-Aufrufe, Schreibzugriffe), und ein zweites
+  // Signal galt im nächsten Agenten wieder als erstes. Nur bei --apply; der
+  // Probelauf schreibt nichts und endet beim Signal wie gewohnt sofort.
+  const stop = { signal: null };
+  const signals = runtime.signals || process;
+  const handlers = {};
+  const detachSignals = () => {
+    for (const [sig, handler] of Object.entries(handlers)) signals.removeListener(sig, handler);
+  };
+  if (options.apply) {
+    for (const sig of ["SIGINT", "SIGTERM"]) {
+      handlers[sig] = () => {
+        if (stop.signal) {
+          // Zweites Signal: Handler weg, das Signal erneut auslösen → Standardverhalten.
+          detachSignals();
+          if (signals === process) process.kill(process.pid, sig);
+          return;
+        }
+        stop.signal = sig;
+        stderr.write(`reembed-clean: ${sig} received, stopping after the current block; no further agent is started (again to stop at once)\n`);
+      };
+      signals.on(sig, handlers[sig]);
     }
+  }
+  try {
+    for (const [index, agent] of options.agents.entries()) {
+      try {
+        const report = await runAgent(agent, { options, runtime, lancedb, cleanCfg, textMode, openclawHome, base, outDir, pluginConfig, hostConfig: config, stop });
+        reports.push(report);
+      } catch (error) {
+        code = 1;
+        const report = error.report || { agent };
+        report.error = redactError(error).message;
+        reports.push(report);
+        stderr.write(`reembed-clean ${agent} failed: ${report.error}\n`);
+      }
+      if (stop.signal) {
+        const rest = options.agents.slice(index + 1);
+        for (const skipped of rest) {
+          reports.push({ agent: skipped, skipped: "interrupted", error: `skipped (interrupted by ${stop.signal})` });
+        }
+        if (rest.length > 0) stderr.write(`reembed-clean: ${stop.signal} — skipped ${rest.join(", ")}\n`);
+        code = 1;
+        break;
+      }
+    }
+  } finally {
+    detachSignals();
   }
   if (options.apply) {
     try {
