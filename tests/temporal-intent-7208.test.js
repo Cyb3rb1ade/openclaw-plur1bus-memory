@@ -3,6 +3,7 @@
  * Gesprächszeit („was haben wir gestern besprochen“). Ereigniszeit,
  * beiläufige, kalendarische Angaben und Anker filtern nicht.
  */
+import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
@@ -796,5 +797,29 @@ describe("Namensräume: das Sicherheitsnetz 7.12.41 gilt für die Vereinigung", 
     // legacy bleibt 7.20.7: das Netz entscheidet je Namensraum.
     const legacy = await run({ temporalFilterMode: "legacy" });
     assert.deepEqual([...legacy.ids].sort(), [uuid(1), uuid(3)].sort());
+  });
+});
+
+describe("7.20.8: Klassifikator robust gegen Extremeingaben", () => {
+  it("riesige Anfragen werden nicht klassifiziert und kosten kaum Zeit", async () => {
+    const { classifyTemporalQuery, CLASSIFY_MAX_INPUT_CHARS } = await import("../lib/temporal-parser.js");
+    const started = Date.now();
+    assert.equal(classifyTemporalQuery("a".repeat(CLASSIFY_MAX_INPUT_CHARS + 1), Date.UTC(2026, 10, 24)), null);
+    assert.equal(classifyTemporalQuery(`Was haben wir gestern besprochen? ${"x".repeat(CLASSIFY_MAX_INPUT_CHARS)}`, Date.UTC(2026, 10, 24)), null);
+    assert.ok(Date.now() - started < 200);
+  });
+
+  it("ein ungültiges now fällt auf die Systemzeit zurück statt auf ein leeres Fenster", async () => {
+    const { classifyTemporalQuery } = await import("../lib/temporal-parser.js");
+    for (const now of [Number.NaN, Infinity, "x"]) {
+      const r = classifyTemporalQuery("Was haben wir gestern besprochen?", now);
+      assert.equal(r?.mode, "hard");
+      assert.ok(Number.isFinite(r.range.from) && Number.isFinite(r.range.to), String(now));
+    }
+  });
+
+  it("die Pipeline fängt einen Fehler des Klassifikators ab", () => {
+    const source = readFileSync(new URL("../lib/recall-pipeline.js", import.meta.url), "utf8");
+    assert.match(source, /try \{\s*intent = classifyTemporalQuery\(query, now\);\s*\} catch \(e\) \{\s*\/\/[^\n]*\n\s*logger\?\.warn\?\.\(/);
   });
 });
