@@ -9,6 +9,7 @@ import {
   toObservedAtMs,
 } from "../lib/temporal-provenance.js";
 import { formatNeoRecallContext, transitionRecordStatus } from "../lib/neo-arch.js";
+import { readFileSync } from "node:fs";
 
 const NOW = Date.parse("2026-11-24T12:00:00.000Z");
 const SEPT = Date.parse("2026-09-14T04:56:38.072Z");
@@ -260,5 +261,15 @@ describe("Auto-Recall-Hook: Neo-Block mit Zustandsdatierung", () => {
     const calls = [...source.matchAll(/formatNeoRecallContext\(([^)]*)\)/g)].map((m) => m[1]);
     assert.equal(calls.length, 2);
     assert.ok(calls.every((args) => /neoFormatOptions\(/.test(args)), calls.join(" | "));
+  });
+});
+
+describe("README zeigt das Label an der Stelle, an der der Code es setzt", () => {
+  it("hinter dem Marker, vor dem Wert", () => {
+    const expected = annotate("aktuell 7.12.2").text;
+    assert.equal(expected, "aktuell [Stand 14.09.2026] 7.12.2");
+    const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8").replace(/\s+/g, " ");
+    assert.ok(readme.includes(`"${expected}"`), "README-Beispiel");
+    assert.ok(!readme.includes("7.12.2 [Stand"), "kein Label hinter dem Wert");
   });
 });

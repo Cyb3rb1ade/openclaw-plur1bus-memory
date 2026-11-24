@@ -19,6 +19,9 @@ import {
   dedupeNeoLanesAgainstTexts,
   filterNeoItemsAgainstTexts,
   resolveNeoLaneMinRelevance,
+  captureNeoFromAgentEnd,
+  candidateIndexEntry,
+  turnEventsFromMessages,
 } from "../lib/neo-arch.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -146,6 +149,92 @@ describe("routeNeoRecall strictLanes", () => {
     const strict = routeNeoRecall([item], "Recall-Test", { ...HOOK_OPTS, queryVector: [1, 0] });
     const legacy = routeNeoRecall([item], "Recall-Test", { requesterAgentId: "main", queryVector: [1, 0], maxPerLane: 2, minScore: 0.08 });
     assert.equal(strict.agent_private_reflections[0].score, legacy.recent_turns[0].score);
+  });
+});
+
+describe("routeNeoRecall: fast gleiche Texte im strengen Modus", () => {
+  const status = [
+    "No active exec sessions, no subagents, no media tasks running right now.",
+    "No active exec sessions, no subagents, no media tasks running right now!",
+    "No active exec sessions, no subagents and no media tasks running right now.",
+  ];
+
+  it("eine Statuszeile in drei Fassungen belegt nur einen Platz, die nächsten rücken nach", () => {
+    const items = [
+      ...status.map((text, i) => assistant(`st${i}`, text, { embedding: unitVector(0.9 - i * 0.01) })),
+      assistant("x1", "Der Gasspeicher ist zu 71 Prozent gefuellt.", { embedding: unitVector(0.7) }),
+      assistant("x2", "Kohlrouladen brauchen etwa eine Stunde im Ofen.", { embedding: unitVector(0.69) }),
+      assistant("x3", "Der Bericht zum Recall-Test liegt im Workspace.", { embedding: unitVector(0.68) }),
+    ];
+    const lanes = routeNeoRecall(items, "Status exec sessions", { ...HOOK_OPTS, queryVector: [1, 0] });
+    assert.deepEqual(lanes.agent_private_reflections.map((row) => row.item.id), ["st0", "x1", "x2", "x3"]);
+  });
+
+  it("Texte, die sich nur in Zahlen oder Daten unterscheiden, bleiben beide", () => {
+    const items = [
+      assistant("d1", "Daily Notes für 2026-08-23 angelegt und im Vault abgelegt.", { embedding: unitVector(0.9) }),
+      assistant("d2", "Daily Notes für 2026-08-27 angelegt und im Vault abgelegt.", { embedding: unitVector(0.89) }),
+    ];
+    const lanes = routeNeoRecall(items, "Daily Notes", { ...HOOK_OPTS, queryVector: [1, 0] });
+    assert.deepEqual(lanes.agent_private_reflections.map((row) => row.item.id), ["d1", "d2"]);
+  });
+
+  it("ohne strictLanes (memory_search) bleibt alles, nearDuplicateJaccard überschreibt die Schwelle", () => {
+    const items = status.map((text, i) => assistant(`st${i}`, text, { embedding: unitVector(0.9 - i * 0.01) }));
+    const legacy = routeNeoRecall(items, "Status exec sessions", { requesterAgentId: "main", queryVector: [1, 0], maxPerLane: 3, minScore: 0.08 });
+    assert.equal(Object.values(legacy).flat().length, 3);
+    const off = routeNeoRecall(items, "Status exec sessions", { ...HOOK_OPTS, queryVector: [1, 0], nearDuplicateJaccard: false });
+    assert.equal(off.agent_private_reflections.length, 3);
+  });
+});
+
+describe("routeNeoRecall sessionEcho (laufendes Gespräch)", () => {
+  const KEY = "agent:main:telegram:direct:55736530";
+  const SINCE = Date.parse("2026-11-24T08:00:00.000Z");
+  const items = [
+    assistant("now", "Die Antwort von eben zum Kontext-Block steht noch im Verlauf.", { createdAt: "2026-11-24T08:44:45.000Z", origin: { role: "assistant", trustLevel: "assistant_asserted", scope: "agent_private", sessionKey: KEY }, embedding: unitVector(0.9) }),
+    assistant("old", "Eine ältere Antwort zum Kontext-Block vor der Kompaktierung.", { createdAt: "2026-11-24T07:10:00.000Z", origin: { role: "assistant", trustLevel: "assistant_asserted", scope: "agent_private", sessionKey: KEY }, embedding: unitVector(0.85) }),
+    assistant("other", "Eine Antwort zum Kontext-Block aus einer anderen Sitzung.", { createdAt: "2026-11-24T08:50:00.000Z", origin: { role: "assistant", trustLevel: "assistant_asserted", scope: "agent_private", sessionKey: "agent:main:cron:x" }, embedding: unitVector(0.8) }),
+    assistant("legacy", "Eine Antwort zum Kontext-Block ohne Sitzungsschlüssel.", { createdAt: "2026-11-24T08:55:00.000Z", embedding: unitVector(0.75) }),
+  ];
+  const ids = (lanes) => lanes.agent_private_reflections.map((row) => row.item.id);
+
+  it("Einträge derselben Sitzung nach dem Stichtag fallen weg, der Rest bleibt", () => {
+    const lanes = routeNeoRecall(items, "Kontext-Block", { ...HOOK_OPTS, queryVector: [1, 0], sessionEcho: { sessionKey: KEY, since: SINCE } });
+    assert.deepEqual(ids(lanes), ["old", "other", "legacy"]);
+  });
+
+  it("ohne Option oder mit ungültiger Option bleibt alles (memory_search)", () => {
+    assert.deepEqual(ids(routeNeoRecall(items, "Kontext-Block", { ...HOOK_OPTS, queryVector: [1, 0] })), ["now", "old", "other", "legacy"]);
+    assert.deepEqual(ids(routeNeoRecall(items, "Kontext-Block", { ...HOOK_OPTS, queryVector: [1, 0], sessionEcho: { sessionKey: "", since: SINCE } })), ["now", "old", "other", "legacy"]);
+    assert.deepEqual(ids(routeNeoRecall(items, "Kontext-Block", { ...HOOK_OPTS, queryVector: [1, 0], sessionEcho: { sessionKey: KEY, since: NaN } })), ["now", "old", "other", "legacy"]);
+  });
+
+  it("Capture schreibt den Sitzungsschlüssel in origin, Index und Kandidaten tragen ihn", () => {
+    const appended = {};
+    const store = {
+      appendTurns: (rows) => { appended.turns = rows; return rows; },
+      appendCandidates: (rows) => { appended.candidates = rows; return rows; },
+      appendReactions: (rows) => rows,
+      appendBehaviorCards: (rows) => rows,
+      appendEmbeddingQueue: () => {},
+    };
+    captureNeoFromAgentEnd(
+      { sessionId: "run-0dbe04ad", messages: [{ role: "assistant", content: "Der Kontext-Block kommt jetzt aus zwei Quellen." }] },
+      { agentId: "main", workspaceKey: "main", sessionKey: ` ${KEY} ` },
+      store,
+    );
+    assert.equal(appended.turns[0].origin.sessionKey, KEY);
+    assert.equal(appended.turns[0].origin.sessionId, "run-0dbe04ad", "sessionId bleibt die Lauf-ID");
+    assert.equal(appended.candidates[0].origin.sessionKey, KEY);
+    assert.equal(candidateIndexEntry(appended.candidates[0]).origin.sessionKey, KEY);
+    const withoutKey = turnEventsFromMessages([{ role: "user", content: "Ohne Schlüssel" }], { workspaceKey: "main", agentId: "main", sessionId: "s" });
+    assert.equal(Object.hasOwn(withoutKey[0].origin, "sessionKey"), false);
+  });
+
+  it("der Auto-Recall-Hook setzt sessionEcho mit dem Stichtag des LanceDB-Blocks", () => {
+    const block = INDEX_SOURCE.slice(INDEX_SOURCE.indexOf("neoRouteOptions = {"), INDEX_SOURCE.indexOf("neoRouteItems = neoItems;"));
+    assert.match(block, /sessionEcho: \{\s*sessionKey: normalizeMemorySessionKey\(ctx\?\.sessionKey \|\| event\?\.sessionKey\),\s*since: resolveSessionEchoCutoff\(event\?\.messages, \{ now: Date\.now\(\) \}\)\.since,/);
   });
 });
 

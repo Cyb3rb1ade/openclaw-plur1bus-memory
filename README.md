@@ -34,13 +34,15 @@ By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/
 Everything stays stored; weak entries are ranked lower instead of being
 filtered. The automatic recall before each turn now
 - leaves out memories that only repeat the current message and memories of the
-  running conversation that are still in context (new column `sessionKey`),
+  running conversation that are still in context (new column `sessionKey`, in
+  Neo `origin.sessionKey`; older records have no key and stay),
 - multiplies the score after rerank by a rule-based quality weight (host
   envelopes, content-free agent self-introductions, filler-heavy voice
   fragments, very short texts, assistant claims; floor 0.35,
   `recall.qualityWeighting`),
-- dates state claims older than two days in the prompt ("aktuell 7.12.2
-  [Stand 14.09.2026]", `recall.volatileStateAnnotation`); the stored text stays,
+- dates state claims older than two days in the prompt ("aktuell
+  [Stand 14.09.2026] 7.12.2", `recall.volatileStateAnnotation`); the stored
+  text stays,
 - fills the Neo block only from lanes that match the record's category, without
   `[visible thinking]` placeholder lines, without behavior cards and with the
   record's date (`neo.recall.maxReflections`, `neo.recall.laneMinRelevance`).

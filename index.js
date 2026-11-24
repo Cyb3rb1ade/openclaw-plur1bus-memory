@@ -13145,7 +13145,9 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               const lanesStartedAt = Date.now();
               // 7.20.10: Lanes nur bei passender Kategorie (assistant_* nur als
               // Reflexion, höchstens neo.recall.maxReflections), ohne recent_turns
-              // und behavior_cards, ohne Selbst-Echo der aktuellen Anfrage.
+              // und behavior_cards, ohne Selbst-Echo der aktuellen Anfrage und
+              // ohne Einträge des laufenden Gesprächs, die noch im Kontext
+              // stehen (gleicher Stichtag wie session-echo im LanceDB-Block).
               neoRouteOptions = {
                 ...requester,
                 queryVector,
@@ -13153,6 +13155,10 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 maxPerLane: 2,
                 minScore: 0.08,
                 excludeQueryEcho: true,
+                sessionEcho: {
+                  sessionKey: normalizeMemorySessionKey(ctx?.sessionKey || event?.sessionKey),
+                  since: resolveSessionEchoCutoff(event?.messages, { now: Date.now() }).since,
+                },
                 strictLanes: true,
                 laneCaps: { agent_private_reflections: neoPromptRecall.maxReflections },
                 laneMinRelevance: neoPromptRecall.laneMinRelevance,

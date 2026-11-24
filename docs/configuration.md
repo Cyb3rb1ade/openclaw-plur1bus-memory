@@ -97,7 +97,10 @@ bisher. Gespeichert, archiviert oder gelöscht wird nichts.
   Kompaktierung entstanden sind, stehen noch im Kontext und fallen weg. Ohne
   Kompaktierung gelten die letzten 6 Stunden, nie früher als die älteste
   Nachricht im Kontext (nach `/new` bleibt der Schlüssel, der Kontext ist
-  leer). Ältere Zeilen ohne `sessionKey` sind nicht betroffen.
+  leer). Ältere Zeilen ohne `sessionKey` sind nicht betroffen. Für den
+  Neo-Block gilt dieselbe Regel: neue Turns und Kandidaten tragen den
+  Schlüssel in `origin.sessionKey` (`origin.sessionId` ist die Lauf-ID und
+  wechselt je Lauf).
 - **Qualitätsgewicht:** Endscore = Score nach dem Rerank × Gewicht, danach
   neu sortiert. CRR und Semantic Lens holen die ausgelassenen Echos nicht
   zurück. Die Decision-Trace zeigt die Stufen `query-echo`, `session-echo`
@@ -136,8 +139,10 @@ Unter `config.neo.recall` (neben `global`). Gilt nur für den Auto-Recall-Hook;
 
 Seit 7.20.10 im Auto-Recall: Lanes nur bei passender Kategorie (kein Überlauf
 in fremde Lanes), ohne `recent_turns` und `behavior_cards`, kein Selbst-Echo
-der aktuellen Anfrage, keine Platzhalterzeilen (`[visible thinking]` …),
-gleicher Text nur einmal, nach der Dedupe gegen den LanceDB-Block neu geroutet,
+der aktuellen Anfrage, keine Einträge des laufenden Gesprächs, die noch im
+Kontext stehen, keine Platzhalterzeilen (`[visible thinking]` …), gleicher
+Text nur einmal, fast gleicher Text (Wort-Jaccard ≥ 0,8 bei denselben Zahlen
+und Daten) ebenfalls nur einmal, nach der Dedupe gegen den LanceDB-Block neu geroutet,
 Einträge auf 300 Zeichen gekürzt, über alle Lanes nach Score sortiert, mit
 `created-at`/`age` aus `createdAt`.
 
