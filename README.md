@@ -34,11 +34,13 @@ By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/
 The recall used to drop every candidate whose `createdAt` fell outside a time
 phrase in the question. `createdAt` is when something was said, so that only
 fits questions about the conversation itself ("what did I tell you last
-week", "was haben wir gestern besprochen"). For "where was Calvin in the last
-week of October" or "which shoes did I clean last month" it threw away the
-evidence and kept fragments of the current day. Now only such
-conversation-time questions filter (window widened by 2 h, since auto-capture
-writes after the turn); event time, casual mentions, calendar dates and
+week", "was haben wir gestern besprochen", "Weißt du noch, was wir gestern
+besprochen haben?"); the time phrase has to belong to the speech act, not to
+what was said ("I told you he's coming on Thursday" does not filter). For
+"where was Calvin in the last week of October" or "which shoes did I clean
+last month" it threw away the evidence and kept fragments of the current day.
+Now only such conversation-time questions filter (window widened by 2 h, since
+auto-capture writes after the turn); event time, casual mentions, calendar dates and
 "after the X" anchors leave the recall unchanged. The parser also stops
 reading UUID fragments, line numbers and names like "Cyberpunk 2077" as years,
 and "last week of October 2026" is October. Without the filter the bench lost
