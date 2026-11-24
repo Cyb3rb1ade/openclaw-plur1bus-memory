@@ -208,6 +208,137 @@ describe("classifyTemporalQuery: alles andere filtert nicht", () => {
   });
 });
 
+describe("classifyTemporalQuery: Review — Zeitangabe gehört zum Sprechakt", () => {
+  const now = Date.UTC(2026, 10, 24, 10, 30);
+  const c = (q) => classifyTemporalQuery(q, now);
+
+  it("zwei verschiedene Zeitangaben am Sprechakt sind nicht eindeutig", () => {
+    for (const q of [
+      "Was hast du mir gestern über den Termin heute gesagt?",
+      "Was hab ich dir gestern über heute Abend erzählt?",
+      "What did I tell you yesterday about today's meeting?",
+      "What did you tell me last week about yesterday's game?",
+      "Was hast du mir am Montag über den Termin am Freitag gesagt?",
+    ]) {
+      const r = c(q);
+      assert.equal(r?.mode, "none", q);
+      assert.equal(r.reason, "ambiguous-time", q);
+    }
+    // Eine Angabe: das Fenster dieser Angabe, nicht die erste nach Rang.
+    assert.deepEqual(c("Was hast du mir gestern gesagt?").range, {
+      from: Date.UTC(2026, 10, 23) - CAPTURE_GRACE_MS, to: Date.UTC(2026, 10, 24) + CAPTURE_GRACE_MS,
+    });
+    // Steht die zweite Angabe in einem anderen Teilsatz, bleibt es eindeutig.
+    const split = c("Ich hab dir gestern gesagt, dass er heute kommt");
+    assert.equal(split.mode, "hard");
+    assert.equal(split.kind, "yesterday");
+  });
+
+  it("Objektsatz ohne Komma: die Zeit gehört zum Gesagten, nicht zum Sagen", () => {
+    for (const q of [
+      "Ich hab dir gesagt dass er am Donnerstag kommt",
+      "ich hab dir gesagt dass er am donnerstag kommt",
+      "Hab ich dir erzählt dass ich gestern beim Arzt war",
+      "das hatte ich dir doch erzählt dass meine Mutter heute morgen beim Arzt war",
+      "Du hast gesagt der Termin ist am Freitag",
+      "du hast gesagt das paket kommt am freitag",
+      "I told you he's coming on Thursday",
+      "I told you that he is coming on Thursday",
+      "Did I tell you that Eva called yesterday?",
+      "Did I tell you my sister had her baby yesterday?",
+      "You said the package arrives on Friday",
+      "You said the delivery comes on Friday",
+      "You said the dentist appointment is on Friday",
+      "I told you what happened yesterday",
+      "und ich weiß nicht ob ich dir das vorhin schon erzählt hatte aber heute morgen um 9 uhr hat er angerufen",
+    ]) {
+      assert.notEqual(c(q)?.mode, "hard", q);
+    }
+  });
+
+  it("Nebensatz mit Fragewort über Dritte, ohne Komma", () => {
+    for (const q of [
+      "Hast du gehört was Eva heute gemacht hat?",
+      "hast du gesehen was eva heute gemacht hat",
+      "hast du mitbekommen was erik gestern geschickt hat",
+    ]) {
+      assert.notEqual(c(q)?.mode, "hard", q);
+    }
+    // „was“ als „etwas“: kein Nebensatz, bleibt hart.
+    assert.equal(c("Hast du mir gestern was geschickt?").mode, "hard");
+  });
+
+  it("Diktat für Dritte nach Doppelpunkt zählt nicht; „Sag mal:“ schon", () => {
+    for (const q of [
+      "Schreib Eva: danke für deine Nachricht von gestern",
+      "Schreib ihm: du hast mir gestern das Paket geschickt, danke",
+      "Antworte Lorenzo: danke für deine Nachricht von gestern",
+      "Tell Eva: you said yesterday you'd bring the cake",
+      "Reply to Mark: thanks for your message yesterday",
+    ]) {
+      assert.notEqual(c(q)?.mode, "hard", q);
+    }
+    for (const q of [
+      "Sag mal: was haben wir gestern besprochen?",
+      "Sag mir: was hab ich dir gestern erzählt?",
+      "Tell me: what did we discuss yesterday?",
+    ]) {
+      assert.equal(c(q)?.mode, "hard", q);
+    }
+  });
+
+  it("die Zeit beim Sprechakt bleibt hart, auch mit Objektsatz dahinter", () => {
+    for (const q of [
+      "You said that yesterday",
+      "Did I tell you that yesterday?",
+      "Ich hab dir doch gestern gesagt dass ich keine Pilze mag",
+      "You told me 2 days ago that the API was down",
+      "Was hab ich dir erzählt gestern?",
+      "the user said yesterday that python is slow",
+    ]) {
+      assert.equal(c(q)?.mode, "hard", q);
+    }
+  });
+
+  it("unpunktierte Sprachnachricht: Zeit weit weg vom Sprechakt filtert nicht", () => {
+    const q = "also gestern war ich bei der bank und die meinten der kredit geht wahrscheinlich durch aber die wollen noch die gehaltsnachweise von den letzten drei monaten und das hab ich dir ja schon erzählt dass mein chef die nicht rausrückt";
+    assert.notEqual(c(q)?.mode, "hard");
+  });
+
+  it("Zukunft gilt für den ganzen Teilsatz, auch vor einem Nebensatz", () => {
+    assert.equal(c("Tomorrow I'll tell you what we discussed today")?.mode, "none");
+    assert.equal(c("Tomorrow I'll tell you what we discussed today").reason, "future");
+  });
+
+  it("Verb am Ende (Nebensatz nach „Weißt du noch“) ist Gesprächsbezug", () => {
+    for (const [q, kind] of [
+      ["Weißt du noch, was wir gestern besprochen haben?", "yesterday"],
+      ["Weißt du noch was wir gestern besprochen haben?", "yesterday"],
+      ["Erinnerst du dich, was ich dir gestern gesagt habe?", "yesterday"],
+      ["Was ich dir gestern gesagt habe, stimmt nicht", "yesterday"],
+      ["Weißt du noch, was ich dir am Freitag erzählt habe?", "weekday"],
+      ["Weißt du noch worüber wir gestern gesprochen haben?", "yesterday"],
+      ["Was war das nochmal, was du mir gestern geschickt hast?", "yesterday"],
+      ["Kannst du nochmal sagen was du mir gestern geschrieben hast", "yesterday"],
+      ["Kannst du mir sagen, was ich dir heute früh erzählt habe?", "today"],
+      ["Zeig mir, was wir letzte Woche ausgemacht haben", "lastWeek"],
+      ["Weißt du noch, was wir gestern gemacht haben?", "yesterday"],
+      ["hey what did we chat about today", "today"],
+    ]) {
+      const r = c(q);
+      assert.equal(r?.mode, "hard", q);
+      assert.equal(r.kind, kind, q);
+    }
+    for (const q of [
+      "Weißt du noch, was ich heute mit Lorenzo gesprochen habe?",
+      "Weißt du noch, mit wem ich gestern gesprochen habe?",
+      "Ich erzähl dir was wir gestern gemacht haben",
+    ]) {
+      assert.notEqual(c(q)?.mode, "hard", q);
+    }
+  });
+});
+
 describe("parseTemporal 7.20.8: kind und Parser-Korrekturen", () => {
   it("Range-Ergebnisse tragen kind, das Format bleibt", () => {
     const cases = [
@@ -317,6 +448,11 @@ describe("Laufzeit bleibt linear", () => {
       "deadbeef".repeat(8000) + " gestern",
       "[media attached ".repeat(3000) + " heute",
       "2026 ".repeat(10000),
+      // unter der Längengrenze: Teilsatz-Schnitte und Fragewörter
+      "was hab ich dir gesagt dass ob ".repeat(45) + " gestern",
+      "I told you that he said she ".repeat(50) + " yesterday",
+      "was wer wie wo ".repeat(90) + " gestern hat",
+      " ".repeat(200000) + "Was hab ich dir gestern gesagt?",
     ];
     for (const q of inputs) {
       const t0 = performance.now();
