@@ -798,7 +798,9 @@ function summaryLine(r) {
  * CLI mit injizierbaren Abhängigkeiten (Tests: Fake-Embedder, Gateway-Status).
  * @param {string[]} argv
  * @param {{stdout?: object, stderr?: object, createEmbedder?: Function, gatewayState?: Function,
- *   livePluginVersion?: Function, now?: Function, lancedb?: object}} [runtime]
+ *   livePluginVersion?: Function, now?: Function, lancedb?: object,
+ *   signals?: import("node:events").EventEmitter}} [runtime]
+ *   signals: Quelle für SIGINT/SIGTERM (Standard process), in Tests ein EventEmitter.
  * @returns {Promise<number>} Exit-Code
  */
 export async function runCli(argv, runtime = {}) {
