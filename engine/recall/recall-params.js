@@ -20,7 +20,7 @@ import { normalizeMemorySessionKey, resolveSessionEchoCutoff } from "../../lib/r
  * @param {Record<string, any>} event The before_prompt_build event (`prompt`, `messages`, `sessionKey`).
  * @param {Record<string, any>|undefined} hookCtx The hook context (`sessionKey`).
  * @param {number} [now] Clock for the 6 h fallback window.
- * @returns {{query: string, sessionKey: string, sessionContextSince: number, qualityWeighting: object}}
+ * @returns {{query: string, sessionKey: string, sessionContextSince: number, qualityWeighting: object, mergeTurnParts: boolean, now: number}}
  */
 export function autoRecallPolicyOptionsFor(ctx, event, hookCtx, now = Date.now()) {
   return {
@@ -28,6 +28,10 @@ export function autoRecallPolicyOptionsFor(ctx, event, hookCtx, now = Date.now()
     sessionKey: normalizeMemorySessionKey(hookCtx?.sessionKey || event?.sessionKey),
     sessionContextSince: resolveSessionEchoCutoff(event?.messages, { now }).since,
     qualityWeighting: ctx.qualityWeightingCfg,
+    // 7.21.1: recall.mergeTurnParts (Standard an) und die Bezugszeit für das
+    // Alter der Assistenten-Antworten.
+    mergeTurnParts: ctx.cfg?.recall?.mergeTurnParts !== false,
+    now,
   };
 }
 

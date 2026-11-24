@@ -120,12 +120,14 @@ describe("computeRecallQualityWeight", () => {
 
 describe("resolveQualityWeightingConfig", () => {
   it("Defaults und Grenzen", () => {
-    assert.deepEqual(resolveQualityWeightingConfig(undefined), { enabled: true, floor: 0.35 });
-    assert.deepEqual(resolveQualityWeightingConfig(false), { enabled: false, floor: 0.35 });
-    assert.deepEqual(resolveQualityWeightingConfig({ enabled: false }), { enabled: false, floor: 0.35 });
-    assert.deepEqual(resolveQualityWeightingConfig({ floor: 0.5 }), { enabled: true, floor: 0.5 });
-    assert.deepEqual(resolveQualityWeightingConfig({ floor: 2 }), { enabled: true, floor: 0.35 });
-    assert.deepEqual(resolveQualityWeightingConfig({ floor: "x" }), { enabled: true, floor: 0.35 });
+    // 7.21.1: staleAssistant (default on) is part of the resolved config.
+    assert.deepEqual(resolveQualityWeightingConfig(undefined), { enabled: true, floor: 0.35, staleAssistant: true });
+    assert.deepEqual(resolveQualityWeightingConfig(false), { enabled: false, floor: 0.35, staleAssistant: false });
+    assert.deepEqual(resolveQualityWeightingConfig({ enabled: false }), { enabled: false, floor: 0.35, staleAssistant: true });
+    assert.deepEqual(resolveQualityWeightingConfig({ floor: 0.5 }), { enabled: true, floor: 0.5, staleAssistant: true });
+    assert.deepEqual(resolveQualityWeightingConfig({ floor: 2 }), { enabled: true, floor: 0.35, staleAssistant: true });
+    assert.deepEqual(resolveQualityWeightingConfig({ floor: "x" }), { enabled: true, floor: 0.35, staleAssistant: true });
+    assert.deepEqual(resolveQualityWeightingConfig({ staleAssistant: false }), { enabled: true, floor: 0.35, staleAssistant: false });
   });
 });
 

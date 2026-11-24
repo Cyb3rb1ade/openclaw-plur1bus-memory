@@ -140,6 +140,8 @@ export function createPromptContextAssembler(ctx) {
 
   // 7.21.1: recall.keywordFallback.enabled (Standard an).
   const keywordFallbackEnabled = cfg?.recall?.keywordFallback?.enabled !== false;
+  // 7.21.1: recall.mergeTurnParts (Standard an).
+  const mergeTurnPartsEnabled = cfg?.recall?.mergeTurnParts !== false;
 
   return async function assemblePromptContext(event, hookCtx, opts = {}) {
     const assemblerEntryAt = Date.now();
@@ -1299,7 +1301,11 @@ export function createPromptContextAssembler(ctx) {
       throwIfAborted(signal, "recall aborted");
       // 7.12.27: Globale Neo-Treffer, die als LanceDB-Erinnerung schon im
       // selben Prompt stehen, nicht doppelt injizieren.
-      if (neoLanes && neoGlobalIds?.size > 0 && Array.isArray(ordered) && ordered.length > 0) {
+      // 7.21.1 (recall.mergeTurnParts): gegen ALLE Neo-Einträge, nicht nur die
+      // globalen Treffer, und mit Enthaltensein — Bernds Antwort von 22:32
+      // stand als Reflexion im Neo-Block und als Erinnerung im Hauptblock.
+      const neoDedupeAll = mergeTurnPartsEnabled;
+      if (neoLanes && (neoGlobalIds?.size > 0 || neoDedupeAll) && Array.isArray(ordered) && ordered.length > 0) {
         try {
           // 7.20.10 (B3): nur gegen Erinnerungen, die im Block tatsächlich
           // stehen. Bis 7.20.9 zählten alle 30 Treffer, auch die hinter der
@@ -1309,7 +1315,9 @@ export function createPromptContextAssembler(ctx) {
             .filter((row) => renderedMemoryIds.has(row?.entry?.id))
             .map((row) => row?.entry?.text || row?.text || "")
             .filter(Boolean);
-          const dedupeOptions = { onlyIds: neoGlobalIds, threshold: neoGlobalRecall.dedupeThreshold };
+          const dedupeOptions = neoDedupeAll
+            ? { onlyIds: null, threshold: neoGlobalRecall.dedupeThreshold, containment: true }
+            : { onlyIds: neoGlobalIds, threshold: neoGlobalRecall.dedupeThreshold };
           const deduped = dedupeNeoLanesAgainstTexts(neoLanes, memoryTexts, dedupeOptions);
           if (deduped.dropped > 0) {
             let lanesForPrompt = deduped.lanes;
@@ -1325,7 +1333,7 @@ export function createPromptContextAssembler(ctx) {
               rerouteNote = ` rerouted=${routedCount} ms=${Date.now() - rerouteStartedAt}`;
             }
             neoContext = formatNeoRecallContext(lanesForPrompt, neoFormatOptions(neoInjectionKey));
-            host.logger.info(`plur1bus-neo: global candidate search dropped ${deduped.dropped} hit(s) already injected as memories${rerouteNote}`);
+            host.logger.info(`plur1bus-neo: ${neoDedupeAll ? "neo recall" : "global candidate search"} dropped ${deduped.dropped} hit(s) already injected as memories${rerouteNote}`);
           }
         } catch (dedupeErr) {
           host.logger.debug(`plur1bus-neo: global dedupe skipped: ${String(dedupeErr)}`);

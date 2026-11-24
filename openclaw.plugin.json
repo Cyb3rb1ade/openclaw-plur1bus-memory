@@ -1838,6 +1838,10 @@
                 "type": "number",
                 "minimum": 0,
                 "maximum": 1
+              },
+              "staleAssistant": {
+                "type": "boolean",
+                "description": "7.21.1: also weight down old assistant replies (from 14 days, stronger from 60 and 180 days; replies with numbers, identifiers or quotes only after 60 days and mildly) and content-free assistant pleasantries. Default: enabled."
               }
             }
           },
@@ -1985,6 +1989,10 @@
                 "type": "boolean"
               }
             }
+          },
+          "mergeTurnParts": {
+            "type": "boolean",
+            "description": "Automatic recall only (7.21.1): records of the same turn and speaker (same sourceTurnId) are joined into one record for the prompt, and Neo entries whose words already stand in a rendered memory are left out of the Neo block. The store is not changed. Default: enabled."
           }
         },
         "description": "Recall pipeline tuning: candidate count, importance boost, deduplication, canonical-first selection, prompt budgets, query refinement, adaptive budget, semantic compression, the soft time budget and its fallback, half-lives per memory type and the decision trace."

@@ -240,6 +240,7 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
       // 7.21.1: keyword/recent fallback and the start-up warm recall.
       [afterSchema.properties.recall, "keywordFallback"],
       [afterSchema.properties.runtime, "recallPrewarm"],
+      [afterSchema.properties.recall, "mergeTurnParts"],
     ]) {
       assert.ok(Object.hasOwn(node.properties, key), key);
       delete node.properties[key];

@@ -127,6 +127,7 @@ export const DEPLOY_FILES = [
   "lib/contradiction-detector.js",
   "lib/recall-pipeline.js",
   "lib/recall-keyword-fallback.js",
+  "lib/recall-turn-merge.js",
   // 7.20.10: von recall-pipeline.js importiert (Qualitätsgewicht im Auto-Recall).
   "lib/recall-quality.js",
   // 7.20.10: bereinigte Einbettung (Capture, memory_store, Auto-Recall-Anfrage).
