@@ -66,6 +66,36 @@ das verbleibende Budget, wird auch dort der ganze Block verworfen.
 Nicht-droppable Blöcke (Zeit, temporale Kontinuität, Reminder) werden von
 `globalInjectMaxChars` nie angetastet.
 
+### Zustandsangaben datieren (7.20.10)
+
+| Key | Typ | Default | Beschreibung |
+|-----|-----|---------|--------------|
+| `volatileStateAnnotation.enabled` | `boolean` | `true` | Setzt beim Rendern `[Stand TT.MM.JJJJ]` hinter Zustandsmarker (aktuell, derzeit, läuft, live, latest, currently …), denen innerhalb von 30 Zeichen eine Versionsnummer oder ein Modellname folgt. Anker ist `createdAt` (Systemzeit der Erfassung), nie `updatedAt`; `validFrom`/`validUntil` bleiben unberührt. Der gespeicherte Text ändert sich nicht. |
+| `volatileStateAnnotation.minAgeDays` | `number` | `2` | Jüngere Records bleiben ohne Label. |
+| `volatileStateAnnotation.maxPerRecord` | `integer` | `2` | Höchstens so viele Labels je Record. |
+
+Ausgenommen sind Zitate, Inline-Code, Stellen mit einem Datum im Umkreis von
+60 Zeichen und Tags wie `n8n:latest`. Ein annotierter Record trägt
+`state-as-of="JJJJ-MM-TT"`, der Block dann eine Zeile `STATE AS OF: …`.
+7.20.10 wendet das im Neo-Block (`<plur1bus-recall>`) an.
+
+### Neo im Auto-Recall (7.20.10)
+
+Unter `config.neo.recall` (neben `global`). Gilt nur für den Auto-Recall-Hook;
+`memory_search` routet wie bisher über alle Lanes und liest weiter Behavior Cards.
+
+| Key | Typ | Default | Beschreibung |
+|-----|-----|---------|--------------|
+| `maxReflections` | `integer` | `4` | Assistant-Einträge (`assistant_claim/plan/suggestion`) landen nur noch in `agent_private_reflections`, höchstens so viele. `0` schaltet sie ab. |
+| `laneMinRelevance` | `number` oder `object` | aus | Mindestwert für den Textbezug `max(Kosinus, Wort-Jaccard)`. Eine Zahl gilt für alle Lanes, ein Objekt je Lane (`default` für die übrigen), z. B. `{ "default": 0.45, "agent_private_reflections": 0.55 }`. Ohne Anfragevektor (Embedding-Timeout) zählt nur der Jaccard. |
+
+Seit 7.20.10 im Auto-Recall: Lanes nur bei passender Kategorie (kein Überlauf
+in fremde Lanes), ohne `recent_turns` und `behavior_cards`, kein Selbst-Echo
+der aktuellen Anfrage, keine Platzhalterzeilen (`[visible thinking]` …),
+gleicher Text nur einmal, nach der Dedupe gegen den LanceDB-Block neu geroutet,
+Einträge auf 300 Zeichen gekürzt, über alle Lanes nach Score sortiert, mit
+`created-at`/`age` aus `createdAt`.
+
 ---
 
 ## Deduplizierung
