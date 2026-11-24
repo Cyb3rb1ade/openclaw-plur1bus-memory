@@ -376,6 +376,61 @@ describe("neo vector cache (7.20.9)", () => {
     assert.equal(tiny.vectorCache.uncached, 10);
   });
 
+  // Pruefung F1: liegt die Arbeitsmenge ueber der Grenze, darf ein Aufruf
+  // nicht verdraengen, was er gerade selbst geladen hat (sonst laedt jeder
+  // Aufruf N - 0,9 * Grenze nach und sortiert dafuer alle Eintraege).
+  it("keeps a stable subset when the working set exceeds the limit (no churn)", async () => {
+    const root = makeTempDir("neo-vcache-over-");
+    const { store } = await seededStore(root, "ws", 10);
+    process.env[ENV_KEY] = String(4 * ENTRY_BYTES);
+    const query = vectorFor(2024);
+    const first = search(store, query);
+    assert.deepStrictEqual(comparable(first), comparable(uncached(store, query)));
+    assert.equal(first.vectorCache.loaded, 4, "fills the cache up to the limit");
+    assert.equal(first.vectorCache.overflow, 6, "the rest is read without caching");
+    assert.deepStrictEqual(first.vectorCache.capacityWarning, { maxBytes: 4 * ENTRY_BYTES, cachedBytes: 4 * ENTRY_BYTES, wanted: 10, overflow: 6, refaults: 0 });
+    for (let round = 0; round < 4; round++) {
+      const result = search(store, vectorFor(3000 + round));
+      assert.deepStrictEqual(comparable(result), comparable(uncached(store, vectorFor(3000 + round))), `round ${round}`);
+      const cache = result.vectorCache;
+      assert.equal(cache.hits, 4, `round ${round}: the same four stay cached`);
+      assert.equal(cache.misses, 6);
+      assert.equal(cache.evicted, 0, `round ${round}: nothing of its own is evicted`);
+      assert.equal(cache.loaded, 0);
+      assert.equal(cache.overflow, 6);
+      assert.equal(cache.capacityWarning, undefined, "the warning comes once per process");
+    }
+    const stats = neoVectorCacheStats();
+    assert.equal(stats.evicted, 0);
+    assert.equal(stats.entries, 4);
+    assert.ok(stats.bytes <= 4 * ENTRY_BYTES);
+  });
+
+  it("warns once when alternating workspaces refault each other's vectors", async () => {
+    const root = makeTempDir("neo-vcache-refault-");
+    const first = await seededStore(root, "wa", 6, 10);
+    const second = await seededStore(root, "wb", 6, 50);
+    process.env[ENV_KEY] = String(8 * ENTRY_BYTES);
+    const query = vectorFor(99);
+    const warnings = [];
+    for (let round = 0; round < 3; round++) {
+      for (const { store } of [first, second]) {
+        const result = search(store, query);
+        assert.deepStrictEqual(comparable(result), comparable(uncached(store, query)), `round ${round}`);
+        if (result.vectorCache.capacityWarning) warnings.push(result.vectorCache.capacityWarning);
+        assert.ok(neoVectorCacheStats().bytes <= 8 * ENTRY_BYTES);
+      }
+    }
+    assert.equal(warnings.length, 1, "one warning per process");
+    assert.ok(warnings[0].refaults > 0, "raised by vectors that were evicted and asked for again");
+    assert.equal(warnings[0].overflow, 0, "each workspace fits on its own");
+    assert.ok(neoVectorCacheStats().refaults > 0);
+    resetNeoVectorCache();
+    search(first.store, query);
+    assert.ok(search(second.store, query).vectorCache.capacityWarning === undefined, "no refault right after a reset");
+    assert.ok(search(first.store, query).vectorCache.capacityWarning, "the reset re-arms the warning");
+  });
+
   it("reads the limit from PLUR1BUS_NEO_VECTOR_CACHE_MAX_BYTES; 0 turns the cache off", async () => {
     assert.equal(NEO_VECTOR_CACHE_DEFAULT_MAX_BYTES, 512 * 1024 * 1024);
     assert.equal(neoVectorCacheMaxBytes({}), NEO_VECTOR_CACHE_DEFAULT_MAX_BYTES);
