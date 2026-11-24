@@ -12,7 +12,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { deriveBudgetedSignal, isAbortError, isBudgetExhaustion, throwIfAborted } from "../../lib/abort.js";
-import { categorizeMemoryWithReason } from "../../lib/categorize.js";
+import { captureSourceFromProvenance, categorizeMemoryWithReason } from "../../lib/categorize.js";
 import { lightDream, writeLightDreamToVault } from "../../lib/dreaming/light-dream.js";
 import { recordLightDreamRun } from "../../lib/dreaming/dreaming-status-provider.js";
 import { serializeEmotionalValence } from "../../lib/emotion.js";
@@ -32,7 +32,11 @@ import { shouldTriggerReflection } from "../../lib/meta-cognition.js";
 import { createNeoStore, isInjectedContextText, turnEventsFromMessages, turnIdentityParams } from "../../lib/neo-arch.js";
 import { planReminderExtraction } from "../../lib/reminder-extraction.js";
 import { saveReminder } from "../../lib/reminder-store.js";
-import { isBackgroundTurn, shouldSkipAutoCaptureForInternalTurn } from "../../lib/runtime-scheduler.js";
+import { classifyCaptureSource, isBackgroundTurn, shouldSkipAutoCaptureForInternalTurn } from "../../lib/runtime-scheduler.js";
+import { isWorkspaceSubagent } from "../../lib/chat-model.js";
+import { normalizeMemorySessionKey } from "../../lib/query-echo.js";
+import { isContentFreeHostEnvelope } from "../../lib/recall-quality.js";
+import { prepareEmbeddingText } from "../../lib/embedding-text.js";
 import { trySafeWarn } from "../../lib/safe-logging.js";
 import { appendDestructiveOpLog } from "../../lib/sql-safety.js";
 import { extractMediaOutputIds, stripMediaOutputIdToken } from "../../lib/speaker-segment-schema.js";
@@ -131,6 +135,7 @@ export function createTurnCapture(ctx) {
     dreamNarrativeCfg,
     dreamNarrativeLlmCfg,
     duplicateThreshold,
+    embeddingCleanTextCfg,
     embeddings,
     emotionIntensityHalfLifeFactor,
     emotionalPool,
@@ -272,6 +277,12 @@ export function createTurnCapture(ctx) {
       host.logger.info(`memory-lancedb-namespaced: skipping durable capture for internal/background turn (agent=${agentId})`);
       return undefined;
     }
+    // 7.20.10: Herkunft kennzeichnen (subagent/helper/inter_session), nicht
+    // filtern. Ein Fehler ergibt keine Kennzeichnung (Warnung im Log).
+    const captureSource = classifyCaptureSource(event, hookCtx, {
+      isWorkspaceSubagent: (id) => isWorkspaceSubagent(host.runtime?.config?.current?.() || host.config?.() || {}, id),
+      logger: host.logger,
+    });
     let memoryCtx = null;
     if (opts.memoryCtx) {
       memoryCtx = opts.memoryCtx;
@@ -347,6 +358,7 @@ export function createTurnCapture(ctx) {
             sessionKey: snapshotNeoString(hookCtx?.sessionKey),
             sessionId: snapshotNeoString(hookCtx?.sessionId),
             runId: snapshotNeoString(hookCtx?.runId),
+            captureSource: captureSource || "",
           };
           const neoResult = await neoWorkerRuntime.runNeoAgentEnd(neoEvent, neoCtx, {
             rootDir: neoRoot,
@@ -462,13 +474,16 @@ export function createTurnCapture(ctx) {
           if (!isUser && !isAssistant) continue;
           const role = msg.role;
           const content = msg.content;
+          // 7.20.10: Herkunft je Nachricht (provenance des Hosts), z. B. eine
+          // Eingabe aus einer anderen Sitzung. Nur Kennzeichnung.
+          const messageSource = isUser ? captureSourceFromProvenance(msg.provenance || msg.inputProvenance) : null;
 
           if (typeof content === "string") {
             if (content && content.length > 20) {
               const sourceUrl = isUser ? extractUrl(content) : "";
               const cleaned = stripMediaOutputIdToken(content);
               extractMediaOutputIds(content).forEach((id) => mediaOutputIds.add(id));
-              items.push({ text: cleaned, role, isUserUrl: isUser && !!sourceUrl, sourceUrl });
+              items.push({ text: cleaned, role, isUserUrl: isUser && !!sourceUrl, sourceUrl, messageSource });
             }
             continue;
           }
@@ -481,7 +496,7 @@ export function createTurnCapture(ctx) {
                 const sourceUrl = isUser ? extractUrl(block.text) : "";
                 const cleaned = stripMediaOutputIdToken(block.text);
                 extractMediaOutputIds(block.text).forEach((id) => mediaOutputIds.add(id));
-                items.push({ text: cleaned, role, isUserUrl: isUser && !!sourceUrl, sourceUrl });
+                items.push({ text: cleaned, role, isUserUrl: isUser && !!sourceUrl, sourceUrl, messageSource });
                 continue;
               }
 
@@ -495,7 +510,7 @@ export function createTurnCapture(ctx) {
                   "]",
                 ].join("").trim();
                 if (stub.length > 20) {
-                  items.push({ text: stub, role, isUserUrl: true, sourceUrl: "" }); // Attachments wie URLs priorisieren
+                  items.push({ text: stub, role, isUserUrl: true, sourceUrl: "", messageSource }); // Attachments wie URLs priorisieren
                 }
               }
             }
@@ -505,11 +520,18 @@ export function createTurnCapture(ctx) {
         // Systemisch injizierten Kontext (Recall-Blöcke, Status-Reminder,
         // Cron) niemals re-capturen → bricht die Recall/Capture-Rückkopplung.
         const beforeFilter = items.length;
+        let hostEnvelopes = 0;
         for (let i = items.length - 1; i >= 0; i--) {
           if (isInjectedContextText(items[i].text)) items.splice(i, 1);
+          // 7.20.10: reine Host-Hüllen ohne Nutzlast ("Continue the OpenClaw
+          // runtime event.", "Exec failed (…)"). Alles mit Inhalt bleibt.
+          else if (isContentFreeHostEnvelope(items[i].text)) {
+            items.splice(i, 1);
+            hostEnvelopes++;
+          }
         }
         if (items.length < beforeFilter) {
-          host.logger.info(`memory-lancedb-namespaced: filtered ${beforeFilter - items.length} injected-context item(s) before capture`);
+          host.logger.info(`memory-lancedb-namespaced: filtered ${beforeFilter - items.length} injected-context item(s) before capture${hostEnvelopes ? ` (${hostEnvelopes} content-free host envelope(s))` : ""}`);
         }
 
         if (items.length === 0) {
@@ -525,11 +547,22 @@ export function createTurnCapture(ctx) {
         const isGroupSession = ctxChatType === "group" || ctxChatType === "supergroup" || ctxChatType === "channel" ||
           String(event?.sessionKey || hookCtx?.sessionKey || "").includes(":group:") ||
           String(event?.sessionKey || hookCtx?.sessionKey || "").includes(":channel:");
+        // 7.20.10: Reihenfolge cron → Gruppensitzung → Herkunft aus
+        // classifyCaptureSource (subagent/helper/inter_session) → Gruppe laut
+        // Text → dm. Die Gruppe geht vor, weil sie den Kontext der Erinnerung
+        // anzeigt; eine Subagent-Sitzung ist nie eine Gruppensitzung.
         const captureOrigin = contextOrigin === "cron" || contextKind === "cron"
           ? "cron"
-          : isGroupSession || items.some((it) => textSuggestsGroupOrigin(it.text))
+          : isGroupSession
             ? "group"
-            : "dm";
+            : captureSource
+              ? captureSource
+              : items.some((it) => textSuggestsGroupOrigin(it.text))
+                ? "group"
+                : "dm";
+        // Eine Nachricht mit eigener Herkunft (provenance) behält sie, wenn
+        // der Zug sonst als dm gälte.
+        const itemOrigin = (it) => (captureOrigin === "dm" && it?.messageSource ? it.messageSource : captureOrigin);
 
         // Priorisierung: User-Nachrichten mit URLs zuerst (max 3), dann neueste (max 5)
         const userUrlItems = items.filter(it => it.isUserUrl);
@@ -543,6 +576,11 @@ export function createTurnCapture(ctx) {
         let stored = 0;
         let skipped = 0;
         const captureTimestamp = Date.now();
+        // 7.20.10: Sitzung des Captures. Nur der echte Schlüssel des Hosts,
+        // kein sessionId-/runId-Ersatz: der Auto-Recall vergleicht mit
+        // ctx.sessionKey und lässt Treffer derselben Sitzung aus, die noch
+        // im Kontext stehen.
+        const captureSessionKey = normalizeMemorySessionKey(hookCtx?.sessionKey || event?.sessionKey);
 
         // Phase 1: Prepare texts (summarize/truncate) — alle parallel
         const textPrep = await Promise.all(captureList.map(async (it) => {
@@ -604,9 +642,13 @@ export function createTurnCapture(ctx) {
             host.logger.info(`memory-lancedb-namespaced: chunking split ${chunkPlan.split} of ${preppedOk.length} item(s) into ${chunkPlan.parts} part(s), ${chunkPlan.needsLlm} would need a model${decided} for agent=${agentId}`);
           }
         }
+        // 7.20.10: Vektor aus dem bereinigten Text (lib/embedding-text.js),
+        // gespeichert wird weiter p.text. Die Map ist nach Einbettungstext
+        // geschlüsselt; embeddingTextMode wandert in die Zeile.
+        const embedInputs = new Map(validPreps.map((p) => [p, prepareEmbeddingText(p.text, embeddingCleanTextCfg)]));
         const textToVector = new Map();
         if (validPreps.length > 0 && typeof embeddings.embedBatch === "function") {
-          const textsToEmbed = validPreps.map((p) => p.text);
+          const textsToEmbed = [...new Set(validPreps.map((p) => embedInputs.get(p).text))];
           try {
             for (let i = 0; i < textsToEmbed.length; i += batchSize) {
               throwIfCaptureAborted();
@@ -636,16 +678,17 @@ export function createTurnCapture(ctx) {
         // EINER Dedup-Gruppe, und DEFAULT_MAX_PER_GROUP = 2 haette hoechstens
         // zwei davon durchgelassen statt "Ganzes und bis zu zwei Teile".
         const prepared = await Promise.all(validPreps.map(async (p) => {
-          let vector = textToVector.get(p.text);
+          const embedInput = embedInputs.get(p);
+          let vector = textToVector.get(embedInput.text);
           if (!vector) {
             try {
-              vector = await embeddings.embed(p.text, { agentId });
+              vector = await embeddings.embed(embedInput.text, { agentId });
             } catch (err) {
               host.logger.warn(`memory-lancedb-namespaced: embed failed for capture item: ${describeError(err)}`);
               return { it: p.it, text: p.text, chunkGroupId: p.chunkGroupId || "", vector: null, ok: false };
             }
           }
-          return { it: p.it, text: p.text, chunkGroupId: p.chunkGroupId || "", vector, ok: true };
+          return { it: p.it, text: p.text, chunkGroupId: p.chunkGroupId || "", vector, embeddingTextMode: embedInput.mode, ok: true };
         }));
         throwIfCaptureAborted();
 
@@ -705,7 +748,7 @@ export function createTurnCapture(ctx) {
               id: memoryId,
               text: p.text,
               summary,
-              origin: captureOrigin,
+              origin: itemOrigin(p.it),
               vector: p.vector,
               importance,
               importanceStatus: IMPORTANCE_STATUS.PENDING,
@@ -719,10 +762,12 @@ export function createTurnCapture(ctx) {
               // auf sourceTurnId zurueck (lib/recall-pipeline.js).
               chunkGroupId: p.chunkGroupId || "",
               sourceMessageRole: p.it.role || "",
+              sessionKey: captureSessionKey,
+              embeddingTextMode: p.embeddingTextMode || "raw",
               epistemicStatus: decideEpistemicStatusForCapture({
                 text: p.text,
                 sourceMessageRole: p.it.role || "",
-                origin: captureOrigin,
+                origin: itemOrigin(p.it),
                 cutoffFailed: !epistemicCutoffBoot.ok,
               }),
               sourceTimestamp: captureTimestamp,
@@ -743,7 +788,7 @@ export function createTurnCapture(ctx) {
             storedMemoryRows.push(row);
             stored++;
             if (opts.report) opts.report.stored = stored;
-            host.logger.info(`memory-lancedb-namespaced: stored memory [${category}|${captureOrigin}] for agent=${agentId}`);
+            host.logger.info(`memory-lancedb-namespaced: stored memory [${category}|${itemOrigin(p.it)}] for agent=${agentId}`);
           } catch (err) {
             const settlement = await waitForTimeoutSettlement(err);
             if (settlement.status === "rejected") {

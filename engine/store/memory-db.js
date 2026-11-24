@@ -586,6 +586,12 @@ class MemoryDB {
     // never derived from createdAt/updatedAt (see lib/valid-time.js).
     if (normalized.validFrom == null) normalized.validFrom = 0;
     if (normalized.validUntil == null) normalized.validUntil = 0;
+    // 7.20.10: LanceDB lehnt Appends ab, denen eine Spalte fehlt; Tabellen
+    // ohne die Spalte filtert schemaFieldNames unten wieder heraus.
+    if (normalized.sessionKey == null) normalized.sessionKey = "";
+    // 7.20.10: Aus welchem Text der Vektor stammt (lib/embedding-text.js).
+    // Ohne Angabe: der gespeicherte Text ("raw").
+    if (normalized.embeddingTextMode == null || normalized.embeddingTextMode === "") normalized.embeddingTextMode = "raw";
     if (!this.schemaFieldNames) return normalized;
     const filtered = {};
     for (const [key, value] of Object.entries(normalized)) {
@@ -754,6 +760,14 @@ class MemoryDB {
             // created without it then refused every later append from this
             // instance ("missing=[chunkGroupId]", E1 Task 8 fix round 1).
             { name: 'chunkGroupId', valueSql: "''" },
+            // 7.20.10: Sitzungsschlüssel des Captures (ctx.sessionKey). Der
+            // Auto-Recall lässt Erinnerungen aus, die im laufenden Gespräch
+            // noch im Kontext stehen. '' = unbekannt (Bestand, memory_store).
+            { name: 'sessionKey', valueSql: "''" },
+            // 7.20.10: Text der Einbettung — 'raw' (gespeicherter Text) oder
+            // 'clean-v1'/'clean-v1-nospeaker' (lib/embedding-text.js). Bestand
+            // = 'raw'; scripts/reembed-clean.mjs bettet ihn bereinigt neu ein.
+            { name: 'embeddingTextMode', valueSql: "'raw'" },
           ];
 
           for (const col of allColumns) {
@@ -862,6 +876,8 @@ class MemoryDB {
             validUntil: 0,
             // 7.12.70 chunking; see the migration list above.
             chunkGroupId: "",
+            sessionKey: "",
+            embeddingTextMode: "raw",
           },
         ]), "MemoryDB.createTable", "created-table", false);
         if (this.identity) {

@@ -241,8 +241,8 @@ node --test tests/*.test.js
   never deleted, never fails — `tests/deploy-packaged-files.test.js`). A new
   shipped doc needs no manifest entry; new runtime code still does. The full suite on Windows and
   macOS runs in `ci.yml` (`test-cross`).
-- Current baseline (`npm test`, i.e. `tests/` and `test/`; Linux, Node 24.22.3, 7.20.8 incl. the ports from 7.18.21–7.20.8):
-  7,062 tests in 1,217 suites, 9 skipped (platform-only and opt-in cases). The Local Inference adm-zip check
+- Current baseline (`npm test`, i.e. `tests/` and `test/`; Linux, Node 24.22.3, 7.20.10 incl. the ports from 7.18.21–7.20.10):
+  7,335 tests in 1,278 suites, 9 skipped (platform-only and opt-in cases). The Local Inference adm-zip check
   needs this checkout's own `node_modules` (it fails with a symlinked one).
 
 ## Dependency Audit

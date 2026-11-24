@@ -81,6 +81,21 @@
           "minimum": 1000,
           "description": "Per-request timeout for remote embedding calls (OpenAI-compatible providers). Unset means 15000 ms; the SDK default of ten minutes let a stalled request block a recall until the worker timeout."
         },
+        "cleanText": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "7.20.10: store raw, embed clean. New memories keep their text verbatim; the vector is computed from a cleaned copy without leading timestamps, host metadata blocks, voice-transcript and media envelopes, hidden-block placeholder lines, a fixed list of stage directions and filler words (rule set clean-v1, column embeddingTextMode). The auto-recall query loses only the envelopes. Existing rows keep their vectors until scripts/reembed-clean.mjs re-embeds them.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Embed the cleaned text (default true when unset). false embeds the stored text as before (embeddingTextMode raw)."
+            },
+            "stripSpeaker": {
+              "type": "boolean",
+              "description": "Also drop the role prefix (User:/Assistant:) and the speaker right after a voice-transcript envelope (mode clean-v1-nospeaker). Default false when unset, until measured."
+            }
+          }
+        },
         "local": {
           "type": "object",
           "additionalProperties": false,
@@ -714,6 +729,26 @@
                   "minimum": 500
                 }
               }
+            },
+            "maxReflections": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 20,
+              "description": "Auto-recall only: at most this many assistant-authored Neo records (assistant_claim/plan/suggestion) in the agent_private_reflections lane. 0 turns them off. Default 4."
+            },
+            "laneMinRelevance": {
+              "type": [
+                "number",
+                "object"
+              ],
+              "minimum": 0,
+              "maximum": 1,
+              "additionalProperties": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "description": "Auto-recall only: minimum text relevance max(cosine, word Jaccard) for a Neo record to enter a lane. A number applies to every lane; an object maps lane names (and \"default\" for the rest) to a value. Unset or 0 = off (default). Without a query vector (embedding timeout) only the word Jaccard counts, so a vector-calibrated value filters much harder then."
             }
           }
         }
@@ -1068,7 +1103,13 @@
           "description": "Wire format: cohere/jina {model, query, documents, top_n} → results (Cohere, Jina, vLLM, Infinity, LocalAI), voyage {model, query, documents, top_k} → data, tei {query, texts} → [{index, score}] (Hugging Face text-embeddings-inference). Default from the provider preset (remote: cohere)."
         },
         "model": {
-          "type": "string"
+          "type": "string",
+          "description": "Reranker model. Cohere default rerank-v3.5; Rerank 4/5 models (e.g. rerank-v5.0-fast, rerank-v5.0-pro) use the same v2 request."
+        },
+        "maxDocChars": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Cohere only (default 1400 when unset): each document sent to the reranker is cut to this many characters (minus whatever the query uses beyond 400 characters, never below 300), so query plus document stay under the 500 tokens Cohere bills as one document. Only the text sent to Cohere is cut; recall output and the local fallback see the full text. 0 = no cut; 1–99 count as 100."
         },
         "candidates": {
           "type": "number"
@@ -1586,6 +1627,40 @@
         "memoriesMaxChars": {
           "type": "number",
           "default": 12000
+        },
+        "qualityWeighting": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Auto-recall only: final score = score after rerank × a rule-based quality weight (host envelopes and messages, placeholder lines, filler-heavy fragments, content-free agent self-introductions (never for user text), very short texts without a number, URL or identifier (plain names do not count), assistant claims), then re-sorted. Nothing is filtered or archived; memory_recall and memory_search stay unweighted. Defaults: enabled, floor 0.35.",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "floor": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        },
+        "volatileStateAnnotation": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Render-time dating of volatile state in recall blocks: a marker like aktuell/derzeit/läuft/live/latest/currently followed by a value (version number, model name) gets \"[Stand DD.MM.YYYY]\" from the record's created-at. Stored text is never changed. Defaults: enabled, minAgeDays 2, maxPerRecord 2.",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "minAgeDays": {
+              "type": "number",
+              "minimum": 0
+            },
+            "maxPerRecord": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10
+            }
+          }
         },
         "candidateTopK": {
           "type": "number",

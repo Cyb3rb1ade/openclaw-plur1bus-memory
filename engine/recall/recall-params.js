@@ -6,6 +6,31 @@
  * warm-only path hand `runMergedNamespaceRecall` the same object.
  */
 
+import { cleanQueryForEmbedding } from "../../lib/embedding-text.js";
+import { normalizeMemorySessionKey, resolveSessionEchoCutoff } from "../../lib/recall-pipeline.js";
+
+/**
+ * The automatic recall's rules for one turn (7.20.10, createAutoRecallPolicy
+ * in lib/recall-pipeline.js): prompt echoes and memories of the running
+ * conversation that are still in context are left out, the rest is weighted
+ * by quality. The context boundary comes from `event.messages` (the last
+ * compaction, else the last 6 h). memory_recall/memory_search never pass it.
+ *
+ * @param {Record<string, any>} ctx The recall context (`qualityWeightingCfg`).
+ * @param {Record<string, any>} event The before_prompt_build event (`prompt`, `messages`, `sessionKey`).
+ * @param {Record<string, any>|undefined} hookCtx The hook context (`sessionKey`).
+ * @param {number} [now] Clock for the 6 h fallback window.
+ * @returns {{query: string, sessionKey: string, sessionContextSince: number, qualityWeighting: object}}
+ */
+export function autoRecallPolicyOptionsFor(ctx, event, hookCtx, now = Date.now()) {
+  return {
+    query: event?.prompt,
+    sessionKey: normalizeMemorySessionKey(hookCtx?.sessionKey || event?.sessionKey),
+    sessionContextSince: resolveSessionEchoCutoff(event?.messages, { now }).since,
+    qualityWeighting: ctx.qualityWeightingCfg,
+  };
+}
+
 /**
  * The parameter object for `runMergedNamespaceRecall` / `runRecallPipeline`
  * on the automatic recall path. Engine-wide settings come from `ctx`; the
@@ -29,7 +54,10 @@
  * @param {Function|null} call.querySummarizer Long-query summarizer (an LLM call), or null.
  * @param {Function|null} call.retrievalLogger Retrieval-ledger writer, or null.
  * @param {boolean} [call.readOnly] Persist nothing (no canonical cache, no graph metrics).
- * @returns {Record<string, any>} The pipeline parameters.
+ * @param {object|null} [call.autoRecallPolicy] 7.20.10: autoRecallPolicyOptionsFor() of this turn.
+ * @returns {Record<string, any>} The pipeline parameters. `embeddingQuery`
+ *   (7.20.10) is the prompt without host envelopes (cleanQueryForEmbedding);
+ *   the query vector comes from it, rerank and echo check read `query`.
  */
 export function autoRecallParams(ctx, {
   query,
@@ -47,6 +75,7 @@ export function autoRecallParams(ctx, {
   querySummarizer,
   retrievalLogger,
   readOnly = false,
+  autoRecallPolicy = null,
 }) {
   const {
     adaptiveBudgetCfg,
@@ -57,6 +86,7 @@ export function autoRecallParams(ctx, {
     canonicalMinScore,
     dedupEnabled,
     dedupJaccard,
+    embeddingCleanTextCfg,
     embeddings,
     host,
     maxPromptMemories,
@@ -72,6 +102,10 @@ export function autoRecallParams(ctx, {
     query,
     // Kanonische Treffer zusaetzlich zu maxPromptMemories (7.20.6).
     canonicalOutsideLimit: true,
+    autoRecallPolicy,
+    // 7.20.10: Anfragevektor ohne Hüllen (Transkript-Umschlag,
+    // Zeitstempel, Metadaten); Rerank und Echo-Prüfung lesen weiter query.
+    embeddingQuery: cleanQueryForEmbedding(query, embeddingCleanTextCfg),
     phaseTimer: timer,
     softBudgetFallback,
     embeddings,

@@ -67,7 +67,10 @@ import { appendTombstoneToRegistry, backfillCommittedTombstone, buildTombstone, 
 import { decideEpistemicStatusForCapture } from "../lib/epistemic-capture.js";
 import { ensureEpistemicCutoff } from "../lib/epistemic-cutoff.js";
 import { addTraceStoreDecision, createRecallDecisionTrace, textPreview } from "../lib/recall-decision-trace.js";
-import { buildNeoWorkspaceAliases, createNeoStore, neoSessionKeysFromContext, searchNeoCandidatesGlobal, workspaceKeyFromContext } from "../lib/neo-arch.js";
+import { NEO_DEFAULT_MAX_REFLECTIONS, buildNeoWorkspaceAliases, createNeoStore, neoSessionKeysFromContext, resolveNeoLaneMinRelevance, searchNeoCandidatesGlobal, workspaceKeyFromContext } from "../lib/neo-arch.js";
+import { resolveQualityWeightingConfig } from "../lib/recall-quality.js";
+import { prepareEmbeddingText, resolveEmbeddingCleanTextConfig } from "../lib/embedding-text.js";
+import { resolveVolatileStateAnnotationConfig } from "../lib/temporal-provenance.js";
 import { acquireSharedNeoWorkerRuntime } from "../lib/neo-worker-runtime.js";
 import { normalizeEmbeddingConfig, resolveLocalModelCacheDir } from "../lib/providers/config-normalize.js";
 import { applyLegacyProviderDefaults } from "../lib/providers/legacy-provider-migration.js";
@@ -879,6 +882,31 @@ export function createEngine(host, config, testOptions = {}) {
     // laeuft der Neo-Pfad ohne Vektor weiter (Lanes lexikalisch).
     embedTimeoutMs: Math.max(500, Number(neoGlobalRecallCfg.embedTimeoutMs) || 4000),
   };
+  // 7.20.10: Lane-Regeln des Auto-Recalls. maxReflections begrenzt die
+  // Assistant-Einträge (agent_private_reflections), laneMinRelevance ist ein
+  // Mindestwert für den Textbezug (max(Kosinus, Jaccard)) und standardmäßig aus.
+  const neoPromptRecallCfg = neoCfg.recall || {};
+  const neoMaxReflectionsRaw = Number(neoPromptRecallCfg.maxReflections);
+  const neoPromptRecall = {
+    maxReflections: Number.isFinite(neoMaxReflectionsRaw) && neoMaxReflectionsRaw >= 0
+      ? Math.min(20, Math.floor(neoMaxReflectionsRaw))
+      : NEO_DEFAULT_MAX_REFLECTIONS,
+    laneMinRelevance: resolveNeoLaneMinRelevance(neoPromptRecallCfg.laneMinRelevance),
+  };
+  // 7.20.10: Zustandsangaben im Recall-Block datieren ("[Stand TT.MM.JJJJ]"),
+  // recall.volatileStateAnnotation; der gespeicherte Text bleibt unverändert.
+  const volatileStateAnnotationCfg = resolveVolatileStateAnnotationConfig(cfg.recall?.volatileStateAnnotation);
+  // 7.20.10: Qualitätsgewicht im Auto-Recall (recall.qualityWeighting,
+  // Default an, Untergrenze 0,35). memory_recall/memory_search bleiben ungewichtet.
+  const qualityWeightingCfg = resolveQualityWeightingConfig(cfg.recall?.qualityWeighting);
+  // 7.20.10: roh speichern, bereinigt einbetten (embedding.cleanText,
+  // Default an, Sprecherpräfix bleibt). Spalte embeddingTextMode.
+  const embeddingCleanTextCfg = resolveEmbeddingCleanTextConfig(cfg.embedding?.cleanText);
+  const neoFormatOptions = (idempotencyKey) => ({
+    idempotencyKey: idempotencyKey || undefined,
+    volatileStateAnnotation: volatileStateAnnotationCfg,
+    onError: (error) => host.logger.debug(`plur1bus-neo: state date falls back to UTC: ${describeError(error)}`),
+  });
   const NEO_RECALL_PRELUDE_LOG_MS = 2000;
   const runNeoGlobalSearch = (store, neoItems, queryVector, requester) => {
     if (!neoGlobalRecall.enabled || !Array.isArray(queryVector) || queryVector.length === 0) return null;
@@ -887,6 +915,10 @@ export function createEngine(host, config, testOptions = {}) {
     for (const hit of global.hits) neoItems.push(hit.item);
     const top = global.hits[0];
     host.logger.info(`plur1bus-neo: global candidate search scanned=${global.scanned} unique=${global.unique} eligible=${global.eligible} withVector=${global.withVector} hits=${global.hits.length}${top ? ` topSim=${top.similarity.toFixed(3)} topAgeDays=${top.ageDays.toFixed(1)}` : ""} index=${global.index}${global.indexLines ? `/${global.indexLines}` : ""} ms=${global.ms}`);
+    const cache = global.vectorCache;
+    if (cache) host.logger.debug(cache.disabled ? "plur1bus-neo: global vector cache disabled" : `plur1bus-neo: global vector cache hits=${cache.hits} misses=${cache.misses} loaded=${cache.loaded} uncached=${cache.uncached} overflow=${cache.overflow} evicted=${cache.evicted} refaults=${cache.refaults} verified=${cache.verified} verifyFailed=${cache.verifyFailed} coldReads=${cache.coldReads} coldBytes=${cache.coldBytes}`);
+    const capacity = cache?.capacityWarning;
+    if (capacity) host.logger.warn(`plur1bus-neo: global vector cache limit ${Math.round(capacity.maxBytes / 1048576)} MiB is smaller than the working set (wanted=${capacity.wanted} uncached=${capacity.overflow} refaults=${capacity.refaults}); vectors beyond the limit are read from disk on every recall. Raise PLUR1BUS_NEO_VECTOR_CACHE_MAX_BYTES (logged once per process).`);
     return new Set(global.hits.map((hit) => String(hit.item.id)));
   };
   // Der Wartungslauf nimmt sich die Warteschlange am Stueck vor. Die Frist
@@ -1267,6 +1299,11 @@ export function createEngine(host, config, testOptions = {}) {
       });
   };
   const snapshotNeoString = (value) => typeof value === "string" ? value : "";
+  // 7.20.10: Herkunft je Nachricht (nur kind/sourceRole) für die
+  // Kennzeichnung inter_session/subagent im Neo-Capture.
+  const snapshotNeoProvenance = (value) => (value && typeof value === "object"
+    ? { kind: snapshotNeoString(value.kind), sourceRole: snapshotNeoString(value.sourceRole) }
+    : undefined);
   const snapshotNeoMessages = (messages = []) => Array.isArray(messages)
     ? messages
         .filter(msg => msg && typeof msg === "object")
@@ -1274,6 +1311,7 @@ export function createEngine(host, config, testOptions = {}) {
           role: msg.role,
           content: snapshotNeoContent(msg.content),
           tool_call_id: msg.tool_call_id,
+          provenance: snapshotNeoProvenance(msg.provenance || msg.inputProvenance),
         }))
     : [];
   const recallInjectionKeys = new Set();
@@ -2638,7 +2676,9 @@ export function createEngine(host, config, testOptions = {}) {
     });
     try {
       return await pool.withWriteDb(storeAgentId, async (storeDb) => {
-      const vector = await embeddings.embed(params.text, { agentId: storeAgentId });
+      // 7.20.10: bereinigt einbetten, wörtlich speichern (lib/embedding-text.js).
+      const storeEmbedInput = prepareEmbeddingText(params.text, embeddingCleanTextCfg);
+      const vector = await embeddings.embed(storeEmbedInput.text, { agentId: storeAgentId });
       const categoryResult = params.category
         ? { category: params.category, reason: "caller-provided" }
         : categorizeMemoryWithReason(params.text);
@@ -2782,9 +2822,10 @@ export function createEngine(host, config, testOptions = {}) {
                 return null;
               }
               const mergedImportance = Math.max(importance, authoritativeCandidate.importance ?? 0.5);
-              const mergedVector = await embeddings.embed(mergeResult.mergedText, { agentId: storeAgentId });
+              const mergedEmbedInput = prepareEmbeddingText(mergeResult.mergedText, embeddingCleanTextCfg);
+              const mergedVector = await embeddings.embed(mergedEmbedInput.text, { agentId: storeAgentId });
               const mergedValidTime = combineValidTimeForMerge(authoritativeCandidate, { validFrom: capturedValidFrom, validUntil: capturedValidUntil });
-              const mergedEntry = applyDynamicsDefaults({ id: replacementId, text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: mergedImportance, category, createdAt: Date.now(), mergedFrom: JSON.stringify(durableMergeLineage(authoritativeCandidate)), expiresAt, ...ownershipFields, ...durableMergeEpistemicMetadata(authoritativeCandidate), sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, validFrom: mergedValidTime.validFrom, validUntil: mergedValidTime.validUntil }, Date.now(), halfLifeOverrides, { flashbulbEncodingEnabled });
+              const mergedEntry = applyDynamicsDefaults({ id: replacementId, text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: mergedImportance, category, createdAt: Date.now(), mergedFrom: JSON.stringify(durableMergeLineage(authoritativeCandidate)), expiresAt, ...ownershipFields, ...durableMergeEpistemicMetadata(authoritativeCandidate), sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, validFrom: mergedValidTime.validFrom, validUntil: mergedValidTime.validUntil, embeddingTextMode: mergedEmbedInput.mode }, Date.now(), halfLifeOverrides, { flashbulbEncodingEnabled });
               return { mergedEntry, mergeResult, mergedImportance };
             },
           });
@@ -2810,7 +2851,7 @@ export function createEngine(host, config, testOptions = {}) {
 
       // 3. Normal store
       const summary = generateSummary(params.text, summaryMaxWords);
-      const entry = applyDynamicsDefaults({ id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, ...ownershipFields, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, validFrom: capturedValidFrom, validUntil: capturedValidUntil, epistemicStatus: decideEpistemicStatusForCapture({ text: params.text, sourceMessageRole: "", origin, cutoffFailed: !epistemicCutoffBoot.ok }) }, Date.now(), halfLifeOverrides, { flashbulbEncodingEnabled });
+      const entry = applyDynamicsDefaults({ id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, ...ownershipFields, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, validFrom: capturedValidFrom, validUntil: capturedValidUntil, embeddingTextMode: storeEmbedInput.mode, epistemicStatus: decideEpistemicStatusForCapture({ text: params.text, sourceMessageRole: "", origin, cutoffFailed: !epistemicCutoffBoot.ok }) }, Date.now(), halfLifeOverrides, { flashbulbEncodingEnabled });
       await storeDb.store(entry);
       if (riCfg.enabled) {
         setImmediate(() => {
@@ -3315,7 +3356,9 @@ export function createEngine(host, config, testOptions = {}) {
     neoEmbeddingDrainImpact,
     neoEmbeddingDrainMaxItems,
     neoEnabled,
+    neoFormatOptions,
     neoGlobalRecall,
+    neoPromptRecall,
     neoRequester,
     neoRoot,
     neoWorkerRuntime,
@@ -3394,6 +3437,10 @@ export function createEngine(host, config, testOptions = {}) {
     runSpeakerProposalPipeline,
     ...(testOptions.internals ?? {}),
     embeddings,
+    // 7.20.10: Auto-Recall-Regeln, Zustandsdatum, bereinigte Einbettung.
+    embeddingCleanTextCfg,
+    qualityWeightingCfg,
+    volatileStateAnnotationCfg,
   };
 
   // Registration views (spec 3.1: views over EngineInternals are built once,
@@ -3442,7 +3489,9 @@ export function createEngine(host, config, testOptions = {}) {
     "mergingEnabled",
     "namespaceLayout",
     "neoEnabled",
+    "neoFormatOptions",
     "neoGlobalRecall",
+    "neoPromptRecall",
     "neoRequester",
     "neoWorkerRuntime",
     "overlayLlmCfg",
@@ -3477,6 +3526,9 @@ export function createEngine(host, config, testOptions = {}) {
     "traceEnabled",
     "traceInPrompt",
     "workspacePolicyGuard",
+    "embeddingCleanTextCfg",
+    "qualityWeightingCfg",
+    "volatileStateAnnotationCfg",
   ];
   const recallContextExtras = {
     MAX_PROMPT_REPLY_OUTCOME_READ_BYTES,
@@ -3510,6 +3562,7 @@ export function createEngine(host, config, testOptions = {}) {
     "duplicateThreshold",
     "embeddings",
     "emotionIntensityHalfLifeFactor",
+    "embeddingCleanTextCfg",
     "emotionalPool",
     "episodeExtractionLlmCfg",
     "epistemicCutoffBoot",
@@ -3574,6 +3627,7 @@ export function createEngine(host, config, testOptions = {}) {
     "durableMergeEpistemicMetadata",
     "durableMergeLineage",
     "durableMergeWriteKey",
+    "embeddingCleanTextCfg",
     "embeddings",
     "emotionIntensityHalfLifeFactor",
     "emotionalPool",
