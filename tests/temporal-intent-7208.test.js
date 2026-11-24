@@ -662,6 +662,16 @@ describe("Namensräume: das Sicherheitsnetz 7.12.41 gilt für die Vereinigung", 
     assert.deepEqual(rejected.map((d) => [d.memoryId, d.action]), [["sept", "rejection"]]);
   });
 
+  it("Merge: hat der gefilterte Namensraum danach nichts mehr (Mindestscore, ACL), bleibt der Rest", () => {
+    const { lines, logger } = capturingLogger();
+    const merged = mergeNamespaceRecallResults([
+      { namespace: "agent-private", sourceKind: "private", memories: [], canonical: [], temporalFilter: { ...range, keptUnfiltered: false } },
+      { namespace: "shared-user", sourceKind: "user", memories: [item("sept", Date.UTC(2026, 8, 1), 0.9)], canonical: [], temporalFilter: { ...range, keptUnfiltered: true } },
+    ], { maxOut: 10, dedupEnabled: false, logger });
+    assert.deepEqual(merged.memories.map((m) => m.entry.id), ["sept"]);
+    assert.deepEqual(lines, []);
+  });
+
   it("Merge: liegt nirgends etwas im Fenster, bleibt alles; ohne Zeitfilter unverändert", () => {
     const all = mergeNamespaceRecallResults([
       { namespace: "agent-private", sourceKind: "private", memories: [item("a", Date.UTC(2026, 2, 1), 0.5)], canonical: [], temporalFilter: { ...range, keptUnfiltered: true } },
