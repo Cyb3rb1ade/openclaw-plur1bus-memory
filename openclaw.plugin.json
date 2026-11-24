@@ -1457,6 +1457,25 @@
             "type": "number",
             "default": 12000
           },
+          "volatileStateAnnotation": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Render-time dating of volatile state in recall blocks: a marker like aktuell/derzeit/läuft/live/latest/currently followed by a value (version number, model name) gets \"[Stand DD.MM.YYYY]\" from the record's created-at. Stored text is never changed. Defaults: enabled, minAgeDays 2, maxPerRecord 2.",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "minAgeDays": {
+                "type": "number",
+                "minimum": 0
+              },
+              "maxPerRecord": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10
+              }
+            }
+          },
           "candidateTopK": {
             "type": "number",
             "minimum": 1,

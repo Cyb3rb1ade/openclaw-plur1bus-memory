@@ -408,6 +408,7 @@ import { saveReminder, listDueReminders, presentReminder, listReminders, cancelR
 import { formatReminderNudge } from "./lib/reminder-nudge.js";
 import { recordActivity, formatTimeContext, getLastActivity } from "./lib/session-time.js";
 import { formatTemporalContinuityContext } from "./lib/temporal-context.js";
+import { resolveVolatileStateAnnotationConfig } from "./lib/temporal-provenance.js";
 import { readPendingReminders, writePendingReminders, removePendingReminder } from "./lib/reminder-pending.js";
 import { lightDream, writeLightDreamToVault } from "./lib/dreaming/light-dream.js";
 import { createDreamingStatusProvider, readLightDreamRun, recordLightDreamRun } from "./lib/dreaming/dreaming-status-provider.js";
@@ -5378,6 +5379,14 @@ const plugin = {
         : NEO_DEFAULT_MAX_REFLECTIONS,
       laneMinRelevance: resolveNeoLaneMinRelevance(neoPromptRecallCfg.laneMinRelevance),
     };
+    // 7.20.10: Zustandsangaben im Recall-Block datieren ("[Stand TT.MM.JJJJ]"),
+    // recall.volatileStateAnnotation; der gespeicherte Text bleibt unverändert.
+    const volatileStateAnnotationCfg = resolveVolatileStateAnnotationConfig(cfg.recall?.volatileStateAnnotation);
+    const neoFormatOptions = (idempotencyKey) => ({
+      idempotencyKey: idempotencyKey || undefined,
+      volatileStateAnnotation: volatileStateAnnotationCfg,
+      onError: (error) => api.logger?.debug?.(`plur1bus-neo: state date falls back to UTC: ${String(error?.message || error)}`),
+    });
     const NEO_RECALL_PRELUDE_LOG_MS = 2000;
     const runNeoGlobalSearch = (store, neoItems, queryVector, requester) => {
       if (!neoGlobalRecall.enabled || !Array.isArray(queryVector) || queryVector.length === 0) return null;
@@ -13054,7 +13063,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               };
               neoRouteItems = neoItems;
               neoLanes = routeNeoRecall(neoItems, event.prompt, neoRouteOptions);
-              neoContext = formatNeoRecallContext(neoLanes, { idempotencyKey: injectionKey || undefined });
+              neoContext = formatNeoRecallContext(neoLanes, neoFormatOptions(injectionKey));
               recallPrelude.lanesMs = Date.now() - lanesStartedAt;
             }
           } catch (neoErr) {
@@ -14020,7 +14029,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   const routedCount = Object.values(lanesForPrompt).reduce((sum, rows) => sum + (rows?.length || 0), 0);
                   rerouteNote = ` rerouted=${routedCount} ms=${Date.now() - rerouteStartedAt}`;
                 }
-                neoContext = formatNeoRecallContext(lanesForPrompt, { idempotencyKey: neoInjectionKey || undefined });
+                neoContext = formatNeoRecallContext(lanesForPrompt, neoFormatOptions(neoInjectionKey));
                 api.logger?.info?.(`plur1bus-neo: global candidate search dropped ${deduped.dropped} hit(s) already injected as memories${rerouteNote}`);
               }
             } catch (dedupeErr) {
