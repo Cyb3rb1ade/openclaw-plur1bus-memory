@@ -345,6 +345,7 @@ import {
 import {
   buildRecallSafetyPreamble,
   formatRelevantMemoriesContext,
+  collectRenderedMemoryIds,
   resolveFadedThreshold,
 } from "./lib/relevant-memory-context.js";
 import { runConversationReactivationRecall } from "./lib/conversation-reactivation-recall.js";
@@ -13810,6 +13811,9 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             // (and hit first by) recall.globalInjectMaxChars — see
             // docs/configuration.md "Recall-Pipeline" for how the two relate.
             maxTotalChars: recallCfg.memoriesMaxChars ?? 12_000,
+            // 7.20.10: Zustandsangaben datieren ("[Stand TT.MM.JJJJ]").
+            volatileStateAnnotation: volatileStateAnnotationCfg,
+            onError: (error) => api.logger?.debug?.(`memory-lancedb-namespaced: state date falls back to UTC: ${String(error?.message || error)}`),
             overlays,
             matchedPattern,
             semanticLensMemories: promptSemanticLensItems,
@@ -14059,7 +14063,14 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           // selben Prompt stehen, nicht doppelt injizieren.
           if (neoLanes && neoGlobalIds?.size > 0 && Array.isArray(ordered) && ordered.length > 0) {
             try {
-              const memoryTexts = ordered.map((row) => row?.entry?.text || row?.text || "").filter(Boolean);
+              // 7.20.10 (B3): nur gegen Erinnerungen, die im Block tatsächlich
+              // stehen. Bis 7.20.9 zählten alle 30 Treffer, auch die hinter der
+              // Kürzung (memoriesMaxChars) — ein Neo-Treffer fehlte dann in beiden Blöcken.
+              const renderedMemoryIds = collectRenderedMemoryIds(memoriesContext, ordered);
+              const memoryTexts = ordered
+                .filter((row) => renderedMemoryIds.has(row?.entry?.id))
+                .map((row) => row?.entry?.text || row?.text || "")
+                .filter(Boolean);
               const dedupeOptions = { onlyIds: neoGlobalIds, threshold: neoGlobalRecall.dedupeThreshold };
               const deduped = dedupeNeoLanesAgainstTexts(neoLanes, memoryTexts, dedupeOptions);
               if (deduped.dropped > 0) {
