@@ -2,9 +2,9 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.20.9 — OpenClaw 2026.8.1 or newer**
+**PLUR1BUS 7.20.10 — OpenClaw 2026.8.1 or newer**
 
-Current source version: **7.20.9**, running in production on an OpenClaw
+Current source version: **7.20.10**, running in production on an OpenClaw
 `2026.11.6` build. The declared compatibility floor is `openclaw@2026.8.1` and plugin
 API `>=2026.8.1`; the package is built against the immutable build baseline
 `openclaw@2026.8.2`. Each host release is checked against the full patch set
@@ -28,6 +28,34 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.20.10 — auto-recall without echoes, dated state, clean embeddings
+
+Everything stays stored; weak entries are ranked lower instead of being
+filtered. The automatic recall before each turn now
+- leaves out memories that only repeat the current message and memories of the
+  running conversation that are still in context (new column `sessionKey`),
+- multiplies the score after rerank by a rule-based quality weight (host
+  envelopes, content-free agent self-introductions, filler-heavy voice
+  fragments, very short texts, assistant claims; floor 0.35,
+  `recall.qualityWeighting`),
+- dates state claims older than two days in the prompt ("aktuell 7.12.2
+  [Stand 14.09.2026]", `recall.volatileStateAnnotation`); the stored text stays,
+- fills the Neo block only from lanes that match the record's category, without
+  `[visible thinking]` placeholder lines, without behavior cards and with the
+  record's date (`neo.recall.maxReflections`, `neo.recall.laneMinRelevance`).
+
+`memory_recall` and `memory_search` still reach everything in the 7.20.9 order.
+New memories keep their text verbatim but are embedded from a cleaned copy
+without timestamps, transcript envelopes, stage directions and filler words
+(`embedding.cleanText`, column `embeddingTextMode`); `scripts/reembed-clean.mjs`
+re-embeds the existing rows (dry-run first, gateway stopped, snapshot
+required). Capture no longer files "noch immer …" or pure questions as
+preferences, tags subagent, helper and inter-session turns in `origin` and drops
+only content-free host envelopes. The Cohere reranker sends the v2 request
+(model from `reranker.model`, e.g. `rerank-v5.0-fast`) and cuts each document
+to `reranker.maxDocChars` (default 1400) so query plus document stay under the
+500-token billing unit.
 
 ### New in v7.20.9 — the Neo prelude keeps its vectors in memory
 
@@ -1249,7 +1277,7 @@ On an older host the installer refuses the package instead of deploying it:
 Install the published release through OpenClaw's package installer:
 
 ```bash
-openclaw plugins install clawhub:@cyb3rb1ade/plur1bus-memory@7.20.9 \
+openclaw plugins install clawhub:@cyb3rb1ade/plur1bus-memory@7.20.10 \
   --acknowledge-clawhub-risk --pin
 ```
 
@@ -1257,14 +1285,14 @@ The same release is on the npm-compatible registry, if your `@cyb3rb1ade`
 scope already points there:
 
 ```bash
-openclaw plugins install @cyb3rb1ade/plur1bus-memory@7.20.9 --pin
+openclaw plugins install @cyb3rb1ade/plur1bus-memory@7.20.10 --pin
 ```
 
 Or install the immutable GitHub Release tarball:
 
 ```bash
 openclaw plugins install \
-  https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/download/v7.20.9/cyb3rb1ade-plur1bus-memory-7.20.9.tgz
+  https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/download/v7.20.10/cyb3rb1ade-plur1bus-memory-7.20.10.tgz
 ```
 
 To build from this source checkout instead, produce a tarball and install that
@@ -1276,7 +1304,7 @@ npm ci
 npm test
 npm pack
 openclaw plugins install \
-  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.20.9.tgz --force
+  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.20.10.tgz --force
 ```
 
 Record the tarball's SHA-256 before transferring it. PLUR1BUS never patches
