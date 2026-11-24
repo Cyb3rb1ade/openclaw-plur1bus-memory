@@ -8,7 +8,7 @@ Latest release: **7.20.10** ([GitHub Release](https://github.com/Cyb3rb1ade/open
 ClawHub, npm). Releases are cut on the release line (`release/*`, tags
 `vX.Y.Z`). This branch, `main`, carries the engine/adapter layout and contains
 every release change through 7.20.10 as `port(<version>)` commits (#212, #280,
-#283, #285, #287, #288), so its package version is 7.20.10 as well. A build from `main` is still not the
+#283, #285, #287, #288, #289), so its package version is 7.20.10 as well. A build from `main` is still not the
 release artifact: it also carries the unreleased engine/adapter work. The declared compatibility floor is
 `openclaw@2026.8.1` and plugin API `>=2026.8.1` (`openclaw.compat` in
 `package.json`); that floor is the only compatibility claim. The package is
