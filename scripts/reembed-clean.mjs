@@ -356,12 +356,25 @@ function versionStateOf(list) {
  * dass die zusätzlichen von diesem Lauf stammen, prüft runAgent vorher am
  * Versionsstand im Checkpoint.
  */
+/**
+ * True when `child` lies inside `parent` (or is it), on every platform: a
+ * relative path from parent to child that does not leave it. A plain
+ * `startsWith(parent + "/")` never matched Windows paths.
+ * @param {string} parent
+ * @param {string} child
+ * @returns {boolean}
+ */
+function isInsideDir(parent, child) {
+  const rel = relative(parent, child);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
 function verifySnapshot(snapshotDir, { openclawHome, base, agent, isProd, allowSuperset = false, liveVersions = null }) {
   const problems = [];
   if (!existsSync(join(snapshotDir, "manifest.json"))) problems.push("manifest.json missing");
   if (isProd) {
     const snapRoot = join(openclawHome, ".snapshots");
-    if (!(snapshotDir + "/").startsWith(snapRoot + "/")) problems.push(`snapshot must live under ${snapRoot}`);
+    if (!isInsideDir(snapRoot, snapshotDir)) problems.push(`snapshot must live under ${snapRoot}`);
   }
   const relBase = relative(openclawHome, base);
   const candidates = [
@@ -484,7 +497,7 @@ async function runAgent(agent, ctx) {
   const agentDir = resolveInside(base, agent);
   const isProd = (() => {
     const home = existsSync(openclawHome) ? realpathSync(openclawHome) : openclawHome;
-    return (agentDir + "/").startsWith(home + "/");
+    return isInsideDir(home, agentDir);
   })();
   report.preconditions.productionPath = isProd;
   if (!existsSync(join(agentDir, `${TABLE_NAME}.lance`))) throw new Error(`no ${TABLE_NAME} table for agent ${agent}`);
