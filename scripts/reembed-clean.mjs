@@ -55,7 +55,11 @@
  * starten — verarbeitete Zeilen sind nicht mehr 'raw'; der Checkpoint hält
  * Modus, Auswahl, Tabelle, Snapshot und die LanceDB-Versionen nach dem
  * letzten eigenen Schreibzugriff fest (geschrieben vor dem ersten
- * Schreibzugriff und nach jedem Block). Fortgesetzt wird mit demselben
+ * Schreibzugriff und nach jedem Block). Der Stand wird fortgeschrieben, nicht
+ * von der Platte übernommen: vor jedem eigenen Schreibzugriff darf keine
+ * unbekannte Versionsdatei dazugekommen sein, danach genau eine; vor jedem
+ * Block wird der Gateway-Status erneut geprüft. Sonst bricht der Lauf ab,
+ * ohne den fremden Stand in den Checkpoint zu schreiben. Fortgesetzt wird mit demselben
  * Snapshot nur, wenn live genau diese Versionen hat; hat ein anderer Schreiber
  * (Gateway zwischen zwei Teilläufen) oder ein harter Abbruch mitten im Block
  * (SIGKILL, OOM) etwas geschrieben, bricht das Skript ab und verlangt einen
@@ -338,10 +342,10 @@ function lanceVersions(dir) {
   return existsSync(dir) ? readdirSync(dir).sort() : null;
 }
 
-/** Zahl und Hash der LanceDB-Versionsdateien (Checkpoint-Vergleich beim Fortsetzen). */
-function versionState(dir) {
-  const list = lanceVersions(dir) || [];
-  return { count: list.length, sha256: sha256(list.join("\n")) };
+/** Zahl und Hash einer Liste von LanceDB-Versionsdateien (Checkpoint-Vergleich beim Fortsetzen). */
+function versionStateOf(list) {
+  const sorted = [...list].sort();
+  return { count: sorted.length, sha256: sha256(sorted.join("\n")) };
 }
 
 /**
@@ -352,7 +356,7 @@ function versionState(dir) {
  * dass die zusätzlichen von diesem Lauf stammen, prüft runAgent vorher am
  * Versionsstand im Checkpoint.
  */
-function verifySnapshot(snapshotDir, { openclawHome, base, agent, isProd, allowSuperset = false }) {
+function verifySnapshot(snapshotDir, { openclawHome, base, agent, isProd, allowSuperset = false, liveVersions = null }) {
   const problems = [];
   if (!existsSync(join(snapshotDir, "manifest.json"))) problems.push("manifest.json missing");
   if (isProd) {
@@ -366,7 +370,8 @@ function verifySnapshot(snapshotDir, { openclawHome, base, agent, isProd, allowS
     join(snapshotDir, agent),
   ].filter(Boolean);
   const snapAgent = candidates.find((dir) => existsSync(join(dir, `${TABLE_NAME}.lance`)));
-  const live = lanceVersions(join(base, agent, `${TABLE_NAME}.lance`, "_versions"));
+  // liveVersions: dieselbe Liste, die runAgent als Ausgangsstand führt.
+  const live = liveVersions || lanceVersions(join(base, agent, `${TABLE_NAME}.lance`, "_versions"));
   const snap = snapAgent ? lanceVersions(join(snapAgent, `${TABLE_NAME}.lance`, "_versions")) : null;
   const identical = Boolean(live && snap) && live.length === snap.length && live.every((v, i) => v === snap[i]);
   // Mengen-Inklusion: die Dateinamen sortieren nicht numerisch ("10…" < "9…").
@@ -558,8 +563,10 @@ async function runAgent(agent, ctx) {
   // geschrieben (Gateway zwischen zwei Teilläufen) oder ein Block wurde hart
   // abgebrochen — ein Rollback auf den alten Snapshot verlöre dann Daten.
   const sameSnapshot = resuming && (previous.snapshot || null) === (options.snapshot || null);
+  // Ausgangsstand für Fortsetzen, Snapshot-Abgleich und die Buchführung unten.
+  const startVersions = lanceVersions(versionsDir) || [];
   if (sameSnapshot) {
-    const live = versionState(versionsDir);
+    const live = versionStateOf(startVersions);
     const recorded = previous.lanceVersions;
     if (!recorded || recorded.count !== live.count || recorded.sha256 !== live.sha256) {
       throw new Error(`table changed since the last checkpoint (live ${live.count} versions, checkpoint ${recorded?.count ?? "none"}): another writer or an interrupted write; take a fresh snapshot (scripts/backup-snapshot.sh, gateway stopped) and run again with it${options.snapshot ? "" : `, or move ${checkpointPath} away`}`);
@@ -569,7 +576,7 @@ async function runAgent(agent, ctx) {
     // Mehr Versionen als der Snapshot nur beim Fortsetzen mit genau dem Snapshot,
     // der vor dem ersten Teil des Laufs geprüft wurde; ein anderer (frischer)
     // Snapshot muss live genau entsprechen und wird die neue Basis.
-    const snap = verifySnapshot(options.snapshot, { openclawHome, base, agent, isProd, allowSuperset: sameSnapshot });
+    const snap = verifySnapshot(options.snapshot, { openclawHome, base, agent, isProd, allowSuperset: sameSnapshot, liveVersions: startVersions });
     report.preconditions.snapshot = snap;
     if (!snap.ok) throw new Error(`snapshot does not match the current state: ${snap.problems.join("; ")}`);
   }
@@ -589,10 +596,51 @@ async function runAgent(agent, ctx) {
     report.preconditions.rebasedOnSnapshot = true;
   }
   checkpoint.version = 2;
-  // refreshVersions: false nur, wenn ein fremder Schreiber nicht auszuschließen
-  // ist (Kopie mit laufendem Gateway) — dann bleibt der letzte eigene Stand.
-  const saveCheckpoint = ({ refreshVersions = true } = {}) => {
-    if (refreshVersions) checkpoint.lanceVersions = versionState(versionsDir);
+
+  // Erwarteter Versionsstand, fortgeschrieben statt von der Platte gelesen.
+  // Bis hierher las saveCheckpoint den Stand nach jedem Block neu ein: ein
+  // fremder Schreiber mitten im Lauf (Gateway gestartet, Cron-Neustart) landete
+  // so als "eigener" Stand im Checkpoint, der nächste Lauf mit demselben
+  // Snapshot wurde angenommen, ein Rollback verlöre die fremden Zeilen.
+  // LanceDB legt je Schreibzugriff (update, auch ohne Treffer, mergeInsert,
+  // addColumns) genau eine Versionsdatei an; eine fremde Datei erscheint auch
+  // dann, wenn das eigene Tabellen-Handle die Version nicht sieht. Fehlende
+  // Dateien sind erlaubt: Aufräumen alter Manifeste ändert keine Daten.
+  let knownVersions = startVersions;
+  const unknownVersions = (live) => {
+    const known = new Set(knownVersions);
+    return live.filter((v) => !known.has(v));
+  };
+  const freshSnapshotHint = "take a fresh snapshot (scripts/backup-snapshot.sh, gateway stopped) and run again with it";
+  const assertOwnVersions = (when) => {
+    const live = lanceVersions(versionsDir) || [];
+    const unknown = unknownVersions(live);
+    if (unknown.length > 0) throw new Error(`table changed outside this run ${when} (${unknown.length} unknown version file(s)): another writer; ${freshSnapshotHint}`);
+    knownVersions = live;
+  };
+  // Gateway-Status vor jedem Block erneut: gestartet wird er womöglich erst
+  // mitten im Lauf (protect-Cron, Restart=always, zweite Sitzung).
+  const assertGatewayStopped = (when) => {
+    const state = (runtime.gatewayState || defaultGatewayState)();
+    if (state.running && (isProd || !options.allowRunningGateway)) {
+      throw new Error(`gateway started during the run (${state.systemd}, pids ${state.processes?.join(",") || "-"}) ${when}; stop it, ${freshSnapshotHint}`);
+    }
+  };
+  const ownWrite = async (label, write) => {
+    assertGatewayStopped(`before ${label}`);
+    assertOwnVersions(`before ${label}`);
+    const result = await write();
+    const live = lanceVersions(versionsDir) || [];
+    const added = unknownVersions(live);
+    // Mehr als eine neue Datei: ein fremder Schreiber zwischen Prüfung und
+    // Commit. Der Stand wird nicht übernommen, der Checkpoint bleibt davor.
+    if (added.length !== 1) throw new Error(`${label} added ${added.length} version files instead of 1: another writer during the write; ${freshSnapshotHint}`);
+    knownVersions = live;
+    return result;
+  };
+  // Der Checkpoint hält immer den letzten eigenen, geprüften Stand.
+  const saveCheckpoint = () => {
+    checkpoint.lanceVersions = versionStateOf(knownVersions);
     checkpoint.updatedAt = new Date((runtime.now ? runtime.now() : Date.now())).toISOString();
     writeJson(checkpointPath, checkpoint);
   };
@@ -618,10 +666,11 @@ async function runAgent(agent, ctx) {
   try {
     // Checkpoint vor dem ersten Schreibzugriff: ein harter Abbruch im ersten
     // Block lässt sonst keinen Stand zurück, an dem ein Neustart prüfen kann.
+    assertOwnVersions("before the first write");
     saveCheckpoint();
     if (!hasModeColumn) {
       if (!options.addColumn) throw new Error("column embeddingTextMode is missing — start plugin 7.20.10 once or pass --add-column");
-      await table.addColumns([{ name: "embeddingTextMode", valueSql: "'raw'" }]);
+      await ownWrite("addColumns", () => table.addColumns([{ name: "embeddingTextMode", valueSql: "'raw'" }]));
       report.preconditions.modeColumn = "added";
       saveCheckpoint();
     }
@@ -639,7 +688,7 @@ async function runAgent(agent, ctx) {
       const ids = plan.modeOnly.slice(i, i + MODE_ONLY_CHUNK);
       const before = new Map((await readRowsByIds(table, ids)).map((r) => [r.id, rowFingerprint(r, { withVector: true })]));
       const list = ids.map((id) => `'${safeRowId(id)}'`).join(",");
-      await table.update({ where: `embeddingTextMode = 'raw' AND id IN (${list})`, values: { embeddingTextMode: textMode } });
+      await ownWrite("mode update", () => table.update({ where: `embeddingTextMode = 'raw' AND id IN (${list})`, values: { embeddingTextMode: textMode } }));
       const after = await readRowsByIds(table, ids);
       for (const row of after) {
         if (row.embeddingTextMode !== textMode) throw new Error(`mode not set for ${row.id}`);
@@ -684,7 +733,7 @@ async function runAgent(agent, ctx) {
         }
       }
       checkStop();
-      const result = await table.mergeInsert("id").whenMatchedUpdateAll().execute(updates);
+      const result = await ownWrite("block write", () => table.mergeInsert("id").whenMatchedUpdateAll().execute(updates));
       if (Number(result?.numInsertedRows || 0) !== 0) throw new Error("merge inserted rows — aborting");
       const afterRows = await readRowsByIds(table, ids);
       for (const row of afterRows) {
@@ -724,11 +773,20 @@ async function runAgent(agent, ctx) {
     // optimize() die Versionen umschichten, auf die der Snapshot-Abgleich baut.
     if (options.optimize && complete) {
       checkStop();
+      assertGatewayStopped("before optimize");
+      assertOwnVersions("before optimize");
       const stats = await table.optimize();
       report.optimize = { fragmentsRemoved: Number(stats?.compaction?.fragmentsRemoved || 0), fragmentsAdded: Number(stats?.compaction?.fragmentsAdded || 0) };
       const rowsAfterOptimize = await table.countRows();
       if (rowsAfterOptimize !== rowsBefore) throw new Error(`row count changed by optimize: ${rowsBefore} → ${rowsAfterOptimize}`);
+      // optimize() legt je nach Lage mehrere Versionen an (Kompaktierung,
+      // Index); ihre Zahl ist nicht vorhersagbar. Übernommen erst nach der
+      // Zeilenprüfung; danach ist der Lauf fertig (done) und wird nie
+      // fortgesetzt. Scheitert etwas davor, bleibt der Stand vor optimize().
+      knownVersions = lanceVersions(versionsDir) || [];
     }
+    assertGatewayStopped("before commit");
+    assertOwnVersions("before commit");
     checkpoint.done = complete;
     saveCheckpoint();
     report.progress = progress;
@@ -744,10 +802,10 @@ async function runAgent(agent, ctx) {
     }
     if (!written) process.stderr.write("reembed-clean: audit entry 'failed' not written\n");
     try {
-      // Bei gestopptem Gateway schreibt nur dieser Prozess: der Stand auf der
-      // Platte ist der eigene. Mit laufendem Gateway (Kopie) bleibt der letzte
-      // geprüfte Stand, ein Neustart verlangt dann einen frischen Snapshot.
-      saveCheckpoint({ refreshVersions: !gateway.running });
+      // Der letzte eigene, geprüfte Stand — nie der Stand auf der Platte: hat
+      // ein fremder Schreiber oder ein abgebrochener Schreibzugriff etwas
+      // hinterlassen, verlangt der Neustart einen frischen Snapshot.
+      saveCheckpoint();
     } catch (cpError) {
       process.stderr.write(`reembed-clean: checkpoint write failed: ${redactError(cpError).message}\n`);
     }

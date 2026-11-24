@@ -560,6 +560,141 @@ describe("runCli --apply im Produktivpfad (<base> unter dem OpenClaw-Home)", () 
     assert.match(err2.text, /table changed since the last checkpoint/);
   });
 
+  // Befund REEMBED-FOREIGN-INTRA: ein fremder Schreiber mitten im Lauf.
+  const foreignRow = {
+    id: "66666666-6666-4666-8666-666666666666", text: "Vom Gateway erfasst, während der Lauf lief", vector: [0.2, 0.2, 0.2, 0.2],
+    status: "active", category: "fact", createdAt: 1_700_000_000_001n, importance: 0.5, embeddingTextMode: "raw",
+  };
+  const openSecond = async (base) => (await lancedb.connect(join(base, "main"))).openTable("memories");
+  function foreignDuringEmbed(base, write) {
+    let done = false;
+    return {
+      create: async () => ({
+        model: "fake",
+        dimensions: DIM,
+        embedBatch: async (texts) => {
+          if (!done) {
+            done = true;
+            await write(await openSecond(base));
+          }
+          return texts.map((t) => [0.1, 0.2, 0.3, 0.4 + t.length / 1000]);
+        },
+      }),
+    };
+  }
+  const versionCount = (base) => readdirSync(join(base, "main", "memories.lance", "_versions")).length;
+
+  it("fremdes Einfügen mitten im Lauf: Abbruch vor dem Block, der Stand wird nicht übernommen", async () => {
+    const { home, base } = await prodSetup();
+    const snap = snapshotOf(home, base, "plur1bus-intra-insert");
+    const argsFor = (snapshot) => ["--agent", "main", "--apply", "--openclaw-home", home, "--snapshot", snapshot, "--batch-size", "1", "--min-interval-ms", "0"];
+    const args = argsFor(snap);
+    const rt = { stdout: sink(), gatewayState: stopped, livePluginVersion: () => "7.20.10" };
+    const err = sink();
+    assert.equal(await runCli(args, { ...rt, stderr: err, createEmbedder: foreignDuringEmbed(base, (t) => t.add([foreignRow])).create }), 1);
+    assert.match(err.text, /table changed outside this run before block write .*another writer/);
+    assert.doesNotMatch(err.text, /row count changed/, "erkannt vor dem Schreiben, nicht erst am Ende");
+    const rows = await readAll(base, "main");
+    for (const id of [IDS.audio, IDS.filler]) assert.equal(rows.get(id).embeddingTextMode, "raw", "kein Block auf den fremden Stand geschrieben");
+    assert.ok(rows.has(foreignRow.id), "die fremde Zeile bleibt");
+    const checkpoint = JSON.parse(readFileSync(join(home, "memory", "reembed-clean", "main.checkpoint.json"), "utf8"));
+    assert.equal(checkpoint.lanceVersions.count, versionCount(base) - 1, "Checkpoint ohne die fremde Version");
+    // Derselbe Aufruf wird nicht mehr angenommen (vorher: Exit 0, committed).
+    const err2 = sink();
+    assert.equal(await runCli(args, { ...rt, stderr: err2, createEmbedder: fakeEmbedder().create }), 1);
+    assert.match(err2.text, /table changed since the last checkpoint .*take a fresh snapshot/);
+    // Ein frischer Snapshot enthält die fremde Zeile und wird die neue Basis.
+    const fresh = snapshotOf(home, base, "plur1bus-intra-fresh");
+    assert.equal(await runCli(argsFor(fresh), { ...rt, stderr: sink(), createEmbedder: fakeEmbedder().create }), 0);
+    assert.ok((await readAll(base, "main")).has(foreignRow.id));
+    const audit = readFileSync(join(home, "workspace", ".adaptive-learning", "destructive-ops.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l).result);
+    assert.deepEqual(audit, ["started", "failed", "started", "committed"]);
+  });
+
+  it("fremde Änderung an einer Zeile außerhalb des Blocks fällt auf (vorher unbemerkt committed)", async () => {
+    const { home, base } = await prodSetup();
+    const snap = snapshotOf(home, base, "plur1bus-intra-update");
+    const args = ["--agent", "main", "--apply", "--openclaw-home", home, "--snapshot", snap, "--batch-size", "8", "--min-interval-ms", "0"];
+    const err = sink();
+    const embedder = foreignDuringEmbed(base, (t) => t.update({ where: `id = '${IDS.archived}'`, values: { category: "config" } }));
+    assert.equal(await runCli(args, { stdout: sink(), stderr: err, gatewayState: stopped, livePluginVersion: () => "7.20.10", createEmbedder: embedder.create }), 1);
+    assert.match(err.text, /table changed outside this run before block write/);
+    const checkpoint = JSON.parse(readFileSync(join(home, "memory", "reembed-clean", "main.checkpoint.json"), "utf8"));
+    assert.equal(checkpoint.done, false);
+  });
+
+  it("ein fremder Commit während des eigenen Schreibzugriffs: mehr als eine neue Versionsdatei", async () => {
+    const { home, base } = await prodSetup();
+    const snap = snapshotOf(home, base, "plur1bus-intra-race");
+    const second = await openSecond(base);
+    let raced = false;
+    // LanceDB-Modul, dessen mergeInsert direkt nach dem eigenen Commit einen fremden auslöst.
+    const racing = {
+      connect: async (dir) => {
+        const db = await lancedb.connect(dir);
+        return {
+          openTable: async (name) => {
+            const table = await db.openTable(name);
+            return new Proxy(table, {
+              get(target, prop) {
+                if (prop === "mergeInsert") {
+                  return (on) => ({
+                    whenMatchedUpdateAll: () => ({
+                      execute: async (rows) => {
+                        const result = await target.mergeInsert(on).whenMatchedUpdateAll().execute(rows);
+                        if (!raced) { raced = true; await second.add([foreignRow]); }
+                        return result;
+                      },
+                    }),
+                  });
+                }
+                const value = target[prop];
+                return typeof value === "function" ? value.bind(target) : value;
+              },
+            });
+          },
+        };
+      },
+    };
+    const err = sink();
+    const code = await runCli(["--agent", "main", "--apply", "--openclaw-home", home, "--snapshot", snap, "--batch-size", "1", "--min-interval-ms", "0"], {
+      stdout: sink(), stderr: err, gatewayState: stopped, livePluginVersion: () => "7.20.10", createEmbedder: fakeEmbedder().create, lancedb: racing,
+    });
+    assert.equal(code, 1);
+    assert.match(err.text, /block write added 2 version files instead of 1/);
+    const checkpoint = JSON.parse(readFileSync(join(home, "memory", "reembed-clean", "main.checkpoint.json"), "utf8"));
+    assert.equal(checkpoint.lanceVersions.count, versionCount(base) - 2, "weder der eigene noch der fremde Commit gilt als geprüfter Stand");
+  });
+
+  it("ein Gateway, der mitten im Lauf startet, stoppt den Lauf vor dem nächsten Schreibzugriff", async () => {
+    const { home, base } = await prodSetup();
+    const snap = snapshotOf(home, base, "plur1bus-intra-gateway");
+    let calls = 0;
+    const gatewayState = () => {
+      calls += 1;
+      return calls === 1 ? stopped() : running();
+    };
+    const before = await readAll(base, "main");
+    const err = sink();
+    assert.equal(await runCli(["--agent", "main", "--apply", "--openclaw-home", home, "--snapshot", snap, "--min-interval-ms", "0"], {
+      stdout: sink(), stderr: err, gatewayState, livePluginVersion: () => "7.20.10", createEmbedder: fakeEmbedder().create,
+    }), 1);
+    assert.match(err.text, /gateway started during the run .*before mode update/);
+    assert.deepEqual(await readAll(base, "main"), before, "nichts geschrieben");
+  });
+
+  it("Kopie ohne Snapshot: nach fremdem Schreiber setzt derselbe Aufruf nicht fort", async () => {
+    const base = freshDir("intra-copy");
+    await makeTable(base, "main");
+    const args = ["--agent", "main", "--apply", "--base", base, "--openclaw-home", freshDir("home"), "--workspace-dir", freshDir("ws"), "--out", freshDir("out"), "--batch-size", "1", "--min-interval-ms", "0"];
+    const err = sink();
+    assert.equal(await runCli(args, { stdout: sink(), stderr: err, gatewayState: stopped, createEmbedder: foreignDuringEmbed(base, (t) => t.add([foreignRow])).create }), 1);
+    assert.match(err.text, /table changed outside this run/);
+    const err2 = sink();
+    assert.equal(await runCli(args, { stdout: sink(), stderr: err2, gatewayState: stopped, createEmbedder: fakeEmbedder().create }), 1);
+    assert.match(err2.text, /table changed since the last checkpoint .*or move .*checkpoint\.json away/);
+  });
+
   it("ein gestaffelter Lauf (--max-rows) kompaktiert erst am Ende", async () => {
     const { home, base } = await prodSetup();
     const snap = snapshotOf(home, base, "plur1bus-staged");

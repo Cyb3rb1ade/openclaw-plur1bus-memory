@@ -449,12 +449,18 @@ einen Snapshot unter `~/.openclaw/.snapshots` mit denselben LanceDB-Versionen
 wie live. Jeder Lauf schreibt `started`/`committed`/`failed` per
 `appendDestructiveOpLog` in den Workspace des Agenten; Checkpoint und Bericht
 liegen unter `memory/reembed-clean/`. Der Checkpoint entsteht vor dem ersten
-Schreibzugriff und hält nach jedem Block den Versionsstand der Tabelle fest.
-Ein abgebrochener oder gestaffelter Lauf wird mit demselben Aufruf und
+Schreibzugriff und hält nach jedem eigenen Schreibzugriff den Versionsstand der
+Tabelle fest. Der Stand wird fortgeschrieben, nicht von der Platte übernommen:
+vor jedem eigenen Schreibzugriff darf keine unbekannte Versionsdatei
+dazugekommen sein, danach genau eine (`update`, `mergeInsert` und `addColumns`
+legen je eine an; den Stand nach `table.optimize()` übernimmt das Skript erst
+nach der Zeilenprüfung, der Lauf ist dann fertig). Vor jedem Block prüft es
+den Gateway erneut. Ein abgebrochener oder gestaffelter Lauf wird mit demselben Aufruf und
 demselben Snapshot fortgesetzt, solange live genau diesen Stand hat (live hat
-dann mehr Versionen als der Snapshot, alle von diesem Lauf). Hat dazwischen
-jemand anderes geschrieben (Gateway zwischen zwei Teilläufen) oder wurde ein
-Block hart abgebrochen (SIGKILL, OOM), bricht das Skript ab: dann bei
+dann mehr Versionen als der Snapshot, alle von diesem Lauf). Hat jemand anderes
+geschrieben, mitten im Lauf oder zwischen zwei Teilläufen (Gateway gestartet,
+eine Kompaktierung per Cron), oder wurde ein Block hart abgebrochen (SIGKILL,
+OOM), bricht das Skript ab, ohne den fremden Stand zu übernehmen: dann bei
 gestopptem Gateway einen frischen Snapshot ziehen und mit ihm neu starten, er
 wird die neue Basis. Der Gateway bleibt deshalb zwischen Teilläufen gestoppt.
 Ctrl-C oder SIGTERM beenden den laufenden Block, schreiben `failed` und den
