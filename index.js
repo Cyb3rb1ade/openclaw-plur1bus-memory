@@ -287,7 +287,20 @@ import { runProactiveCheck } from "./lib/jobs/proactive-check.js";
 import { runReflectionJob } from "./lib/jobs/reflection-job.js";
 import { shouldTriggerReflection } from "./lib/meta-cognition.js";
 import { explainResults, renderExplanation } from "./lib/explainability.js";
-import { applyImportanceBoost, parseKnowledgeMd, getKnowledgeChunks, searchCanonical, runRecallPipeline, mergeNamespaceRecallResults, computeUseAssociative, emitRetrievalLedger } from "./lib/recall-pipeline.js";
+import {
+  applyImportanceBoost,
+  parseKnowledgeMd,
+  getKnowledgeChunks,
+  searchCanonical,
+  runRecallPipeline,
+  mergeNamespaceRecallResults,
+  computeUseAssociative,
+  emitRetrievalLedger,
+  createAutoRecallPolicy,
+  normalizeMemorySessionKey,
+  resolveSessionEchoCutoff,
+} from "./lib/recall-pipeline.js";
+import { resolveQualityWeightingConfig } from "./lib/recall-quality.js";
 import { applyRecallBudget, resolveRecallBudget } from "./lib/recall-budget.js";
 import {
   createRecallDecisionTrace,
@@ -1638,6 +1651,9 @@ class MemoryDB {
     // never derived from createdAt/updatedAt (see lib/valid-time.js).
     if (normalized.validFrom == null) normalized.validFrom = 0;
     if (normalized.validUntil == null) normalized.validUntil = 0;
+    // 7.20.10: LanceDB lehnt Appends ab, denen eine Spalte fehlt; Tabellen
+    // ohne die Spalte filtert schemaFieldNames unten wieder heraus.
+    if (normalized.sessionKey == null) normalized.sessionKey = "";
     if (!this.schemaFieldNames) return normalized;
     const filtered = {};
     for (const [key, value] of Object.entries(normalized)) {
@@ -1777,6 +1793,10 @@ class MemoryDB {
             // that direction", not the Unix epoch.
             { name: 'validFrom', valueSql: '0' },
             { name: 'validUntil', valueSql: '0' },
+            // 7.20.10: Sitzungsschlüssel des Captures (ctx.sessionKey). Der
+            // Auto-Recall lässt Erinnerungen aus, die im laufenden Gespräch
+            // noch im Kontext stehen. '' = unbekannt (Bestand, memory_store).
+            { name: 'sessionKey', valueSql: "''" },
           ];
 
           for (const col of allColumns) {
@@ -1883,6 +1903,7 @@ class MemoryDB {
             // that direction", not the Unix epoch.
             validFrom: 0,
             validUntil: 0,
+            sessionKey: "",
           },
         ]), "MemoryDB.createTable", "created-table", false);
       }
@@ -5382,6 +5403,9 @@ const plugin = {
     // 7.20.10: Zustandsangaben im Recall-Block datieren ("[Stand TT.MM.JJJJ]"),
     // recall.volatileStateAnnotation; der gespeicherte Text bleibt unverändert.
     const volatileStateAnnotationCfg = resolveVolatileStateAnnotationConfig(cfg.recall?.volatileStateAnnotation);
+    // 7.20.10: Qualitätsgewicht im Auto-Recall (recall.qualityWeighting,
+    // Default an, Untergrenze 0,35). memory_recall/memory_search bleiben ungewichtet.
+    const qualityWeightingCfg = resolveQualityWeightingConfig(cfg.recall?.qualityWeighting);
     const neoFormatOptions = (idempotencyKey) => ({
       idempotencyKey: idempotencyKey || undefined,
       volatileStateAnnotation: volatileStateAnnotationCfg,
@@ -11378,6 +11402,11 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             let stored = 0;
             let skipped = 0;
             const captureTimestamp = Date.now();
+            // 7.20.10: Sitzung des Captures. Nur der echte Schlüssel des Hosts,
+            // kein sessionId-/runId-Ersatz: der Auto-Recall vergleicht mit
+            // ctx.sessionKey und lässt Treffer derselben Sitzung aus, die noch
+            // im Kontext stehen.
+            const captureSessionKey = normalizeMemorySessionKey(ctx?.sessionKey || event?.sessionKey);
 
             // Phase 1: Prepare texts (summarize/truncate) — alle parallel
             const textPrep = await Promise.all(captureList.map(async (it) => {
@@ -11539,6 +11568,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   // auf sourceTurnId zurueck (lib/recall-pipeline.js).
                   chunkGroupId: p.chunkGroupId || "",
                   sourceMessageRole: p.it.role || "",
+                  sessionKey: captureSessionKey,
                   epistemicStatus: decideEpistemicStatusForCapture({
                     text: p.text,
                     sourceMessageRole: p.it.role || "",
@@ -13240,11 +13270,22 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 maxCandidates: traceCfg.maxCandidates ?? 50,
               })
             : null;
+          // 7.20.10: Regeln nur für den Auto-Recall — Echo der Anfrage und des
+          // laufenden Gesprächs raus, Qualitätsgewicht. Die Grenze des
+          // Kontexts kommt aus event.messages (letzte Kompaktierung, sonst 6 h).
+          const autoRecallPolicyOptions = {
+            query: event.prompt,
+            sessionKey: normalizeMemorySessionKey(ctx?.sessionKey || event?.sessionKey),
+            sessionContextSince: resolveSessionEchoCutoff(event?.messages, { now: Date.now() }).since,
+            qualityWeighting: qualityWeightingCfg,
+          };
+          const autoRecallPolicy = createAutoRecallPolicy(autoRecallPolicyOptions);
           // v1.9.0 — komplette Pipeline aus shared module
           const _autoRecallBaseParams = {
             query: event.prompt,
             // Kanonische Treffer zusaetzlich zu maxPromptMemories (7.20.6).
             canonicalOutsideLimit: true,
+            autoRecallPolicy: autoRecallPolicyOptions,
             phaseTimer: timer,
             softBudgetFallback,
             embeddings,
@@ -13376,7 +13417,8 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               workspaceDir: ctx?.workspaceDir,
               getMemoryById: authorizedLensHydrator((memoryId) => db.getById(memoryId), memoryCtx),
             });
-          const semanticLensItems = semanticLensResult.lensMemories.map((r) => ({
+          // 7.20.10: kein Echo über die Linse (gleiche Regeln wie der Auto-Recall).
+          const semanticLensItems = semanticLensResult.lensMemories.filter((r) => !autoRecallPolicy?.exclusionReason(r.entry)).map((r) => ({
             id: r.entry.id,
             category: r.entry.category,
             source: "semantic-lens",
@@ -13641,6 +13683,10 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   getMemoryById: async (memoryId) => {
                     const memory = await db.getById(memoryId);
                     if (!memory || !checkAccess(memoryCtx, memory).allowed) return null;
+                    // 7.20.10: CRR holt über den Graphen nach, was nicht in
+                    // baseRecallIds steht — dazu gehörten die Echos, die der
+                    // Auto-Recall gerade entfernt hat.
+                    if (autoRecallPolicy?.exclusionReason(memory)) return null;
                     return memory;
                   },
                   decisionTrace: traceEnabled ? trace : null,

@@ -1457,6 +1457,21 @@
             "type": "number",
             "default": 12000
           },
+          "qualityWeighting": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Auto-recall only: final score = score after rerank × a rule-based quality weight (host envelopes and messages, content-free agent self-introductions, placeholder lines, filler-heavy fragments, very short texts without a number/name/URL, assistant claims), then re-sorted. Nothing is filtered or archived; memory_recall and memory_search stay unweighted. Defaults: enabled, floor 0.35.",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "floor": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            }
+          },
           "volatileStateAnnotation": {
             "type": "object",
             "additionalProperties": false,

@@ -33,6 +33,8 @@ export const DEPLOY_FILES = [
   "lib/memory-merge-safety.js",
   "lib/contradiction-detector.js",
   "lib/recall-pipeline.js",
+  // 7.20.10: von recall-pipeline.js importiert (Qualitätsgewicht im Auto-Recall).
+  "lib/recall-quality.js",
   "lib/runtime-scheduler.js",
   "lib/runtime-shutdown.js",
   "lib/recall-budget.js",
