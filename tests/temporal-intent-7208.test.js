@@ -114,14 +114,14 @@ describe("classifyTemporalQuery: Gesprächszeit filtert hart", () => {
 describe("classifyTemporalQuery: alles andere filtert nicht", () => {
   const notHard = [
     // Gespräche mit Dritten, Ereignisse Dritter
-    "ich habe heute mit Lorenzo gesprochen",
+    "ich habe heute mit Max gesprochen",
     "Erik hatte gestern Besuch",
     "Hast du gehört, was heute in Berlin passiert ist?",
     "Hast du gehört was heute in Berlin passiert ist?",
     "Schreib ihm: du hattest heute recht",
     "Kannst du mir sagen, was Eva gestern gemacht hat?",
     "Kannst du mir sagen was Eva gestern gemacht hat?",
-    "I talked to Lorenzo today",
+    "I talked to Max today",
     "Can you tell me what Eva did yesterday?",
     "Did you hear what happened in Berlin today?",
     // kein Gesprächsbezug
@@ -296,7 +296,7 @@ describe("classifyTemporalQuery: Review — Zeitangabe gehört zum Sprechakt", (
     for (const q of [
       "Schreib Eva: danke für deine Nachricht von gestern",
       "Schreib ihm: du hast mir gestern das Paket geschickt, danke",
-      "Antworte Lorenzo: danke für deine Nachricht von gestern",
+      "Antworte Max: danke für deine Nachricht von gestern",
       "Tell Eva: you said yesterday you'd bring the cake",
       "Reply to Mark: thanks for your message yesterday",
     ]) {
@@ -354,7 +354,7 @@ describe("classifyTemporalQuery: Review — Zeitangabe gehört zum Sprechakt", (
       assert.equal(r.kind, kind, q);
     }
     for (const q of [
-      "Weißt du noch, was ich heute mit Lorenzo gesprochen habe?",
+      "Weißt du noch, was ich heute mit Max gesprochen habe?",
       "Weißt du noch, mit wem ich gestern gesprochen habe?",
       "Ich erzähl dir was wir gestern gemacht haben",
     ]) {
