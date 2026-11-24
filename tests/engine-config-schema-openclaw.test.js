@@ -229,6 +229,18 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
     const egemma2Profiles = ["embeddinggemma-2-128", "embeddinggemma-2-256", "embeddinggemma-2-512", "embeddinggemma-2-768"];
     assert.deepStrictEqual(preparationProfiles.slice(-4), egemma2Profiles);
     preparationProfiles.length -= 4;
+    // 7.20.10 (ported): exactly these config keys, all without schema defaults.
+    for (const [node, key] of [
+      [afterSchema.properties.embedding, "cleanText"],
+      [afterSchema.properties.neo.properties.recall, "maxReflections"],
+      [afterSchema.properties.neo.properties.recall, "laneMinRelevance"],
+      [afterSchema.properties.reranker, "maxDocChars"],
+      [afterSchema.properties.recall, "qualityWeighting"],
+      [afterSchema.properties.recall, "volatileStateAnnotation"],
+    ]) {
+      assert.ok(Object.hasOwn(node.properties, key), key);
+      delete node.properties[key];
+    }
 
     assert.deepStrictEqual(stripAnnotations(afterSchema), stripAnnotations(before.configSchema));
     assert.deepStrictEqual(Object.keys(afterSchema.properties), Object.keys(before.configSchema.properties));
