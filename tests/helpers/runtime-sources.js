@@ -34,6 +34,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const ENGINE_PATHS = Object.freeze({
   assemblePromptContext: "engine/recall/assemble-prompt-context.js",
   captureTurn: "engine/capture/capture-turn.js",
+  lightDreamIdentity: "engine/capture/light-dream-identity.js",
   postTurnWork: "engine/capture/post-turn-work.js",
   turnReplayGuard: "engine/capture/turn-replay-guard.js",
   checkpointStore: "engine/checkpoint/checkpoint-store.js",
@@ -110,6 +111,7 @@ const ADAPTER_PATHS = Object.freeze({
   promptSupplements: "adapter/openclaw/register-prompt-supplements.js",
   recallHook: "adapter/openclaw/register-recall-hook.js",
   recallPrewarm: "adapter/openclaw/register-recall-prewarm.js",
+  provedTurnPrincipals: "adapter/openclaw/proved-turn-principals.js",
   tools: "adapter/openclaw/register-tools.js",
   turnRoute: "adapter/openclaw/register-turn-route.js",
   voiceMode: "adapter/openclaw/register-voice-mode.js",

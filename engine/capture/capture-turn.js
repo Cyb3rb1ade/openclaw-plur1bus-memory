@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { deriveBudgetedSignal, isAbortError, isBudgetExhaustion, throwIfAborted } from "../../lib/abort.js";
 import { captureSourceFromProvenance, categorizeMemoryWithReason } from "../../lib/categorize.js";
 import { lightDream, writeLightDreamToVault } from "../../lib/dreaming/light-dream.js";
+import { lightDreamIdentity } from "./light-dream-identity.js";
 import { recordLightDreamRun } from "../../lib/dreaming/dreaming-status-provider.js";
 import { serializeEmotionalValence } from "../../lib/emotion.js";
 import { filterAlreadyEpisoded, mergeEpisodedTurnIds, resolveWatermarkAdvance } from "../../lib/episode-watermark.js";
@@ -73,31 +74,8 @@ export function classifyLightDreamOutcome(dreamRun) {
  * @param {{warn?: (m: string) => void}} logger
  * @returns {(agentId: string) => void}
  */
-/**
- * The request context and ACL bindings a light dream writes its insights
- * under. A caller-resolved memory context (Engine.capture's Principal) is
- * used as is; only without one does the hook context get re-resolved
- * (`resolveFallback`, the adapter path — unchanged).
- * @param {object|null|undefined} memoryCtx
- * @param {() => object} resolveFallback
- * @returns {{requestContext: object|null, aclBindings: object|null}}
- */
-export function lightDreamIdentity(memoryCtx, resolveFallback) {
-  let requestContext = memoryCtx ?? null;
-  if (!requestContext) {
-    try {
-      requestContext = resolveFallback();
-    } catch (_) {
-      requestContext = null;
-    }
-  }
-  const aclBindings = requestContext
-    ? (requestContext.userPrincipal
-      ? { scope: "user", agentId: requestContext.agentId, workspaceIdentity: "", ownerUserId: requestContext.userPrincipal }
-      : { scope: "workspace", agentId: requestContext.agentId, workspaceIdentity: requestContext.workspaceIdentity, ownerUserId: "" })
-    : null;
-  return { requestContext, aclBindings };
-}
+// 7.21.1: moved to ./light-dream-identity.js (shared with post-turn-work.js).
+export { lightDreamIdentity } from "./light-dream-identity.js";
 
 export function createLightDreamLedgerWarnOnce(logger) {
   const warned = new Set();
@@ -1010,7 +988,7 @@ export function createTurnCapture(ctx) {
                 channel: hookCtx?.channel ?? hookCtx?.messageProvider,
                 accountId: hookCtx?.accountId ?? hookCtx?.channelContext?.accountId,
                 chatId: hookCtx?.chatId,
-              }, { workspaceAliases: memoryWorkspaceAliases }));
+              }, { workspaceAliases: memoryWorkspaceAliases }), { provedUserPrincipal: opts.provedUserPrincipal });
               const lightDreamWork = () => lightDream({
                 turns: normalizedTurns,
                 neoStore,
@@ -1111,7 +1089,7 @@ export function createTurnCapture(ctx) {
             try {
               const queued = enqueuePostTurnWork(baseDbPath, agentId, {
                 neoWorkspaceKey: rememberNeoWorkspace(hookCtx, event),
-                ctx: postTurnContext(hookCtx),
+                ctx: postTurnContext({ ...hookCtx, provedUserPrincipal: opts.provedUserPrincipal }),
                 sessionKey: event?.sessionKey || hookCtx?.sessionKey || "",
                 digestHash,
                 turns: normalizedTurns,
@@ -1125,7 +1103,7 @@ export function createTurnCapture(ctx) {
               if (deferredWork.lightDream) {
                 postProcessing.push(runLightDreamPostTurn({
                   agentId,
-                  ctx: hookCtx,
+                  ctx: { ...hookCtx, provedUserPrincipal: opts.provedUserPrincipal },
                   neoStore,
                   db,
                   normalizedTurns,

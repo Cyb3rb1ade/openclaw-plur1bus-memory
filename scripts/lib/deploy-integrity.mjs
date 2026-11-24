@@ -33,6 +33,7 @@ export const DEPLOY_FILES = [
   "adapter/openclaw/register-maintenance-hook.js",
   "adapter/openclaw/register-recall-hook.js",
   "adapter/openclaw/register-recall-prewarm.js",
+  "adapter/openclaw/proved-turn-principals.js",
   "adapter/openclaw/register-capture-hook.js",
   "adapter/openclaw/register-commands.js",
   "adapter/openclaw/register-prompt-supplements.js",
@@ -49,6 +50,7 @@ export const DEPLOY_FILES = [
   // ── engine (host-neutral, engine-extraction M1a) ────────────────────────────
   "engine/admin/obsidian.js",
   "engine/capture/capture-turn.js",
+  "engine/capture/light-dream-identity.js",
   "engine/capture/post-turn-work.js",
   "engine/capture/turn-replay-guard.js",
   "engine/checkpoint/checkpoint-store.js",
