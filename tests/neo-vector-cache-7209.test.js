@@ -400,7 +400,7 @@ describe("neo vector cache (7.20.9)", () => {
     assert.deepStrictEqual(embeddingOf(b), vectorFor(1));
   });
 
-  it("stays within the byte limit and evicts the least recently used workspace first", async () => {
+  it("stays within the byte limit and evicts a workspace only after 4 searches without it", async () => {
     const root = makeTempDir("neo-vcache-cap-");
     const first = await seededStore(root, "wa", 6, 10);
     const second = await seededStore(root, "wb", 6, 50);
@@ -408,15 +408,26 @@ describe("neo vector cache (7.20.9)", () => {
     process.env[ENV_KEY] = String(8 * ENTRY_BYTES);
     search(first.store, query);
     assert.equal(neoVectorCacheStats().entries, 6);
-    const result = search(second.store, query);
-    assert.deepStrictEqual(comparable(result), comparable(uncached(second.store, query)), "eviction never changes results");
-    const stats = neoVectorCacheStats();
-    assert.ok(stats.bytes <= 8 * ENTRY_BYTES, `bytes ${stats.bytes} within the limit`);
-    assert.ok(stats.evicted >= 4, "older entries were evicted");
+    // Suchen 2-4: wa ist frisch genug und bleibt, wb bekommt nur den freien Platz.
+    for (let call = 2; call <= 4; call++) {
+      const result = search(second.store, query);
+      assert.deepStrictEqual(comparable(result), comparable(uncached(second.store, query)), `call ${call}: eviction never changes results`);
+      assert.equal(result.vectorCache.evicted, 0, `call ${call}: wa is protected`);
+      assert.equal(result.vectorCache.hits + result.vectorCache.loaded, 2, `call ${call}: wb gets the free space`);
+      assert.equal(result.vectorCache.overflow, 4);
+      assert.ok(neoVectorCacheStats().bytes <= 8 * ENTRY_BYTES);
+    }
+    // Suche 5: wa war 4 Suchen lang unbenutzt und weicht (LRU).
+    const fifth = search(second.store, query);
+    assert.deepStrictEqual(comparable(fifth), comparable(uncached(second.store, query)));
+    assert.ok(fifth.vectorCache.evicted >= 4, "the idle workspace gives way");
+    assert.equal(fifth.vectorCache.overflow, 0);
     const again = search(second.store, query);
-    assert.equal(again.vectorCache.hits, 6, "the most recently used workspace stayed cached");
+    assert.equal(again.vectorCache.hits, 6, "the most recently used workspace stays cached");
     const firstAgain = search(first.store, query);
     assert.ok(firstAgain.vectorCache.misses >= 4, "the older workspace lost its entries");
+    assert.ok(firstAgain.vectorCache.refaults >= 4, "asking for evicted ids again counts as refault");
+    assert.equal(firstAgain.vectorCache.evicted, 0, "wb is protected in turn");
     assert.deepStrictEqual(comparable(firstAgain), comparable(uncached(first.store, query)));
     assert.ok(neoVectorCacheStats().bytes <= 8 * ENTRY_BYTES);
   });
@@ -468,29 +479,34 @@ describe("neo vector cache (7.20.9)", () => {
     assert.ok(stats.bytes <= 4 * ENTRY_BYTES);
   });
 
-  it("warns once when alternating workspaces refault each other's vectors", async () => {
-    const root = makeTempDir("neo-vcache-refault-");
+  // Zwei Workspaces, die einzeln passen, aber nicht zusammen: mit reinem LRU
+  // verdraengten sie sich bei jedem Recall gegenseitig.
+  it("alternating workspaces that only fit alone keep a stable split and warn once", async () => {
+    const root = makeTempDir("neo-vcache-alternate-");
     const first = await seededStore(root, "wa", 6, 10);
     const second = await seededStore(root, "wb", 6, 50);
     process.env[ENV_KEY] = String(8 * ENTRY_BYTES);
-    const query = vectorFor(99);
     const warnings = [];
-    for (let round = 0; round < 3; round++) {
-      for (const { store } of [first, second]) {
+    for (let round = 0; round < 5; round++) {
+      for (const [which, { store }] of [["wa", first], ["wb", second]]) {
+        const query = vectorFor(900 + round);
         const result = search(store, query);
-        assert.deepStrictEqual(comparable(result), comparable(uncached(store, query)), `round ${round}`);
+        assert.deepStrictEqual(comparable(result), comparable(uncached(store, query)), `round ${round} ${which}`);
         if (result.vectorCache.capacityWarning) warnings.push(result.vectorCache.capacityWarning);
+        assert.equal(result.vectorCache.evicted, 0, `round ${round} ${which}: no mutual eviction`);
+        if (round > 0) {
+          assert.equal(result.vectorCache.loaded, 0, `round ${round} ${which}: nothing reloaded into the cache`);
+          assert.equal(result.vectorCache.hits, which === "wa" ? 6 : 2);
+        }
         assert.ok(neoVectorCacheStats().bytes <= 8 * ENTRY_BYTES);
       }
     }
     assert.equal(warnings.length, 1, "one warning per process");
-    assert.ok(warnings[0].refaults > 0, "raised by vectors that were evicted and asked for again");
-    assert.equal(warnings[0].overflow, 0, "each workspace fits on its own");
-    assert.ok(neoVectorCacheStats().refaults > 0);
+    assert.equal(warnings[0].overflow, 4, "wb does not fit next to wa");
+    assert.equal(neoVectorCacheStats().evicted, 0);
     resetNeoVectorCache();
-    search(first.store, query);
-    assert.ok(search(second.store, query).vectorCache.capacityWarning === undefined, "no refault right after a reset");
-    assert.ok(search(first.store, query).vectorCache.capacityWarning, "the reset re-arms the warning");
+    assert.equal(search(first.store, vectorFor(1)).vectorCache.capacityWarning, undefined, "wa alone fits");
+    assert.ok(search(second.store, vectorFor(1)).vectorCache.capacityWarning, "the reset re-arms the warning");
   });
 
   it("reads the limit from PLUR1BUS_NEO_VECTOR_CACHE_MAX_BYTES; 0 turns the cache off", async () => {
