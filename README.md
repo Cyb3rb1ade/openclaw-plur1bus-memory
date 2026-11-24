@@ -35,6 +35,51 @@ separate login); reach it through however you already reach your Gateway
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
 
+### New in v7.20.10 — auto-recall without echoes, dated state, clean embeddings
+
+Everything stays stored; weak entries are ranked lower instead of being
+filtered. The automatic recall before each turn now
+- leaves out memories that only repeat the current message and memories of the
+  running conversation that are still in context (new column `sessionKey`, in
+  Neo `origin.sessionKey`; older records have no key and stay),
+- multiplies the score after rerank by a rule-based quality weight (host
+  envelopes, content-free agent self-introductions, filler-heavy voice
+  fragments, very short texts, assistant claims; floor 0.35,
+  `recall.qualityWeighting`),
+- dates state claims older than two days in the prompt ("aktuell
+  [Stand 14.09.2026] 7.12.2", `recall.volatileStateAnnotation`); the stored
+  text stays,
+- fills the Neo block only from lanes that match the record's category, without
+  `[visible thinking]` placeholder lines, without behavior cards and with the
+  record's date (`neo.recall.maxReflections`, `neo.recall.laneMinRelevance`).
+
+`memory_recall` and `memory_search` still reach everything in the 7.20.9 order.
+New memories keep their text verbatim but are embedded from a cleaned copy
+without timestamps, transcript envelopes, stage directions and filler words
+(`embedding.cleanText`, column `embeddingTextMode`); `scripts/reembed-clean.mjs`
+re-embeds the existing rows (dry-run first, gateway stopped, snapshot
+required). Capture no longer files "noch immer …" or pure questions as
+preferences, tags subagent, helper and inter-session turns in `origin` and drops
+only content-free host envelopes. The Cohere reranker sends the v2 request
+(model from `reranker.model`, e.g. `rerank-v5.0-fast`) and cuts each document
+to `reranker.maxDocChars` (default 1400) so query plus document stay under the
+500-token billing unit.
+
+### New in v7.20.9 — the Neo prelude keeps its vectors in memory
+
+Before every auto-recall the Neo prelude compares the question with all
+candidate vectors of the workspace. Until 7.20.8 it read each of them from
+disk, one call per vector; once the page cache was dropped that took seconds
+on the main thread and could push the whole recall over its time limit. The
+vectors now stay in a process-wide cache (512 MiB for all workspaces,
+`PLUR1BUS_NEO_VECTOR_CACHE_MAX_BYTES`, `0` turns it off). New vectors,
+re-embeddings, compaction and replaced or shortened files are detected; after
+every change of the vector file a few cached vectors are compared with the
+disk. A cold start reads the vectors in a few large blocks, and a working set
+above the limit keeps a stable part cached and logs one warning instead of
+churning. Results are bit-identical to 7.20.8; on the production data the
+search takes 25–70 ms instead of 1–2.6 s after a page-cache drop.
+
 ### New in v7.20.8 — the time filter only answers "when did we talk"
 
 The recall used to drop every candidate whose `createdAt` fell outside a time

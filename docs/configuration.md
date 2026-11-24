@@ -68,6 +68,92 @@ das verbleibende Budget, wird auch dort der ganze Block verworfen.
 Nicht-droppable Blöcke (Zeit, temporale Kontinuität, Reminder) werden von
 `globalInjectMaxChars` nie angetastet.
 
+### Zustandsangaben datieren (7.20.10)
+
+| Key | Typ | Default | Beschreibung |
+|-----|-----|---------|--------------|
+| `volatileStateAnnotation.enabled` | `boolean` | `true` | Setzt beim Rendern `[Stand TT.MM.JJJJ]` hinter Zustandsmarker (aktuell, derzeit, läuft, live, latest, currently …), denen innerhalb von 30 Zeichen eine Versionsnummer oder ein Modellname folgt. Anker ist `createdAt` (Systemzeit der Erfassung), nie `updatedAt`; `validFrom`/`validUntil` bleiben unberührt. Der gespeicherte Text ändert sich nicht. |
+| `volatileStateAnnotation.minAgeDays` | `number` | `2` | Jüngere Records bleiben ohne Label. |
+| `volatileStateAnnotation.maxPerRecord` | `integer` | `2` | Höchstens so viele Labels je Record. |
+
+Ausgenommen sind Zitate, Inline-Code, Stellen mit einem Datum im Umkreis von
+60 Zeichen und Tags wie `n8n:latest`. Ein annotierter Record trägt
+`state-as-of="JJJJ-MM-TT"`, der Block dann eine Zeile `STATE AS OF: …`.
+7.20.10 wendet das im Neo-Block (`<plur1bus-recall>`) und im LanceDB-Block
+(`<relevant-memories>`, auch Semantic-Lens-Zeilen) an. Dort ist der Anker
+`versionCreatedAt` einer Version, sonst `createdAt`; Träume und kanonische
+Abschnitte (KNOWLEDGE.md) bleiben wörtlich. `memory_recall`/`memory_search`
+geben den gespeicherten Text unverändert aus.
+
+### Auto-Recall-Regeln (7.20.10)
+
+Nur der automatische Recall vor jedem Turn; `memory_recall`, `memory_search`,
+der Host-Recall und der Messstand sehen dieselbe Auswahl und Reihenfolge wie
+bisher. Gespeichert, archiviert oder gelöscht wird nichts.
+
+- **Echo der Anfrage:** Erinnerungen, die die aktuelle Nachricht nur
+  wiederholen (gleicher Text, Enthaltensein mit Mindestanteil, Wort-Jaccard
+  ≥ 0,9), fallen weg; ein anderer Treffer rückt nach.
+- **Laufendes Gespräch:** Neue Erinnerungen tragen die Spalte `sessionKey`
+  (Sitzung des Captures). Treffer derselben Sitzung, die nach der letzten
+  Kompaktierung entstanden sind, stehen noch im Kontext und fallen weg. Ohne
+  Kompaktierung gelten die letzten 6 Stunden, nie früher als die älteste
+  Nachricht im Kontext (nach `/new` bleibt der Schlüssel, der Kontext ist
+  leer). Ältere Zeilen ohne `sessionKey` sind nicht betroffen. Für den
+  Neo-Block gilt dieselbe Regel: neue Turns und Kandidaten tragen den
+  Schlüssel in `origin.sessionKey` (`origin.sessionId` ist die Lauf-ID und
+  wechselt je Lauf).
+- **Qualitätsgewicht:** Endscore = Score nach dem Rerank × Gewicht, danach
+  neu sortiert. CRR und Semantic Lens holen die ausgelassenen Echos nicht
+  zurück. Die Decision-Trace zeigt die Stufen `query-echo`, `session-echo`
+  und `quality-weight`.
+
+| Key | Typ | Default | Beschreibung |
+|-----|-----|---------|--------------|
+| `qualityWeighting.enabled` | `boolean` | `true` | Gewicht anwenden. `false` lässt nur die beiden Echo-Regeln aktiv. |
+| `qualityWeighting.floor` | `number` (0–1) | `0.35` | Untergrenze des Gewichts. |
+
+Regeln (Faktoren werden multipliziert): reine Host-Hülle ohne Nutzlast
+(„Continue the OpenClaw runtime event.“, „Exec failed (…)“, eingefangener
+Recall-Block) 0,4; Host-Meldung mit Nutzlast („Exec completed (…) :: …“,
+Cron-Zustellung, `[Subagent Task]`) 0,6; inhaltsleere Selbstvorstellung eines
+Agenten („Ich bin ein …-Agent. Meine Aufgabe ist …“, bis 500 Zeichen, nie bei
+Nutzertext) 0,4;
+nur Platzhalterzeilen 0,35, Thinking-Präfix 0,7; Füllwortanteil (ähm, äh, hmm …
+ganz; also, halt, quasi … halb) ab 15 % 0,75, ab 8 % 0,9; unter 30 bzw. 60
+Zeichen ohne Zahl, URL oder Bezeichner 0,8 bzw. 0,9 (gewöhnliche Namen zählen
+nicht als Anker);
+Assistenten-Behauptung (`sourceMessageRole` assistant) 0,9. Herkunft allein
+(Subagent, Cron) wertet nicht ab. Der Talk-Mode-Präfix des Hosts („Talk Mode
+active. Reply in a concise, spoken tone.“) zählt nicht mit; die Äußerung
+dahinter wird wie Nutzertext gewogen und auch bei der Echo-Prüfung, beim
+Einbetten (Erinnerung und Anfrage) und im Wort-Score von Neo ohne Präfix
+verglichen.
+
+### Neo im Auto-Recall (7.20.10)
+
+Unter `config.neo.recall` (neben `global`). Gilt nur für den Auto-Recall-Hook;
+`memory_search` routet wie bisher über alle Lanes und liest weiter Behavior Cards.
+
+| Key | Typ | Default | Beschreibung |
+|-----|-----|---------|--------------|
+| `maxReflections` | `integer` | `4` | Assistant-Einträge (`assistant_claim/plan/suggestion`) landen nur noch in `agent_private_reflections`, höchstens so viele. `0` schaltet sie ab. |
+| `laneMinRelevance` | `number` oder `object` | aus | Mindestwert für den Textbezug `max(Kosinus, Wort-Jaccard)`. Eine Zahl gilt für alle Lanes, ein Objekt je Lane (`default` für die übrigen), z. B. `{ "default": 0.45, "agent_private_reflections": 0.55 }`. Ohne Anfragevektor (Embedding-Timeout) zählt nur der Jaccard. |
+
+Seit 7.20.10 im Auto-Recall: Lanes nur bei passender Kategorie (kein Überlauf
+in fremde Lanes), ohne `recent_turns` und `behavior_cards`, kein Selbst-Echo
+der aktuellen Anfrage, keine Einträge des laufenden Gesprächs, die noch im
+Kontext stehen, keine Platzhalterzeilen (`[visible thinking]` …), gleicher
+Text nur einmal, fast gleicher Text (Wort-Jaccard ≥ 0,7, auch mit anderen
+Zahlen oder Daten) ebenfalls nur einmal: die Gruppe bekommt den Platz zum
+Score ihres besten Eintrags, gezeigt wird der neueste (`createdAt`). Damit
+belegt eine Statuszeile in mehreren Fassungen nur einen Platz mit dem jüngsten
+Stand; der Preis: zwei Texte mit über 70 % gleichen Wörtern über verschiedene
+Dinge (z. B. zwei Termine, die sich nur im Datum unterscheiden) teilen sich im
+Auto-Recall einen Platz, `memory_search` findet beide. Danach wird nach der Dedupe gegen den LanceDB-Block neu geroutet,
+Einträge auf 300 Zeichen gekürzt, über alle Lanes nach Score sortiert, mit
+`created-at`/`age` aus `createdAt`.
+
 ---
 
 ## Deduplizierung
@@ -199,6 +285,23 @@ setzt ihn als `model`/`local.model` und BGE als kontrollierten Fallback:
   }
 }
 ```
+
+### Cohere-Reranker: Modell und Kostenbremse (7.20.10)
+
+`reranker.model` wählt das Cohere-Modell; Default bleibt `rerank-v3.5`.
+Rerank 4 und 5 (`rerank-v5.0-fast`, `rerank-v5.0-pro`, 32k Kontext) laufen über
+denselben v2-Aufruf (`model`, `query`, `documents`, `top_n`). `return_documents`
+schickt PLUR1BUS seit 7.20.10 nicht mehr; es gehört nicht zur v2-Schnittstelle.
+
+| Key | Typ | Default | Beschreibung |
+|-----|-----|---------|--------------|
+| `maxDocChars` | `integer` | `1400` | Jedes Dokument wird vor dem Senden auf so viele Zeichen gekürzt, abzüglich dessen, was die Anfrage über 400 Zeichen hinaus belegt, nie unter 300. `0` schaltet die Kürzung ab, Werte von 1 bis 99 zählen als 100. |
+
+Cohere rechnet eine Suche als bis zu 100 Dokumente ab; ein Dokument, das mit
+der Anfrage über 500 Tokens kommt, wird geteilt und zählt mehrfach. Gekürzt
+wird nur der Text an Cohere; Recall-Ausgabe und lokaler Rückfall-Reranker
+sehen den vollen Text. Die Anfrage selbst wird nicht gekürzt: Ist sie allein
+länger als etwa 1800 Zeichen, liegt jedes Paar trotzdem über 500 Tokens.
 
 Als optionales Jina-v3-Embedding wird nur das folgende gepinnte Profil
 akzeptiert. `dimensions` darf ausschliesslich 32, 64, 128, 256, 512, 768 oder
@@ -340,6 +443,98 @@ Fallback explizit konfiguriert ist.
 einen OpenAI-kompatiblen Embedding-Provider. Der SDK-Standard von zehn Minuten
 ließ eine hängende Anfrage einen Recall bis zum Worker-Timeout blockieren. Der
 Provider wiederholt fehlgeschlagene Batches selbst; das SDK wiederholt nicht.
+
+### Bereinigte Einbettung (7.20.10)
+
+Roh speichern, bereinigt einbetten: Neue Erinnerungen (Capture nach dem Turn,
+`memory_store`, Store-Merges) behalten ihren Text wörtlich, der Vektor entsteht
+aus einer bereinigten Kopie. Die Spalte `embeddingTextMode` hält fest, woraus
+der Vektor stammt: `raw` (gespeicherter Text, Bestand), `clean-v1` oder
+`clean-v1-nospeaker`.
+
+| Key | Typ | Default | Beschreibung |
+|-----|-----|---------|--------------|
+| `embedding.cleanText.enabled` | `boolean` | `true` | Bereinigt einbetten. `false` bettet wie bisher den gespeicherten Text ein (`raw`). |
+| `embedding.cleanText.stripSpeaker` | `boolean` | `false` | Auch das Rollenpräfix (`User:`/`Assistant:`) und den Sprecher direkt hinter einem Transkript-Umschlag (`Christian:`) weglassen (`clean-v1-nospeaker`). Bleibt aus, bis gemessen ist. |
+
+Regelsatz `clean-v1` (lib/embedding-text.js, eingefroren; eine Änderung wird
+`clean-v2`): führender Zeitstempel (`[2026-11-24 09:43]`,
+`[Tue 2026-11-24 09:43 GMT+1]`), Metadatenblöcke des Hosts
+(`Conversation info (untrusted metadata):` mit JSON), Umschlag der
+Sprachnachrichten (`[Audio transcript (…)]: "…"`) und Medien-Köpfe
+(`[Audio]`, `User text:`, `Transcript:`), Medien- und Anhang-Stummel als ganze
+Zeile (`[User schickte audio …]`), Kanal-Köpfe alter Eingangsumschläge
+(`[Telegram … id:…]`, nur mit `id:` und nicht als Linktext),
+Platzhalterzeilen (`[visible thinking]`, `[visible toolCall: …]`) und
+`<think>`-Blöcke, der Talk-Mode-Präfix des Hosts („Talk Mode active. Reply in a
+concise, spoken tone.“ samt ElevenLabs- und Unterbrechungszeile; ein
+Rollenpräfix davor bleibt), Bühnenanweisungen aus einer festen Wortliste (in eckigen
+Klammern wie `[räuspert sich]`, in runden wie `(lacht)` oder `(Pause)` nur in
+einem Transkript; nie als Linktext oder direkt hinter einem Bezeichner) und
+Füllwörter (ähm, äh, hm, mhm …) nur als eigenes Wort zwischen Leerraum und
+Satzzeichen (nicht in URLs, Pfaden, Bezeichnern, nicht als Einheit hinter
+einer Zahl, nicht großgeschrieben mitten im Satz). Klammern mit anderem
+Inhalt bleiben stehen. Bleibt nur Hülle übrig, wird der Rohtext eingebettet (`raw`).
+
+Die Anfrage des Auto-Recalls verliert nur die Hüllen (Zeitstempel, Metadaten,
+Transkript-Umschlag, Talk-Mode-Präfix, Stummel), nicht Füllwörter oder Bühnenanweisungen: Sie
+ist kurz und live, und derselbe Anfragevektor sucht auch im Neo-Index, dessen
+Vektoren roh bleiben. Rerank, Echo-Prüfung und alle anderen Stufen lesen
+weiter die unveränderte Anfrage; `memory_recall`/`memory_search` und der
+Messstand betten die Anfrage wie bisher ein.
+
+Bis der Bestand migriert ist, vergleicht die Duplikatprüfung beim Capture
+bereinigte neue Vektoren mit rohen alten; einzelne Beinahe-Dubletten können
+in dieser Zeit durchrutschen.
+
+**Bestand migrieren** (`scripts/reembed-clean.mjs`, je Agent):
+
+```bash
+node scripts/reembed-clean.mjs --agent main --dry-run          # Anzahl, Regeln, Tokens, Kosten, maskierte Beispiele
+./scripts/backup-snapshot.sh                                    # bei gestopptem Gateway
+node scripts/reembed-clean.mjs --agent main --apply --snapshot ~/.openclaw/.snapshots/plur1bus-YYYYMMDD-HHMMSS
+```
+
+Das Skript wählt Zeilen mit `embeddingTextMode = 'raw'` (Standard nur
+`status = 'active'`, `--status all` für alle). Ändert die Bereinigung den Text
+nicht, stellt es nur den Modus um (kein API-Aufruf); sonst bettet es über den
+Embedding-Provider des Plugins neu ein (`--batch-size`, `--min-interval-ms`,
+`--max-rows`). Geschrieben werden nur `vector` und `embeddingTextMode`; je
+Block prüft es, dass alle anderen Spalten gleich geblieben sind, vor jedem
+Schreiben den Median des Kosinus alt/neu über alle Blöcke des Laufs (unter
+`--min-cosine`, Standard 0,2, bricht es ab, bevor der Block geschrieben wird:
+Vektoren aus einem fremden Raum bei gleicher Dimension, etwa ein falsches
+Modell oder ein `OPENAI_BASE_URL` in der Shell; `0` schaltet ab), am Ende
+Zeilenzahl und fehlende Vektoren, danach `table.optimize()` (`--no-optimize`
+schaltet ab; bei `--max-rows` erst nach dem letzten Teil). Im Produktivpfad verlangt
+`--apply` einen gestoppten Gateway, ein ausgeliefertes Plugin ≥ 7.20.10 und
+einen Snapshot unter `~/.openclaw/.snapshots` mit denselben LanceDB-Versionen
+wie live. Jeder Lauf schreibt `started`/`committed`/`failed` per
+`appendDestructiveOpLog` in den Workspace des Agenten; Checkpoint und Bericht
+liegen unter `memory/reembed-clean/`. Der Checkpoint entsteht vor dem ersten
+Schreibzugriff und hält nach jedem eigenen Schreibzugriff den Versionsstand der
+Tabelle fest. Der Stand wird fortgeschrieben, nicht von der Platte übernommen:
+vor jedem eigenen Schreibzugriff darf keine unbekannte Versionsdatei
+dazugekommen sein, danach genau eine (`update`, `mergeInsert` und `addColumns`
+legen je eine an; den Stand nach `table.optimize()` übernimmt das Skript erst
+nach der Zeilenprüfung, der Lauf ist dann fertig). Vor jedem Block prüft es
+den Gateway erneut. Ein abgebrochener oder gestaffelter Lauf wird mit demselben Aufruf und
+demselben Snapshot fortgesetzt, solange live genau diesen Stand hat (live hat
+dann mehr Versionen als der Snapshot, alle von diesem Lauf). Hat jemand anderes
+geschrieben, mitten im Lauf oder zwischen zwei Teilläufen (Gateway gestartet,
+eine Kompaktierung per Cron), oder wurde ein Block hart abgebrochen (SIGKILL,
+OOM), bricht das Skript ab, ohne den fremden Stand zu übernehmen: dann bei
+gestopptem Gateway einen frischen Snapshot ziehen und mit ihm neu starten, er
+wird die neue Basis. Der Gateway bleibt deshalb zwischen Teilläufen gestoppt.
+Ctrl-C oder SIGTERM beenden den laufenden Block, schreiben `failed` und den
+Checkpoint und beenden den ganzen Lauf: weitere `--agent` werden nicht mehr
+begonnen (im Bericht `skipped: interrupted`); ein zweites Signal beendet
+sofort. Der Probelauf vom 24.11.2026 (Regeln
+dieses Releases): main 1.075 Zeilen neu
+(≈ 156.000 Tokens), bernhardine 2.310 (≈ 247.000), heisenberg 19; der Rest
+nur Modus. In den 1.075 stecken die 27 Talk-Mode-Zeilen von main (die anderen
+Agenten haben keine): ohne den Präfix sind 19 davon kürzer als 30 Zeichen
+("Ja", "Normal") und haben im Auto-Recall das Gewicht 0,8.
 
 ### Embedding-Dimensionen
 
