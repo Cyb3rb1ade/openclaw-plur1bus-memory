@@ -104,10 +104,12 @@ describe("kanonische Treffer und Erinnerungsplaetze", () => {
 });
 
 describe("Zeitparser mit dem now der Pipeline", () => {
-  it("die Pipeline gibt now an parseTemporal weiter", () => {
+  it("die Pipeline gibt now an den Zeitparser weiter", () => {
     const source = readFileSync(new URL("../lib/recall-pipeline.js", import.meta.url), "utf8");
-    assert.match(source, /parseTemporal\(query, now\)/);
-    assert.doesNotMatch(source, /parseTemporal\(query\)/);
+    // 7.20.8: intent-Modus ueber classifyTemporalQuery, legacy ueber den 7.20.7-Parser.
+    assert.match(source, /classifyTemporalQuery\(query, now\)/);
+    assert.match(source, /parseTemporalLegacy\(query, now\)/);
+    assert.doesNotMatch(source, /(?:parseTemporal\w*|classifyTemporalQuery)\(query\)/);
   });
 
   it("'yesterday' greift relativ zum uebergebenen now, nicht zur Systemzeit", async () => {

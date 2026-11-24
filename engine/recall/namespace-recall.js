@@ -6,7 +6,7 @@
  */
 
 import { identityError, identityId, embedIdentityQueries, fuseIdentityResults } from "../../lib/providers/embedding-identity.js";
-import { emitRetrievalLedger, mergeNamespaceRecallResults, runRecallPipeline } from "../../lib/recall-pipeline.js";
+import { emitRetrievalLedger, mergeNamespaceRecallResults, namespaceTemporalFilterHit, runRecallPipeline } from "../../lib/recall-pipeline.js";
 import { applyRecallBudget, resolveRecallBudget } from "../../lib/recall-budget.js";
 import { createRecallDecisionTrace } from "../../lib/recall-decision-trace.js";
 import { createRecallPhaseTimer } from "../../lib/recall-phase-timer.js";
@@ -175,6 +175,9 @@ async function runMergedNamespaceRecall(
     }
     let fusionInput = namespaceResults;
     if (multiIdentity) {
+      // 7.20.8: Das Zeitfilter-Netz entscheidet über alle Namensräume, auch
+      // über Identitäten hinweg; die Vormischung je Identität sieht nur ihre.
+      const temporalInWindow = namespaceTemporalFilterHit(namespaceResults);
       const groups = new Map();
       for (const result of namespaceResults) {
         const group = groups.get(result.identityId) ?? [];
@@ -182,7 +185,7 @@ async function runMergedNamespaceRecall(
         groups.set(result.identityId, group);
       }
       fusionInput = fuseIdentityResults([...groups].map(([id, results]) => ({
-        ...mergeNamespaceRecallResults(results, { maxOut: 100, canonicalMaxItems: baseParams.canonicalMaxItems, dedupEnabled: baseParams.dedupEnabled, dedupJaccard: baseParams.dedupJaccard }),
+        ...mergeNamespaceRecallResults(results, { maxOut: 100, canonicalMaxItems: baseParams.canonicalMaxItems, dedupEnabled: baseParams.dedupEnabled, dedupJaccard: baseParams.dedupJaccard, logger: baseParams.logger, temporalInWindow }),
         identityId: id,
       })), { k: baseParams.rrfK ?? baseParams.embeddings.rrfK ?? 60 });
       fusionInput.push(...namespaceResults.map(({ namespace, sourceKind, trace }) => ({ namespace, sourceKind, trace })));
@@ -194,6 +197,7 @@ async function runMergedNamespaceRecall(
       dedupEnabled: baseParams.dedupEnabled,
       dedupJaccard: baseParams.dedupJaccard,
       trace,
+      logger: baseParams.logger,
     });
     if (multiIdentity && baseParams.reranker && merged.memories.length > 1) {
       const controller = new AbortController();
