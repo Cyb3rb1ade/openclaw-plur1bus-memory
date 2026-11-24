@@ -33,6 +33,7 @@ Everything stays in memory: nothing is deleted or archived, weak entries are ran
 ### Upgrade notes
 
 - New columns `sessionKey` and `embeddingTextMode` are added on the first start (`addColumns` with defaults). Once a table has them, older plugin versions cannot append rows to it; roll back only together with the snapshot.
+- New config keys (`reranker.maxDocChars`, `embedding.cleanText`, `recall.qualityWeighting`, `recall.volatileStateAnnotation`, `neo.recall.maxReflections`, `neo.recall.laneMinRelevance`) are unknown to 7.20.9 and older, whose schema then rejects the whole plugin config: the gateway does not start. Set them only after the deploy and remove them from `openclaw.json` before rolling back (`scripts/backup-snapshot.sh` does not save `openclaw.json`). `recall.memoriesMaxChars`, `recall.globalInjectMaxChars` and `reranker.model` exist in 7.20.9 and stay valid. None of the new keys has a schema default, so `/plur1bus setup` and the installer do not write them.
 - Run `scripts/reembed-clean.mjs --dry-run` per agent after the deploy, then `--apply` with the gateway stopped and a fresh snapshot. Until then the capture duplicate check compares clean new vectors with raw old ones, so a few near-duplicates may be stored twice.
 - `recall.memoriesMaxChars` and `recall.globalInjectMaxChars` take larger values without code changes; the host appends `prependContext` uncut. On overflow the global budget trims the memories block before the Neo block.
 

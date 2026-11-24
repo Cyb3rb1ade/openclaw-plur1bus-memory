@@ -12,6 +12,9 @@ import {
 } from "../lib/providers/reranker-cohere.js";
 import { ChainedRerankerProvider } from "../lib/providers/reranker-chained.js";
 import { normalizeRerankerConfig } from "../lib/providers/config-normalize.js";
+import { readFileSync } from "node:fs";
+import { applyFeatureProfile, recommendedProfile, safeProfile } from "../lib/setup/feature-profiles.js";
+import { manifestConfigDefaults } from "../lib/setup/config-contract.js";
 
 const realFetch = globalThis.fetch;
 let calls;
@@ -101,6 +104,23 @@ describe("Kostenbremse reranker.maxDocChars", () => {
     assert.equal(normalizeCohereMaxDocChars("x"), 1400);
     assert.equal(normalizeRerankerConfig({ provider: "cohere", apiKeyEnv: "K", maxDocChars: 900 }).maxDocChars, 900);
     assert.equal(normalizeRerankerConfig({ provider: "cohere", apiKeyEnv: "K" }).maxDocChars, 1400);
+  });
+
+  it("kein Schema-Default: Setup und Installer schreiben maxDocChars nicht in die Konfiguration (Rückweg 7.20.9)", () => {
+    const manifest = JSON.parse(readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"));
+    const schema = manifest.configSchema.properties.reranker.properties.maxDocChars;
+    assert.equal(Object.hasOwn(schema, "default"), false);
+    assert.match(schema.description, /default 1400 when unset/);
+    assert.equal(Object.hasOwn(manifestConfigDefaults().reranker || {}, "maxDocChars"), false);
+    const pluginConfig = (hostConfig) => hostConfig.plugins.entries["memory-lancedb-namespaced"].config;
+    for (const profile of [recommendedProfile(), safeProfile()]) {
+      const written = pluginConfig(applyFeatureProfile({}, profile));
+      assert.ok(written.reranker, "Profil schreibt reranker");
+      assert.equal(Object.hasOwn(written.reranker, "maxDocChars"), false);
+      const existing = pluginConfig(applyFeatureProfile({ plugins: { entries: { "memory-lancedb-namespaced": { enabled: true, config: { reranker: { enabled: true, provider: "cohere", apiKeyEnv: "K" } } } } } }, profile));
+      assert.equal(existing.reranker.provider, "cohere");
+      assert.equal(Object.hasOwn(existing.reranker, "maxDocChars"), false);
+    }
   });
 
   it("truncateCohereDocument: Wortgrenze, kein halbes Surrogatpaar", () => {

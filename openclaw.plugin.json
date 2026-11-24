@@ -1021,8 +1021,7 @@
           "maxDocChars": {
             "type": "integer",
             "minimum": 0,
-            "default": 1400,
-            "description": "Cohere only: each document sent to the reranker is cut to this many characters (minus whatever the query uses beyond 400 characters, never below 300), so query plus document stay under the 500 tokens Cohere bills as one document. Only the text sent to Cohere is cut; recall output and the local fallback see the full text. 0 = no cut; 1–99 count as 100."
+            "description": "Cohere only (default 1400 when unset): each document sent to the reranker is cut to this many characters (minus whatever the query uses beyond 400 characters, never below 300), so query plus document stay under the 500 tokens Cohere bills as one document. Only the text sent to Cohere is cut; recall output and the local fallback see the full text. 0 = no cut; 1–99 count as 100."
           },
           "candidates": {
             "type": "number"
