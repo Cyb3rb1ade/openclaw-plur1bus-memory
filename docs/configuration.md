@@ -455,8 +455,9 @@ Block hart abgebrochen (SIGKILL, OOM), bricht das Skript ab: dann bei
 gestopptem Gateway einen frischen Snapshot ziehen und mit ihm neu starten, er
 wird die neue Basis. Der Gateway bleibt deshalb zwischen Teilläufen gestoppt.
 Ctrl-C oder SIGTERM beenden den laufenden Block und schreiben `failed` und den
-Checkpoint; ein zweites Signal beendet sofort. Der Probelauf vom 24.11.2026: main 1.039 Zeilen neu
-(≈ 154.000 Tokens), bernhardine 2.311 (≈ 249.000), heisenberg 19; der Rest
+Checkpoint; ein zweites Signal beendet sofort. Der Probelauf vom 24.11.2026 (Regeln
+dieses Releases): main 1.046 Zeilen neu
+(≈ 155.000 Tokens), bernhardine 2.310 (≈ 247.000), heisenberg 19; der Rest
 nur Modus.
 
 ### Embedding-Dimensionen
