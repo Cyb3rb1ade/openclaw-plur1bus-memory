@@ -212,6 +212,37 @@ describe("resumable reembedding coordinator", () => {
     await coordinator.shutdown();
   });
 
+  it("embeds each row by its stored embeddingTextMode and keeps the label (7.20.10)", async () => {
+    const rows = [
+      { id: "44444444-4444-4444-8444-444444444441", text: "[räuspert sich] Ähm, also Bernd mag Tee.", status: "active", vector: [1, 0, 0], embeddingTextMode: "clean-v1" },
+      { id: "44444444-4444-4444-8444-444444444442", text: "Ähm, roh eingebettet.", status: "active", vector: [0, 1, 0], embeddingTextMode: "raw" },
+      { id: "44444444-4444-4444-8444-444444444443", text: "User: Ähm, ohne Sprecher.", status: "active", vector: [0, 0, 1], embeddingTextMode: "clean-v1-nospeaker" },
+    ];
+    const backend = fakeBackend(rows);
+    const embedded = [];
+    const { coordinator } = coordinatorWithProvider({
+      stateRoot,
+      backend,
+      createTargetProvider: async () => ({
+        async embedBatch(texts) {
+          embedded.push(...texts);
+          return texts.map((text) => [text.length, 1, 2, 3]);
+        },
+        async shutdown() {},
+      }),
+    });
+    const planned = await coordinator.plan({ id: "migration-text-mode", targetGeneration: "generation-target", target: { fingerprint: targetFingerprint } });
+    let state = await coordinator.apply({ id: planned.record.id, token: planned.confirmation.token });
+    while (state.state === "running") state = await coordinator.resume({ id: planned.record.id, token: planned.confirmation.token });
+    assert.deepStrictEqual(embedded, ["also Bernd mag Tee.", "Ähm, roh eingebettet.", "ohne Sprecher."]);
+    for (const row of rows) {
+      const copy = backend.target.get(row.id);
+      assert.equal(copy.embeddingTextMode, row.embeddingTextMode, "label unchanged");
+      assert.equal(stableNonVectorRowHash(copy), stableNonVectorRowHash(row), "metadata hash unchanged");
+    }
+    await coordinator.shutdown();
+  });
+
   it("rejects a configured operator budget above one durable batch", () => {
     assert.throws(() => createReembeddingCoordinator({
       stateStore: { create() {}, transition() {} },

@@ -11,6 +11,7 @@ import {
   EMBEDDING_TEXT_MODES,
   cleanQueryForEmbedding,
   cleanTextForEmbedding,
+  embeddingTextForStoredMode,
   embeddingTextModeFor,
   prepareEmbeddingText,
   resolveEmbeddingCleanTextConfig,
@@ -128,6 +129,14 @@ describe("Konfiguration und Modus", () => {
     assert.deepEqual(prepareEmbeddingText("Das Backup läuft", on), { text: "Das Backup läuft", mode: "clean-v1" });
     assert.deepEqual(prepareEmbeddingText("[User schickte audio: v.ogg (audio/ogg)]", on), { text: "[User schickte audio: v.ogg (audio/ogg)]", mode: "raw" });
     assert.deepEqual(prepareEmbeddingText("Ähm, das Backup läuft", { enabled: false }), { text: "Ähm, das Backup läuft", mode: "raw" });
+  });
+
+  it("embeddingTextForStoredMode: Neu-Einbettung nach dem gespeicherten Modus", () => {
+    assert.deepEqual(embeddingTextForStoredMode("Ähm, das Backup läuft", "clean-v1"), { text: "das Backup läuft", mode: "clean-v1" });
+    assert.deepEqual(embeddingTextForStoredMode("User: Ähm, das Backup läuft", "clean-v1-nospeaker"), { text: "das Backup läuft", mode: "clean-v1-nospeaker" });
+    assert.deepEqual(embeddingTextForStoredMode("Ähm, das Backup läuft", "raw"), { text: "Ähm, das Backup läuft", mode: "raw" });
+    assert.deepEqual(embeddingTextForStoredMode("Ähm, das Backup läuft", undefined), { text: "Ähm, das Backup läuft", mode: "raw" });
+    assert.deepEqual(embeddingTextForStoredMode("[User schickte audio: v.ogg (audio/ogg)]", "clean-v1"), { text: "[User schickte audio: v.ogg (audio/ogg)]", mode: "raw" });
   });
 
   it("cleanQueryForEmbedding: nur Hüllen, aus → Rohtext", () => {

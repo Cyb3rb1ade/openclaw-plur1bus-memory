@@ -39,6 +39,25 @@ describe("B13 shared-copy storage", () => {
     assert.equal(rows[0].sourceAgentId, "agent-a"); assert.ok(rows[0].shareIdempotencyKey); assert.equal(sourceLeases, 2);
   });
 
+  it("embeds like the source row and labels the copy with the mode of its new vector (7.20.10)", async () => {
+    const cases = [
+      { mode: "clean-v1", text: "[räuspert sich] Ähm, Bernd mag Tee.", embedded: "Bernd mag Tee.", label: "clean-v1" },
+      { mode: "raw", text: "Ähm, Bernd mag Tee.", embedded: "Ähm, Bernd mag Tee.", label: "raw" },
+      { mode: undefined, text: "Ähm, Bernd mag Tee.", embedded: "Ähm, Bernd mag Tee.", label: "raw" },
+    ];
+    for (const c of cases) {
+      const row = { ...source, text: c.text, ...(c.mode ? { embeddingTextMode: c.mode } : {}) };
+      const rows = []; const target = targetDb(rows); const seen = [];
+      const privatePool = { async withWriteDb(_agent, fn) { return fn({ init: async () => {}, getById: async () => row }); } };
+      const sharedPool = { async withWorkspaceDb(_ctx, fn) { return fn(target); } };
+      const result = await shareCard(privatePool, sharedPool, { embed: async (text) => { seen.push(text); return [0.25, 0.5, 0.75, 1]; } }, "agent-a", source.id, { targetScope: "workspace", ctx: { agentId: "agent-a", workspaceIdentity: "workspace-a" } });
+      assert.equal(result.ok, true, String(c.mode));
+      assert.deepEqual(seen, [c.embedded], String(c.mode));
+      assert.equal(rows[0].embeddingTextMode, c.label, String(c.mode));
+      assert.equal(rows[0].text, c.text, "stored text stays verbatim");
+    }
+  });
+
   it("stores an owner-bound user copy in the user pool", async () => {
     const rows = []; const target = targetDb(rows);
     const privatePool = { async withWriteDb(_agent, fn) { return fn({ init: async () => {}, getById: async () => source }); } };
