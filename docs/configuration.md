@@ -77,7 +77,47 @@ Nicht-droppable Blöcke (Zeit, temporale Kontinuität, Reminder) werden von
 Ausgenommen sind Zitate, Inline-Code, Stellen mit einem Datum im Umkreis von
 60 Zeichen und Tags wie `n8n:latest`. Ein annotierter Record trägt
 `state-as-of="JJJJ-MM-TT"`, der Block dann eine Zeile `STATE AS OF: …`.
-7.20.10 wendet das im Neo-Block (`<plur1bus-recall>`) an.
+7.20.10 wendet das im Neo-Block (`<plur1bus-recall>`) und im LanceDB-Block
+(`<relevant-memories>`, auch Semantic-Lens-Zeilen) an. Dort ist der Anker
+`versionCreatedAt` einer Version, sonst `createdAt`; Träume und kanonische
+Abschnitte (KNOWLEDGE.md) bleiben wörtlich. `memory_recall`/`memory_search`
+geben den gespeicherten Text unverändert aus.
+
+### Auto-Recall-Regeln (7.20.10)
+
+Nur der automatische Recall vor jedem Turn; `memory_recall`, `memory_search`,
+der Host-Recall und der Messstand sehen dieselbe Auswahl und Reihenfolge wie
+bisher. Gespeichert, archiviert oder gelöscht wird nichts.
+
+- **Echo der Anfrage:** Erinnerungen, die die aktuelle Nachricht nur
+  wiederholen (gleicher Text, Enthaltensein mit Mindestanteil, Wort-Jaccard
+  ≥ 0,9), fallen weg; ein anderer Treffer rückt nach.
+- **Laufendes Gespräch:** Neue Erinnerungen tragen die Spalte `sessionKey`
+  (Sitzung des Captures). Treffer derselben Sitzung, die nach der letzten
+  Kompaktierung entstanden sind, stehen noch im Kontext und fallen weg. Ohne
+  Kompaktierung gelten die letzten 6 Stunden, nie früher als die älteste
+  Nachricht im Kontext (nach `/new` bleibt der Schlüssel, der Kontext ist
+  leer). Ältere Zeilen ohne `sessionKey` sind nicht betroffen.
+- **Qualitätsgewicht:** Endscore = Score nach dem Rerank × Gewicht, danach
+  neu sortiert. CRR und Semantic Lens holen die ausgelassenen Echos nicht
+  zurück. Die Decision-Trace zeigt die Stufen `query-echo`, `session-echo`
+  und `quality-weight`.
+
+| Key | Typ | Default | Beschreibung |
+|-----|-----|---------|--------------|
+| `qualityWeighting.enabled` | `boolean` | `true` | Gewicht anwenden. `false` lässt nur die beiden Echo-Regeln aktiv. |
+| `qualityWeighting.floor` | `number` (0–1) | `0.35` | Untergrenze des Gewichts. |
+
+Regeln (Faktoren werden multipliziert): reine Host-Hülle ohne Nutzlast
+(„Continue the OpenClaw runtime event.“, „Exec failed (…)“, eingefangener
+Recall-Block) 0,4; Host-Meldung mit Nutzlast („Exec completed (…) :: …“,
+Cron-Zustellung, `[Subagent Task]`) 0,6; inhaltsleere Selbstvorstellung eines
+Agenten („Ich bin ein …-Agent. Meine Aufgabe ist …“, bis 500 Zeichen) 0,4;
+nur Platzhalterzeilen 0,35, Thinking-Präfix 0,7; Füllwortanteil (ähm, äh, hmm …
+ganz; also, halt, quasi … halb) ab 15 % 0,75, ab 8 % 0,9; unter 30 bzw. 60
+Zeichen ohne Zahl, Name, URL oder Bezeichner 0,8 bzw. 0,9;
+Assistenten-Behauptung (`sourceMessageRole` assistant) 0,9. Herkunft allein
+(Subagent, Cron) wertet nicht ab.
 
 ### Neo im Auto-Recall (7.20.10)
 
@@ -227,6 +267,23 @@ setzt ihn als `model`/`local.model` und BGE als kontrollierten Fallback:
   }
 }
 ```
+
+### Cohere-Reranker: Modell und Kostenbremse (7.20.10)
+
+`reranker.model` wählt das Cohere-Modell; Default bleibt `rerank-v3.5`.
+Rerank 4 und 5 (`rerank-v5.0-fast`, `rerank-v5.0-pro`, 32k Kontext) laufen über
+denselben v2-Aufruf (`model`, `query`, `documents`, `top_n`). `return_documents`
+schickt PLUR1BUS seit 7.20.10 nicht mehr; es gehört nicht zur v2-Schnittstelle.
+
+| Key | Typ | Default | Beschreibung |
+|-----|-----|---------|--------------|
+| `maxDocChars` | `integer` | `1400` | Jedes Dokument wird vor dem Senden auf so viele Zeichen gekürzt, abzüglich dessen, was die Anfrage über 400 Zeichen hinaus belegt, nie unter 300. `0` schaltet die Kürzung ab. |
+
+Cohere rechnet eine Suche als bis zu 100 Dokumente ab; ein Dokument, das mit
+der Anfrage über 500 Tokens kommt, wird geteilt und zählt mehrfach. Gekürzt
+wird nur der Text an Cohere; Recall-Ausgabe und lokaler Rückfall-Reranker
+sehen den vollen Text. Die Anfrage selbst wird nicht gekürzt: Ist sie allein
+länger als etwa 1800 Zeichen, liegt jedes Paar trotzdem über 500 Tokens.
 
 Als optionales Jina-v3-Embedding wird nur das folgende gepinnte Profil
 akzeptiert. `dimensions` darf ausschliesslich 32, 64, 128, 256, 512, 768 oder
