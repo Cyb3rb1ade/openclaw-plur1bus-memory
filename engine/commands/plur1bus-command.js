@@ -9,7 +9,7 @@
 
 import { randomUUID } from "node:crypto";
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
-import { resolveCurationRecord } from "../../lib/curation-resolve.js";
+import { listCurationRecords, resolveCurationRecord } from "../../lib/curation-resolve.js";
 import { applyDropInjected, previewDropInjected } from "../../lib/drop-injected-conflicts.js";
 import { DEFAULT_TEMPERAMENTS } from "../../lib/emotional-state.js";
 import { t } from "../../lib/i18n.js";
@@ -1079,14 +1079,7 @@ export function createPlur1busCommandRunner(ctx) {
         }
         return formatJsonCommandResult(result);
       }
-      const candidates = commandStore.readCandidates(500, neoRequester(commandCtx, {}));
-      const behavior = commandStore.readBehaviorCards(200, neoRequester(commandCtx, {}));
-      const records = [...candidates, ...behavior];
-      const filtered = sub === "conflicts" ? records.filter(r => r.status === "conflict")
-        : sub === "stale" ? records.filter(r => r.embeddingStatus === "stale")
-        : sub === "promoted" ? records.filter(r => r.status === "promoted")
-        : records.filter(r => r.status === "candidate" || r.status === "active").slice(-50);
-      return formatJsonCommandResult(filtered);
+      return formatJsonCommandResult(listCurationRecords(commandStore, sub, neoRequester(commandCtx, {})));
     }
     if (action === "memory") {
       // Overlay audit subcommands do not require a neo record lookup.
