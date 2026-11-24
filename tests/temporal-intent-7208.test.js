@@ -129,6 +129,42 @@ describe("classifyTemporalQuery: alles andere filtert nicht", () => {
     });
   }
 
+  it("Review: Komposita sind kein Gesprächsbezug, nur die Wörter selbst", () => {
+    for (const q of [
+      "In unserer Chatgruppe hat heute jemand gefragt wer kommt",
+      "Was melden deine Nachrichtenquellen heute?",
+      "Unser Gesprächspartner von der Bank hat gestern angerufen",
+      "Ist deine Antwortzeit heute langsamer?",
+      "Unser Chatbot lief gestern nicht",
+      "Deine Antwortqualität letzte Woche war schlecht",
+      "Deine Listenansicht war heute kaputt",
+    ]) {
+      assert.notEqual(classify(q)?.mode, "hard", q);
+    }
+    for (const q of [
+      "Was stand gestern in deiner Nachricht?",
+      "Worum ging es in unserem Gespräch gestern?",
+      "deine Antworten von gestern",
+      "Deine Liste von gestern bitte nochmal",
+      "Unsere Chats von gestern",
+      "Show me your messages from yesterday",
+    ]) {
+      assert.equal(classify(q)?.mode, "hard", q);
+    }
+  });
+
+  it("Review: „the user said“ nur mit Artikel — „a user said“ ist ein Dritter", () => {
+    for (const q of [
+      "a user said yesterday on reddit that python is slow",
+      "some user told me yesterday the API is down",
+      "every user asked yesterday about the outage",
+      "one user mentioned last week that it crashed",
+    ]) {
+      assert.notEqual(classify(q)?.mode, "hard", q);
+    }
+    assert.equal(classify("the user said yesterday that python is slow")?.mode, "hard");
+  });
+
   it("Gründe: kein Gesprächsbezug, Zukunft, absolute Zeit, Anker", () => {
     assert.deepEqual(classify("Was war gestern?"), {
       mode: "none", kind: "yesterday", range: { from: YESTERDAY, to: TODAY }, reason: "no-conversation-cue",
@@ -217,6 +253,23 @@ describe("parseTemporal 7.20.8: kind und Parser-Korrekturen", () => {
       assert.equal(parseTemporal(q, NOW)?.kind, "year", q);
     }
     assert.equal(parseTemporal("Was war 2025?", NOW).from, Date.UTC(2025, 0, 1));
+  });
+
+  it("Review: kleingeschriebene Namen, Zeilennummern und Mengen sind kein Jahr", () => {
+    for (const q of [
+      "ich spiele gerade cyberpunk 2077.",
+      "guck mal in zeile 2253.",
+      "In 2000 Metern links abbiegen",
+      "in 2000 metern links",
+      "kostet 2000.",
+      "bis 2000 Euro",
+      "seite 2010.",
+    ]) {
+      assert.equal(parseTemporal(q, NOW), null, q);
+    }
+    for (const q of ["seit 2020 läuft das", "von 2019 bis 2021.", "das war 2019.", "Anfang 2024.", "2024 kam der Umzug"]) {
+      assert.equal(parseTemporal(q, NOW)?.kind, "year", q);
+    }
   });
 
   it("Monat, Wochentag: auch spätere Fundstellen zählen", () => {
