@@ -38,7 +38,7 @@ import { performance } from "node:perf_hooks";
 import { distanceToScore } from "./lib/score.js";
 import { flushMetrics } from "./lib/metrics.js";
 import { tokenize, jaccardSimilarity, cosineSimilarityVec, generateSummary as libGenerateSummary, compressMemorySlotsForPrompt } from "./lib/text-utils.js";
-import { MEMORY_CATEGORIES, MEMORY_ORIGINS, MEMORY_SCOPES, categorizeMemory, categorizeMemoryWithReason } from "./lib/categorize.js";
+import { MEMORY_CATEGORIES, MEMORY_ORIGINS, MEMORY_SCOPES, captureSourceFromProvenance, categorizeMemory, categorizeMemoryWithReason } from "./lib/categorize.js";
 import { computeMemoryImportance, shouldPromoteMemory } from "./lib/memory-fact-quality.js";
 import { IMPORTANCE_STATUS, normalizeImportanceStatus } from "./lib/importance-status.js";
 import { classifyEncoding, buildRefinePatch } from "./lib/encoding-llm.js";
@@ -300,7 +300,7 @@ import {
   normalizeMemorySessionKey,
   resolveSessionEchoCutoff,
 } from "./lib/recall-pipeline.js";
-import { resolveQualityWeightingConfig } from "./lib/recall-quality.js";
+import { isContentFreeHostEnvelope, resolveQualityWeightingConfig } from "./lib/recall-quality.js";
 import { applyRecallBudget, resolveRecallBudget } from "./lib/recall-budget.js";
 import {
   createRecallDecisionTrace,
@@ -379,11 +379,13 @@ import { createConfiguredSecretInputResolver } from "./lib/providers/secret-inpu
 import { LocalTransformersRerankerProvider } from "./lib/providers/reranker-local-transformers.js";
 import { ChainedRerankerProvider } from "./lib/providers/reranker-chained.js";
 import {
+  classifyCaptureSource,
   createBackgroundMemoryScheduler,
   isBackgroundTurn,
   shouldSkipAutoCaptureForInternalTurn,
   shouldSkipAutoRecallForInternalTurn,
 } from "./lib/runtime-scheduler.js";
+import { isWorkspaceSubagent } from "./lib/chat-model.js";
 import { createRecallPhaseTimer } from "./lib/recall-phase-timer.js";
 import { createEmbeddingCache } from "./lib/embedding-cache.js";
 import { withTimeout, TimeoutError } from "./lib/with-timeout.js";
@@ -5812,6 +5814,11 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         });
     };
     const snapshotNeoString = (value) => typeof value === "string" ? value : "";
+    // 7.20.10: Herkunft je Nachricht (nur kind/sourceRole) für die
+    // Kennzeichnung inter_session/subagent im Neo-Capture.
+    const snapshotNeoProvenance = (value) => (value && typeof value === "object"
+      ? { kind: snapshotNeoString(value.kind), sourceRole: snapshotNeoString(value.sourceRole) }
+      : undefined);
     const snapshotNeoMessages = (messages = []) => Array.isArray(messages)
       ? messages
           .filter(msg => msg && typeof msg === "object")
@@ -5819,6 +5826,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             role: msg.role,
             content: snapshotNeoContent(msg.content),
             tool_call_id: msg.tool_call_id,
+            provenance: snapshotNeoProvenance(msg.provenance || msg.inputProvenance),
           }))
       : [];
     const recallInjectionKeys = new Set();
@@ -11161,6 +11169,12 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           api.logger.info(`memory-lancedb-namespaced: skipping durable capture for internal/background turn (agent=${agentId})`);
           return undefined;
         }
+        // 7.20.10: Herkunft kennzeichnen (subagent/helper/inter_session), nicht
+        // filtern. Ein Fehler ergibt keine Kennzeichnung (Warnung im Log).
+        const captureSource = classifyCaptureSource(event, ctx, {
+          isWorkspaceSubagent: (id) => isWorkspaceSubagent(runtimeIfUsable(api)?.config?.current?.() ?? api.config ?? {}, id),
+          logger: api.logger,
+        });
         let memoryCtx = null;
         try {
           memoryCtx = resolveMemoryRequestContext({
@@ -11232,6 +11246,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 sessionKey: snapshotNeoString(ctx?.sessionKey),
                 sessionId: snapshotNeoString(ctx?.sessionId),
                 runId: snapshotNeoString(ctx?.runId),
+                captureSource: captureSource || "",
               };
               const neoResult = await neoWorkerRuntime.runNeoAgentEnd(neoEvent, neoCtx, {
                 rootDir: neoRoot,
@@ -11322,13 +11337,16 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               if (!isUser && !isAssistant) continue;
               const role = msg.role;
               const content = msg.content;
+              // 7.20.10: Herkunft je Nachricht (provenance des Hosts), z. B. eine
+              // Eingabe aus einer anderen Sitzung. Nur Kennzeichnung.
+              const messageSource = isUser ? captureSourceFromProvenance(msg.provenance || msg.inputProvenance) : null;
 
               if (typeof content === "string") {
                 if (content && content.length > 20) {
                   const sourceUrl = isUser ? extractUrl(content) : "";
                   const cleaned = stripMediaOutputIdToken(content);
                   extractMediaOutputIds(content).forEach((id) => mediaOutputIds.add(id));
-                  items.push({ text: cleaned, role, isUserUrl: isUser && !!sourceUrl, sourceUrl });
+                  items.push({ text: cleaned, role, isUserUrl: isUser && !!sourceUrl, sourceUrl, messageSource });
                 }
                 continue;
               }
@@ -11341,7 +11359,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     const sourceUrl = isUser ? extractUrl(block.text) : "";
                     const cleaned = stripMediaOutputIdToken(block.text);
                     extractMediaOutputIds(block.text).forEach((id) => mediaOutputIds.add(id));
-                    items.push({ text: cleaned, role, isUserUrl: isUser && !!sourceUrl, sourceUrl });
+                    items.push({ text: cleaned, role, isUserUrl: isUser && !!sourceUrl, sourceUrl, messageSource });
                     continue;
                   }
 
@@ -11355,7 +11373,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                       "]",
                     ].join("").trim();
                     if (stub.length > 20) {
-                      items.push({ text: stub, role, isUserUrl: true, sourceUrl: "" }); // Attachments wie URLs priorisieren
+                      items.push({ text: stub, role, isUserUrl: true, sourceUrl: "", messageSource }); // Attachments wie URLs priorisieren
                     }
                   }
                 }
@@ -11365,11 +11383,18 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             // Systemisch injizierten Kontext (Recall-Blöcke, Status-Reminder,
             // Cron) niemals re-capturen → bricht die Recall/Capture-Rückkopplung.
             const beforeFilter = items.length;
+            let hostEnvelopes = 0;
             for (let i = items.length - 1; i >= 0; i--) {
               if (isInjectedContextText(items[i].text)) items.splice(i, 1);
+              // 7.20.10: reine Host-Hüllen ohne Nutzlast ("Continue the OpenClaw
+              // runtime event.", "Exec failed (…)"). Alles mit Inhalt bleibt.
+              else if (isContentFreeHostEnvelope(items[i].text)) {
+                items.splice(i, 1);
+                hostEnvelopes++;
+              }
             }
             if (items.length < beforeFilter) {
-              api.logger.info(`memory-lancedb-namespaced: filtered ${beforeFilter - items.length} injected-context item(s) before capture`);
+              api.logger.info(`memory-lancedb-namespaced: filtered ${beforeFilter - items.length} injected-context item(s) before capture${hostEnvelopes ? ` (${hostEnvelopes} content-free host envelope(s))` : ""}`);
             }
 
             if (items.length === 0) {
@@ -11385,11 +11410,22 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             const isGroupSession = ctxChatType === "group" || ctxChatType === "supergroup" || ctxChatType === "channel" ||
               String(event?.sessionKey || ctx?.sessionKey || "").includes(":group:") ||
               String(event?.sessionKey || ctx?.sessionKey || "").includes(":channel:");
+            // 7.20.10: Reihenfolge cron → Gruppensitzung → Herkunft aus
+            // classifyCaptureSource (subagent/helper/inter_session) → Gruppe laut
+            // Text → dm. Die Gruppe geht vor, weil sie den Kontext der Erinnerung
+            // anzeigt; eine Subagent-Sitzung ist nie eine Gruppensitzung.
             const captureOrigin = contextOrigin === "cron" || contextKind === "cron"
               ? "cron"
-              : isGroupSession || items.some((it) => textSuggestsGroupOrigin(it.text))
+              : isGroupSession
                 ? "group"
-                : "dm";
+                : captureSource
+                  ? captureSource
+                  : items.some((it) => textSuggestsGroupOrigin(it.text))
+                    ? "group"
+                    : "dm";
+            // Eine Nachricht mit eigener Herkunft (provenance) behält sie, wenn
+            // der Zug sonst als dm gälte.
+            const itemOrigin = (it) => (captureOrigin === "dm" && it?.messageSource ? it.messageSource : captureOrigin);
 
             // Priorisierung: User-Nachrichten mit URLs zuerst (max 3), dann neueste (max 5)
             const userUrlItems = items.filter(it => it.isUserUrl);
@@ -11555,7 +11591,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   id: memoryId,
                   text: p.text,
                   summary,
-                  origin: captureOrigin,
+                  origin: itemOrigin(p.it),
                   vector: p.vector,
                   importance,
                   importanceStatus: IMPORTANCE_STATUS.PENDING,
@@ -11573,7 +11609,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   epistemicStatus: decideEpistemicStatusForCapture({
                     text: p.text,
                     sourceMessageRole: p.it.role || "",
-                    origin: captureOrigin,
+                    origin: itemOrigin(p.it),
                     cutoffFailed: !epistemicCutoffBoot.ok,
                   }),
                   sourceTimestamp: captureTimestamp,
@@ -11593,7 +11629,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 await db.store(row);
                 storedMemoryRows.push(row);
                 stored++;
-                api.logger.info(`memory-lancedb-namespaced: stored memory [${category}|${captureOrigin}] for agent=${agentId}`);
+                api.logger.info(`memory-lancedb-namespaced: stored memory [${category}|${itemOrigin(p.it)}] for agent=${agentId}`);
               } catch (err) {
                 const settlement = await waitForTimeoutSettlement(err);
                 if (settlement.status === "rejected") {
