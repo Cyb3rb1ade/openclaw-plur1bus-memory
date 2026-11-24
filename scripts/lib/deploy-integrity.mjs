@@ -32,6 +32,7 @@ export const DEPLOY_FILES = [
   "adapter/openclaw/register-turn-route.js",
   "adapter/openclaw/register-maintenance-hook.js",
   "adapter/openclaw/register-recall-hook.js",
+  "adapter/openclaw/register-recall-prewarm.js",
   "adapter/openclaw/register-capture-hook.js",
   "adapter/openclaw/register-commands.js",
   "adapter/openclaw/register-prompt-supplements.js",
@@ -123,6 +124,7 @@ export const DEPLOY_FILES = [
   "lib/memory-merge-safety.js",
   "lib/contradiction-detector.js",
   "lib/recall-pipeline.js",
+  "lib/recall-keyword-fallback.js",
   // 7.20.10: von recall-pipeline.js importiert (Qualitätsgewicht im Auto-Recall).
   "lib/recall-quality.js",
   // 7.20.10: bereinigte Einbettung (Capture, memory_store, Auto-Recall-Anfrage).

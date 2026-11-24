@@ -43,6 +43,7 @@ import { createLightVoicePromptContext, registerVoiceModelOverride } from "./reg
 import { registerMemoryTools, registerMemoryCapability } from "./register-tools.js";
 import { registerDeferredFeatureCronBootstrap, registerUnsafeDirectCronGuard } from "./register-cron.js";
 import { registerGatewayShutdownServices, registerNeoServiceLifecycle, registerNeoWorkerWarmUp, registerObsidianBridgeLifecycle } from "./register-gateway.js";
+import { registerRecallPrewarm } from "./register-recall-prewarm.js";
 import { CORRECTION_PREVIEW_CHARS } from "../../engine/runtime/constants.js";
 import { callLlm } from "../../engine/runtime/llm-calls.js";
 import { makeQuerySummarizer } from "../../engine/runtime/env-config.js";
@@ -299,6 +300,8 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
     : {});
   // 4. Neo worker warm-up (lone gateway_start).
   registerNeoWorkerWarmUp({ api, host, neoWorkerRuntime });
+  // 4b. 7.21.1: read-only warm recall per chat agent shortly after the start.
+  registerRecallPrewarm({ api, host, engine, cfg });
   // 4a. 7.19.0: the independent Jev mood owner (lib/jevEmotionRuntime.js),
   // registered at the release line's position — after the warm-up, ahead of
   // every other before_prompt_build/agent_end/gateway_stop handler.

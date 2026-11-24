@@ -1208,6 +1208,28 @@
                 "default": 60000
               }
             }
+          },
+          "recallPrewarm": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "7.21.1: one read-only warm recall per chat agent shortly after gateway_start (embedding connection, Neo vector cache, LanceDB handles), reranker off, nothing written. Defaults: enabled, delayMs 20000, agents = keys of chatModels, else the agents of obsidianBridge.workspaces.",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "delayMs": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 600000
+              },
+              "agents": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 8
+              }
+            }
           }
         },
         "description": "Runtime limits and caches: recall and capture timeouts, concurrency and queue depths, background priority, the recall cache, the memory-pressure gate, the embedding cache, the LLM result cache and metrics timing."
@@ -1953,6 +1975,16 @@
                 "default": false
               }
             }
+          },
+          "keywordFallback": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Automatic recall only (7.21.1): when the query embedding does not arrive in time (cold start, provider outage) or fails, the recall searches by keyword and recency instead of returning nothing. The block is marked retrieval=\"keyword-recent-fallback\". Default: enabled.",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              }
+            }
           }
         },
         "description": "Recall pipeline tuning: candidate count, importance boost, deduplication, canonical-first selection, prompt budgets, query refinement, adaptive budget, semantic compression, the soft time budget and its fallback, half-lives per memory type and the decision trace."
@@ -2220,7 +2252,7 @@
           },
           "timeoutMs": {
             "type": "number",
-            "default": 50
+            "default": 250
           },
           "visibleHints": {
             "type": "boolean",
