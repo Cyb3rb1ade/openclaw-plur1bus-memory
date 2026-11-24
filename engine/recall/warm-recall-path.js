@@ -19,10 +19,11 @@
  */
 
 import { isAbortError } from "../../lib/abort.js";
-import { computeUseAssociative } from "../../lib/recall-pipeline.js";
+import { computeUseAssociative, normalizeMemorySessionKey, resolveSessionEchoCutoff } from "../../lib/recall-pipeline.js";
+import { cleanQueryForEmbedding } from "../../lib/embedding-text.js";
 import { withAccessReadDbs } from "../../lib/shared-memory.js";
 import { readNeoPrelude } from "./neo-prelude.js";
-import { autoRecallParams } from "./recall-params.js";
+import { autoRecallParams, autoRecallPolicyOptionsFor } from "./recall-params.js";
 import { recallResult } from "./recall-result.js";
 
 /**
@@ -67,10 +68,12 @@ export function createWarmRecallPath(ctx) {
   const {
     NEO_EMBED_TIMEOUT,
     cfg,
+    embeddingCleanTextCfg,
     embeddings,
     host,
     neoEnabled,
     neoGlobalRecall,
+    neoPromptRecall,
     neoRequester,
     neoWorkerRuntime,
     peekNeoStore,
@@ -109,6 +112,14 @@ export function createWarmRecallPath(ctx) {
               runNeoGlobalSearch,
               logger: host.logger,
               prelude,
+              // 7.20.10: same embedding text and lane rules as the per-turn
+              // recall, so the warm run fills the cache entries it will read.
+              embeddingQuery: cleanQueryForEmbedding(prompt, embeddingCleanTextCfg),
+              sessionEcho: {
+                sessionKey: normalizeMemorySessionKey(hookCtx?.sessionKey || event?.sessionKey),
+                since: resolveSessionEchoCutoff(event?.messages, { now: Date.now() }).since,
+              },
+              neoPromptRecall,
             });
           } catch (neoErr) {
             host.logger.debug(`plur1bus-neo: warm recall prelude failed: ${String(neoErr)}`);
@@ -150,6 +161,7 @@ export function createWarmRecallPath(ctx) {
             querySummarizer: null,
             retrievalLogger: null,
             readOnly: true,
+            autoRecallPolicy: autoRecallPolicyOptionsFor(warmCtx, event, hookCtx),
           }),
           null,
           timer,

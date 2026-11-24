@@ -11,7 +11,7 @@
  */
 
 import { sanitizeMemoryTextForPrompt } from "../../lib/memory-context-sanitize.js";
-import { routeNeoRecall, workspaceKeyFromContext } from "../../lib/neo-arch.js";
+import { routeNeoRecall, stripNeoHiddenPlaceholders, workspaceKeyFromContext } from "../../lib/neo-arch.js";
 import { buildSystemSupplement } from "../../engine/recall/system-supplement.js";
 import { describeError } from "../../lib/log-redact.js";
 
@@ -78,7 +78,7 @@ export function registerPromptSupplements(ctx) {
             title: row.item.category,
             kind: lane,
             score: row.score,
-            snippet: sanitizeMemoryTextForPrompt(row.item.statement || row.item.content || "", 500),
+            snippet: sanitizeMemoryTextForPrompt(stripNeoHiddenPlaceholders(row.item.statement || row.item.content || ""), 500),
             id: row.item.id,
             source: "plur1bus-neo",
             provenanceLabel: row.item.origin?.kind || "unknown",

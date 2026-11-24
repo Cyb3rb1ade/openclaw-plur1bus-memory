@@ -26,14 +26,15 @@ import { isLlmRouteAvailable } from "../../lib/llm-router.js";
 import { createRetrievalLedgerEntry } from "../../lib/memory-dynamics.js";
 import { resolveMemoryRequestContext } from "../../lib/memory-request-context.js";
 import { buildMoodStyleDirective } from "../../lib/mood-style-directive.js";
-import { dedupeNeoLanesAgainstTexts, formatNeoRecallContext } from "../../lib/neo-arch.js";
+import { dedupeNeoLanesAgainstTexts, filterNeoItemsAgainstTexts, formatNeoRecallContext, routeNeoRecall } from "../../lib/neo-arch.js";
 import { OPEN_THREADS_SHOWN_FILE, collectOpenThreads, formatOpenThreadsContext, normalizeTopic } from "../../lib/open-threads.js";
 import { OverlayGenerator } from "../../lib/overlay-generator.js";
 import { findBestPattern } from "../../lib/pattern-surface.js";
 import { addTraceDecision, addTraceStoreDecision, attachTraceToMemory, createRecallDecisionTrace } from "../../lib/recall-decision-trace.js";
 import { createRecallPhaseTimer } from "../../lib/recall-phase-timer.js";
-import { computeUseAssociative } from "../../lib/recall-pipeline.js";
-import { formatRelevantMemoriesContext, resolveFadedThreshold } from "../../lib/relevant-memory-context.js";
+import { computeUseAssociative, createAutoRecallPolicy, normalizeMemorySessionKey, resolveSessionEchoCutoff } from "../../lib/recall-pipeline.js";
+import { cleanQueryForEmbedding } from "../../lib/embedding-text.js";
+import { collectRenderedMemoryIds, formatRelevantMemoriesContext, resolveFadedThreshold } from "../../lib/relevant-memory-context.js";
 import { formatReminderNudge } from "../../lib/reminder-nudge.js";
 import { readPendingReminders, writePendingReminders } from "../../lib/reminder-pending.js";
 import { listDueReminders, presentReminder } from "../../lib/reminder-store.js";
@@ -42,7 +43,7 @@ import { resolveCompactedAt } from "../checkpoint/checkpoint-store.js";
 import { emitEngineEvent } from "../events.js";
 import { readNeoPrelude } from "./neo-prelude.js";
 import { ABORTED, contextBlock, copyRecallResult, recallResult } from "./recall-result.js";
-import { autoRecallParams } from "./recall-params.js";
+import { autoRecallParams, autoRecallPolicyOptionsFor } from "./recall-params.js";
 import { isBackgroundTurn, shouldSkipAutoRecallForInternalTurn } from "../../lib/runtime-scheduler.js";
 import { applySemanticLensToRecall } from "../../lib/semantic-lens-index.js";
 import { formatTimeContext, getLastActivity, recordActivity } from "../../lib/session-time.js";
@@ -83,6 +84,7 @@ export function createPromptContextAssembler(ctx) {
     checkpointStore = null,
     dbg,
     detectReactionsCapabilityCached,
+    embeddingCleanTextCfg,
     embeddings,
     emotionalPool,
     jevEmotionRuntime,
@@ -96,7 +98,9 @@ export function createPromptContextAssembler(ctx) {
     mergingEnabled,
     namespaceLayout,
     neoEnabled,
+    neoFormatOptions,
     neoGlobalRecall,
+    neoPromptRecall,
     neoRequester,
     neoWorkerRuntime,
     normalizeBoundedRecallInteger,
@@ -131,6 +135,7 @@ export function createPromptContextAssembler(ctx) {
     traceInPrompt,
     warmRecallPath = null,
     workspacePolicyGuard,
+    volatileStateAnnotationCfg,
   } = ctx;
 
   return async function assemblePromptContext(event, hookCtx, opts = {}) {
@@ -246,6 +251,10 @@ export function createPromptContextAssembler(ctx) {
     let neoLanes = null;
     let neoGlobalIds = null;
     let neoInjectionKey = null;
+    // 7.20.10: Pool und Optionen des Routings, damit nach der Dedupe gegen
+    // den LanceDB-Block neu geroutet werden kann (keine Lücken).
+    let neoRouteItems = null;
+    let neoRouteOptions = null;
     if (neoEnabled) {
       // 7.12.27: Der Warm-up bei gateway_start erreicht nur die erste
       // Plugin-Instanz; Instanzen, die der Host spaeter je Agent anlegt,
@@ -285,11 +294,19 @@ export function createPromptContextAssembler(ctx) {
             runNeoGlobalSearch,
             logger: host.logger,
             prelude: recallPrelude,
+            embeddingQuery: cleanQueryForEmbedding(event.prompt, embeddingCleanTextCfg),
+            sessionEcho: {
+              sessionKey: normalizeMemorySessionKey(hookCtx?.sessionKey || event?.sessionKey),
+              since: resolveSessionEchoCutoff(event?.messages, { now: Date.now() }).since,
+            },
+            neoPromptRecall,
           });
           neoGlobalIds = prelude.neoGlobalIds;
           neoLanes = prelude.neoLanes;
+          neoRouteItems = prelude.neoItems;
+          neoRouteOptions = prelude.routeOptions;
           const formatStartedAt = Date.now();
-          neoContext = formatNeoRecallContext(neoLanes, { idempotencyKey: injectionKey || undefined });
+          neoContext = formatNeoRecallContext(neoLanes, neoFormatOptions(injectionKey));
           recallPrelude.lanesMs += Date.now() - formatStartedAt;
         }
       } catch (neoErr) {
@@ -477,9 +494,15 @@ export function createPromptContextAssembler(ctx) {
             maxCandidates: traceCfg.maxCandidates ?? 50,
           })
         : null;
+      // 7.20.10: Regeln nur für den Auto-Recall — Echo der Anfrage und des
+      // laufenden Gesprächs raus, Qualitätsgewicht. Die Grenze des
+      // Kontexts kommt aus event.messages (letzte Kompaktierung, sonst 6 h).
+      const autoRecallPolicyOptions = autoRecallPolicyOptionsFor(ctx, event, hookCtx);
+      const autoRecallPolicy = createAutoRecallPolicy(autoRecallPolicyOptions);
       // v1.9.0 — komplette Pipeline aus shared module
       const _autoRecallBaseParams = autoRecallParams(ctx, {
         query: event.prompt,
+        autoRecallPolicy: autoRecallPolicyOptions,
         timer,
         signal,
         workspaceDir: hookCtx?.workspaceDir,
@@ -597,7 +620,8 @@ export function createPromptContextAssembler(ctx) {
             return memory;
           },
         });
-      const semanticLensItems = semanticLensResult.lensMemories.map((r) => ({
+      // 7.20.10: kein Echo über die Linse (gleiche Regeln wie der Auto-Recall).
+      const semanticLensItems = semanticLensResult.lensMemories.filter((r) => !autoRecallPolicy?.exclusionReason(r.entry)).map((r) => ({
         id: r.entry.id,
         category: r.entry.category,
         source: "semantic-lens",
@@ -862,6 +886,10 @@ export function createPromptContextAssembler(ctx) {
               getMemoryById: async (memoryId) => {
                 const memory = await db.getById(memoryId);
                 if (!memory || !checkAccess(memoryCtx, memory).allowed) return null;
+                // 7.20.10: CRR holt über den Graphen nach, was nicht in
+                // baseRecallIds steht — dazu gehörten die Echos, die der
+                // Auto-Recall gerade entfernt hat.
+                if (autoRecallPolicy?.exclusionReason(memory)) return null;
                 return memory;
               },
               decisionTrace: traceEnabled ? trace : null,
@@ -986,6 +1014,9 @@ export function createPromptContextAssembler(ctx) {
         // (and hit first by) recall.globalInjectMaxChars — see
         // docs/configuration.md "Recall-Pipeline" for how the two relate.
         maxTotalChars: recallCfg.memoriesMaxChars ?? 12_000,
+        // 7.20.10: Zustandsangaben datieren ("[Stand TT.MM.JJJJ]").
+        volatileStateAnnotation: volatileStateAnnotationCfg,
+        onError: (error) => host.logger.debug(`memory-lancedb-namespaced: state date falls back to UTC: ${describeError(error)}`),
         overlays,
         matchedPattern,
         semanticLensMemories: promptSemanticLensItems,
@@ -1247,11 +1278,31 @@ export function createPromptContextAssembler(ctx) {
       // selben Prompt stehen, nicht doppelt injizieren.
       if (neoLanes && neoGlobalIds?.size > 0 && Array.isArray(ordered) && ordered.length > 0) {
         try {
-          const memoryTexts = ordered.map((row) => row?.entry?.text || row?.text || "").filter(Boolean);
-          const deduped = dedupeNeoLanesAgainstTexts(neoLanes, memoryTexts, { onlyIds: neoGlobalIds, threshold: neoGlobalRecall.dedupeThreshold });
+          // 7.20.10 (B3): nur gegen Erinnerungen, die im Block tatsächlich
+          // stehen. Bis 7.20.9 zählten alle 30 Treffer, auch die hinter der
+          // Kürzung (memoriesMaxChars) — ein Neo-Treffer fehlte dann in beiden Blöcken.
+          const renderedMemoryIds = collectRenderedMemoryIds(memoriesContext, ordered);
+          const memoryTexts = ordered
+            .filter((row) => renderedMemoryIds.has(row?.entry?.id))
+            .map((row) => row?.entry?.text || row?.text || "")
+            .filter(Boolean);
+          const dedupeOptions = { onlyIds: neoGlobalIds, threshold: neoGlobalRecall.dedupeThreshold };
+          const deduped = dedupeNeoLanesAgainstTexts(neoLanes, memoryTexts, dedupeOptions);
           if (deduped.dropped > 0) {
-            neoContext = formatNeoRecallContext(deduped.lanes, { idempotencyKey: neoInjectionKey || undefined });
-            host.logger.info(`plur1bus-neo: global candidate search dropped ${deduped.dropped} hit(s) already injected as memories`);
+            let lanesForPrompt = deduped.lanes;
+            let rerouteNote = "";
+            // 7.20.10: Bis 7.20.9 blieben die Plätze der verworfenen Treffer
+            // leer. Jetzt fliegen alle globalen Treffer mit diesem Text aus
+            // dem Pool, und das Routing füllt die Lanes neu auf.
+            if (Array.isArray(neoRouteItems) && neoRouteOptions) {
+              const rerouteStartedAt = Date.now();
+              const filtered = filterNeoItemsAgainstTexts(neoRouteItems, memoryTexts, dedupeOptions);
+              lanesForPrompt = routeNeoRecall(filtered.items, event.prompt, neoRouteOptions);
+              const routedCount = Object.values(lanesForPrompt).reduce((sum, rows) => sum + (rows?.length || 0), 0);
+              rerouteNote = ` rerouted=${routedCount} ms=${Date.now() - rerouteStartedAt}`;
+            }
+            neoContext = formatNeoRecallContext(lanesForPrompt, neoFormatOptions(neoInjectionKey));
+            host.logger.info(`plur1bus-neo: global candidate search dropped ${deduped.dropped} hit(s) already injected as memories${rerouteNote}`);
           }
         } catch (dedupeErr) {
           host.logger.debug(`plur1bus-neo: global dedupe skipped: ${String(dedupeErr)}`);

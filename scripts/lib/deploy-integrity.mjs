@@ -114,6 +114,8 @@ export const DEPLOY_FILES = [
   "engine/tools/memory-tools.js",
   // ── core runtime ──────────────────────────────────────────────────────────
   "lib/neo-arch.js",
+  // 7.20.10: von neo-arch.js importiert (Selbst-Echo im Auto-Recall).
+  "lib/query-echo.js",
   "lib/neo-worker-runner.js",
   "lib/neo-worker-runtime.js",
   "lib/abort.js",
@@ -121,6 +123,10 @@ export const DEPLOY_FILES = [
   "lib/memory-merge-safety.js",
   "lib/contradiction-detector.js",
   "lib/recall-pipeline.js",
+  // 7.20.10: von recall-pipeline.js importiert (Qualitätsgewicht im Auto-Recall).
+  "lib/recall-quality.js",
+  // 7.20.10: bereinigte Einbettung (Capture, memory_store, Auto-Recall-Anfrage).
+  "lib/embedding-text.js",
   "lib/runtime-scheduler.js",
   "lib/runtime-shutdown.js",
   "lib/local-model-generation.js",
@@ -495,6 +501,8 @@ export const DEPLOY_FILES = [
   "scripts/migrate-neo-workspace-generations.mjs",
   "scripts/provider-wizard.mjs",
   "scripts/reindex-provider.mjs",
+  // 7.20.10: Bestand bereinigt neu einbetten (embeddingTextMode raw → clean-v1).
+  "scripts/reembed-clean.mjs",
   "scripts/repair-dreaming-cron.mjs",
   "scripts/repair-installed-plugin.mjs",
   "scripts/backfill-manual-core-markers.mjs",

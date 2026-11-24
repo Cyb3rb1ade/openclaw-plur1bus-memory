@@ -6,7 +6,7 @@
  */
 
 import { identityError, identityId, embedIdentityQueries, fuseIdentityResults } from "../../lib/providers/embedding-identity.js";
-import { emitRetrievalLedger, mergeNamespaceRecallResults, namespaceTemporalFilterHit, runRecallPipeline } from "../../lib/recall-pipeline.js";
+import { applyAutoRecallPolicy, createAutoRecallPolicy, emitRetrievalLedger, mergeNamespaceRecallResults, namespaceTemporalFilterHit, runRecallPipeline } from "../../lib/recall-pipeline.js";
 import { applyRecallBudget, resolveRecallBudget } from "../../lib/recall-budget.js";
 import { createRecallDecisionTrace } from "../../lib/recall-decision-trace.js";
 import { createRecallPhaseTimer } from "../../lib/recall-phase-timer.js";
@@ -82,11 +82,16 @@ async function runMergedNamespaceRecall(
   const providers = baseParams.identityProviders ?? baseParams.embeddings.identityProviders;
   const multiIdentity = new Set(knownIdentities.map(identityId)).size > 1;
   const queryPromises = new Map();
+  // 7.20.10: the query vector comes from embeddingQuery (the prompt without
+  // host envelopes) when the automatic recall sets it, as in runRecallPipeline.
+  const identityQueryText = typeof baseParams.embeddingQuery === "string" && baseParams.embeddingQuery.trim()
+    ? baseParams.embeddingQuery
+    : baseParams.query;
   let identityQueries = null;
   if (multiIdentity) {
     const available = new Map(providers ?? []);
     if (baseParams.embeddings.identity) available.set(identityId(baseParams.embeddings.identity), baseParams.embeddings);
-    identityQueries = await embedIdentityQueries(baseParams.query, knownIdentities, available, {
+    identityQueries = await embedIdentityQueries(identityQueryText, knownIdentities, available, {
       signal: baseParams.signal, agentId: baseParams.agentId,
       budgetMs: Math.max(1, Math.min(baseParams.identityBudgetMs ?? 400, 400 - (phaseTimer?.elapsedMs?.() ?? 0))),
     });
@@ -116,7 +121,7 @@ async function runMergedNamespaceRecall(
       const routedEmbeddings = id ? {
         identity: db.identity,
         embedQuery: text => {
-          if (text !== baseParams.query) return (provider.embedQuery ?? provider.embed).call(provider, text, embedOptions);
+          if (text !== identityQueryText) return (provider.embedQuery ?? provider.embed).call(provider, text, embedOptions);
           if (identityQueries) return identityQueries.vectors.get(id);
           if (!queryPromises.has(id)) queryPromises.set(id, (provider.embedQuery ?? provider.embed).call(provider, text, embedOptions));
           return queryPromises.get(id);
@@ -194,6 +199,15 @@ async function runMergedNamespaceRecall(
         temporalRejected.push(...preMerged.temporalRejected);
         return { ...preMerged, identityId: id };
       }), { k: baseParams.rrfK ?? baseParams.embeddings.rrfK ?? 60 });
+      // 7.20.10 (main only): the per-identity pre-merges already ranked by
+      // the auto-recall quality weight, so the RRF score carries it. A
+      // weightedScore from one identity's vector space must not order the
+      // fused list (mergeNamespaceRecallResults prefers it over score).
+      if (baseParams.autoRecallPolicy) {
+        for (const result of fusionInput) {
+          if (Array.isArray(result.memories)) result.memories = result.memories.map(({ weightedScore: _weightedScore, ...item }) => item);
+        }
+      }
       fusionInput.push(...namespaceResults.map(({ namespace, sourceKind, trace }) => ({ namespace, sourceKind, trace })));
     }
     let merged = mergeNamespaceRecallResults(fusionInput, {
@@ -217,6 +231,17 @@ async function runMergedNamespaceRecall(
         const ranked = ranking.filter(item => Number.isInteger(item.index) && item.index >= 0 && item.index < original.length && !used.has(item.index) && used.add(item.index)).map(item => original[item.index]);
         if (!used.size) throw new Error("reranker returned no valid indices");
         merged.memories = [...ranked, ...original.filter((_, index) => !used.has(index))];
+        // 7.20.10 (main only): with the auto-recall rules the final order is
+        // the score after rerank times the quality weight, as on the
+        // single-identity path (applyAutoRecallPolicy in runRecallPipeline).
+        if (baseParams.autoRecallPolicy) {
+          const relevance = new Map();
+          for (const item of ranking) {
+            if (Number.isInteger(item.index) && Number.isFinite(item.relevance_score) && !relevance.has(item.index)) relevance.set(item.index, item.relevance_score);
+          }
+          const scored = original.map((item, index) => (relevance.has(index) ? { ...item, rerankScore: relevance.get(index) } : item));
+          merged.memories = applyAutoRecallPolicy([...[...used].map((index) => scored[index]), ...scored.filter((_, index) => !used.has(index))], createAutoRecallPolicy(baseParams.autoRecallPolicy));
+        }
       } catch (error) {
         if (baseParams.signal?.aborted || baseParams.rerankerFallbackOnError === false) throw error;
         merged.degraded = { reason: "reranker-unavailable", capability: "recall", detail: "rank fusion used after reranker failure" };

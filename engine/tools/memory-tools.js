@@ -48,6 +48,7 @@ import { findBlockingTombstoneForCapture } from "../../lib/tombstone.js";
 import { combineValidTimeForMerge, hasDisjointValidityWindows, normalizeCapturedTimestamp, normalizeCapturedValidityWindow, validateValidTimeInputFields } from "../../lib/valid-time.js";
 import { guardWorkspaceTools } from "../../lib/workspace-policy-guard.js";
 import { describeError, describeText } from "../../lib/log-redact.js";
+import { prepareEmbeddingText } from "../../lib/embedding-text.js";
 import { writeFileAtomicSync } from "../../lib/atomic-file.js";
 
 /**
@@ -83,6 +84,7 @@ export function createMemoryTools(ctx) {
     durableMergeEpistemicMetadata,
     durableMergeLineage,
     durableMergeWriteKey,
+    embeddingCleanTextCfg,
     embeddings,
     emotionIntensityHalfLifeFactor,
     emotionalPool,
@@ -362,7 +364,9 @@ export function createMemoryTools(ctx) {
               maxTextPreviewChars: traceCfg.maxTextPreviewChars ?? 160,
               maxCandidates: traceCfg.maxCandidates ?? 50,
             });
-            const vector = await embeddings.embed(params.text, { agentId });
+            // 7.20.10: bereinigt einbetten, wörtlich speichern (lib/embedding-text.js).
+            const storeEmbedInput = prepareEmbeddingText(params.text, embeddingCleanTextCfg);
+            const vector = await embeddings.embed(storeEmbedInput.text, { agentId });
             const workspaceKey = ownershipFields.workspaceKey;
             const categoryResult = params.category
               ? { category: params.category, reason: "caller-provided" }
@@ -502,7 +506,8 @@ export function createMemoryTools(ctx) {
                       return null;
                     }
                     const mergedImportance = Math.max(importance, authoritativeCandidate.importance ?? 0.5);
-                    const mergedVector = await embeddings.embed(mergeResult.mergedText, { agentId });
+                    const mergedEmbedInput = prepareEmbeddingText(mergeResult.mergedText, embeddingCleanTextCfg);
+                    const mergedVector = await embeddings.embed(mergedEmbedInput.text, { agentId });
                     const { emotion: mergedEmotion, emotionStatus: mergedEmotionStatus } = await classifyEmotionForStore(mergeResult.mergedText, { agentId, importance: mergedImportance });
                     const mergedMoodContext = emotionalPool.snapshot(agentId);
                     const mergedValidTime = combineValidTimeForMerge(authoritativeCandidate, { validFrom: capturedValidFrom, validUntil: capturedValidUntil });
@@ -517,6 +522,7 @@ export function createMemoryTools(ctx) {
                       moodContextAtCapture: serializeEmotionalValence(mergedMoodContext),
                       emotionStatus: mergedEmotionStatus,
                       validFrom: mergedValidTime.validFrom, validUntil: mergedValidTime.validUntil,
+                      embeddingTextMode: mergedEmbedInput.mode,
                     }, Date.now(), halfLifeOverrides, { intensityHalfLifeFactor: emotionIntensityHalfLifeFactor, flashbulbEncodingEnabled });
                     return { mergedEntry, mergeResult, mergedImportance };
                   },
@@ -557,6 +563,7 @@ export function createMemoryTools(ctx) {
               moodContextAtCapture: serializeEmotionalValence(moodContext),
               emotionStatus,
               validFrom: capturedValidFrom, validUntil: capturedValidUntil,
+              embeddingTextMode: storeEmbedInput.mode,
             }, Date.now(), halfLifeOverrides, { intensityHalfLifeFactor: emotionIntensityHalfLifeFactor, flashbulbEncodingEnabled });
             await db.store(entry);
             if (toolCtx.workspaceDir) appendCurationLog(toolCtx.workspaceDir, agentId, { event: "memory.stored", timestamp: new Date().toISOString(), agentId, memoryId: entry.id, text: params.text.slice(0, 200), category, origin, reason: "stored", relatedId: null });
