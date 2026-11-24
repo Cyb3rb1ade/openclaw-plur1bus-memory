@@ -125,6 +125,15 @@ describe("planCleanReembed", () => {
     assert.equal(plan.reembed[0].cleaned, "Christian: Das geheime Projekt heißt Nordlicht");
   });
 
+  it("Talk-Mode-Zeilen werden neu eingebettet, nicht nur umgestellt (Befund TALK-EMB)", () => {
+    const talk = "Talk Mode active. Reply in a concise, spoken tone.\n\nNormal";
+    const plan = planCleanReembed([{ id: IDS.plain, text: talk }], { stripSpeaker: false });
+    assert.deepEqual(plan.reembed.map((r) => [r.id, r.cleaned]), [[IDS.plain, "Normal"]]);
+    assert.deepEqual(plan.modeOnly, []);
+    assert.equal(plan.rules.talkMode, 1);
+    assert.match(JSON.stringify(plan.examples), /Talk Mode active/, "fester Host-Text, darf im Bericht stehen");
+  });
+
   it("Beispiele zeigen nur Hüllen, keinen privaten Inhalt", () => {
     const plan = planCleanReembed([
       { id: IDS.audio, text: TEXTS.audio },

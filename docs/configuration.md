@@ -124,7 +124,8 @@ nicht als Anker);
 Assistenten-Behauptung (`sourceMessageRole` assistant) 0,9. Herkunft allein
 (Subagent, Cron) wertet nicht ab. Der Talk-Mode-Präfix des Hosts („Talk Mode
 active. Reply in a concise, spoken tone.“) zählt nicht mit; die Äußerung
-dahinter wird wie Nutzertext gewogen und auch bei der Echo-Prüfung ohne Präfix
+dahinter wird wie Nutzertext gewogen und auch bei der Echo-Prüfung, beim
+Einbetten (Erinnerung und Anfrage) und im Wort-Score von Neo ohne Präfix
 verglichen.
 
 ### Neo im Auto-Recall (7.20.10)
@@ -402,7 +403,9 @@ Sprachnachrichten (`[Audio transcript (…)]: "…"`) und Medien-Köpfe
 Zeile (`[User schickte audio …]`), Kanal-Köpfe alter Eingangsumschläge
 (`[Telegram … id:…]`, nur mit `id:` und nicht als Linktext),
 Platzhalterzeilen (`[visible thinking]`, `[visible toolCall: …]`) und
-`<think>`-Blöcke, Bühnenanweisungen aus einer festen Wortliste (in eckigen
+`<think>`-Blöcke, der Talk-Mode-Präfix des Hosts („Talk Mode active. Reply in a
+concise, spoken tone.“ samt ElevenLabs- und Unterbrechungszeile; ein
+Rollenpräfix davor bleibt), Bühnenanweisungen aus einer festen Wortliste (in eckigen
 Klammern wie `[räuspert sich]`, in runden wie `(lacht)` oder `(Pause)` nur in
 einem Transkript; nie als Linktext oder direkt hinter einem Bezeichner) und
 Füllwörter (ähm, äh, hm, mhm …) nur als eigenes Wort zwischen Leerraum und
@@ -411,7 +414,7 @@ einer Zahl, nicht großgeschrieben mitten im Satz). Klammern mit anderem
 Inhalt bleiben stehen. Bleibt nur Hülle übrig, wird der Rohtext eingebettet (`raw`).
 
 Die Anfrage des Auto-Recalls verliert nur die Hüllen (Zeitstempel, Metadaten,
-Transkript-Umschlag, Stummel), nicht Füllwörter oder Bühnenanweisungen: Sie
+Transkript-Umschlag, Talk-Mode-Präfix, Stummel), nicht Füllwörter oder Bühnenanweisungen: Sie
 ist kurz und live, und derselbe Anfragevektor sucht auch im Neo-Index, dessen
 Vektoren roh bleiben. Rerank, Echo-Prüfung und alle anderen Stufen lesen
 weiter die unveränderte Anfrage; `memory_recall`/`memory_search` und der
@@ -456,9 +459,11 @@ gestopptem Gateway einen frischen Snapshot ziehen und mit ihm neu starten, er
 wird die neue Basis. Der Gateway bleibt deshalb zwischen Teilläufen gestoppt.
 Ctrl-C oder SIGTERM beenden den laufenden Block und schreiben `failed` und den
 Checkpoint; ein zweites Signal beendet sofort. Der Probelauf vom 24.11.2026 (Regeln
-dieses Releases): main 1.046 Zeilen neu
-(≈ 155.000 Tokens), bernhardine 2.310 (≈ 247.000), heisenberg 19; der Rest
-nur Modus.
+dieses Releases): main 1.075 Zeilen neu
+(≈ 156.000 Tokens), bernhardine 2.310 (≈ 247.000), heisenberg 19; der Rest
+nur Modus. In den 1.075 stecken die 27 Talk-Mode-Zeilen von main (die anderen
+Agenten haben keine): ohne den Präfix sind 19 davon kürzer als 30 Zeichen
+("Ja", "Normal") und haben im Auto-Recall das Gewicht 0,8.
 
 ### Embedding-Dimensionen
 

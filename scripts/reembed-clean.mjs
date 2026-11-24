@@ -106,7 +106,7 @@ const PRICE_PER_MILLION = Object.freeze({
 });
 // Diese Regeln entfernen nur feste Hüllen; ihre Fragmente dürfen im Bericht
 // stehen (Ziffern maskiert). Alles andere erscheint nur als Regel + Länge.
-const PRINTABLE_RULES = new Set(["audioEnvelope", "placeholder", "stageDirection", "filler", "timestamp"]);
+const PRINTABLE_RULES = new Set(["audioEnvelope", "placeholder", "stageDirection", "filler", "timestamp", "talkMode"]);
 const ROLE_SPEAKERS = /^(?:User|Assistant|Human|AI):$/i;
 // Ältere Importe schrieben IDs als 32- bzw. 64-stelligen Hex-Hash (Bestand
 // 24.11.2026: main 604, bernhardine 310, heisenberg 235 aktive Zeilen). Sie

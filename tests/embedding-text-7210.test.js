@@ -111,6 +111,50 @@ describe("cleanTextForEmbedding — Regelsatz clean-v1", () => {
   });
 });
 
+describe("cleanTextForEmbedding — Talk-Mode-Präfix (Befund TALK-EMB)", () => {
+  // Bestand main: 27 aktive Talk-Mode-Zeilen, alle mit diesem Präfix; ihre
+  // Vektoren lagen beieinander (im Mittel 9,93 der 10 nächsten Nachbarn).
+  const PREFIX = "Talk Mode active. Reply in a concise, spoken tone.";
+  const ELEVEN = `${PREFIX}\nYou may optionally prefix the response with JSON (first line) to set ElevenLabs voice (id or alias), e.g. {"voice":"<id>","once":true}.\n\n`;
+
+  it("der Präfix fällt weg, die Äußerung bleibt (mit und ohne ElevenLabs-Zeile)", () => {
+    assert.equal(cleanTextForEmbedding(`${PREFIX}\n\nJa`), "Ja");
+    assert.equal(cleanTextForEmbedding(`${ELEVEN}Wie wird das Wetter morgen?`), "Wie wird das Wetter morgen?");
+    assert.equal(cleanTextForEmbedding(`${PREFIX}\nAssistant speech interrupted at 3.2s.\n\nStopp, anders`), "Stopp, anders");
+    assert.equal(cleanTextForEmbedding(`[Tue 2026-07-27 09:43 GMT+2] ${PREFIX}\n\nNormal`), "Normal");
+    assert.equal(cleanTextForEmbedding(`Conversation info (untrusted metadata):\n\`\`\`json\n{"a":1}\n\`\`\`\n${PREFIX}\n\nGuten Morgen`), "Guten Morgen");
+    // Füllwörter der Äußerung wie bei jedem Text.
+    assert.equal(cleanTextForEmbedding(`${PREFIX}\n\nÄhm, ich bin wieder da`), "ich bin wieder da");
+  });
+
+  it("ein Rollenpräfix davor bleibt, stripSpeaker entfernt ihn", () => {
+    assert.equal(cleanTextForEmbedding(`User: ${PREFIX}\n\nJa`), "User: Ja");
+    assert.equal(cleanTextForEmbedding(`User: ${PREFIX}\n\nJa`, { stripSpeaker: true }), "Ja");
+  });
+
+  it("auch für Anfragen (envelopesOnly) und gemeldet als talkMode", () => {
+    const rules = [];
+    assert.equal(cleanTextForEmbedding(`${ELEVEN}Ähm, wie spät ist es?`, { envelopesOnly: true, onRule: (rule) => rules.push(rule) }), "Ähm, wie spät ist es?");
+    assert.deepEqual(rules, ["talkMode"]);
+    assert.equal(cleanQueryForEmbedding(`${PREFIX}\n\nWie spät ist es?`, { enabled: true }), "Wie spät ist es?");
+    assert.equal(cleanQueryForEmbedding(`${PREFIX}\n\nWie spät ist es?`, { enabled: false }), `${PREFIX}\n\nWie spät ist es?`);
+  });
+
+  it("nur der Präfix ist Hülle: eingebettet wird der Rohtext (raw)", () => {
+    assert.equal(cleanTextForEmbedding(PREFIX), "");
+    assert.equal(cleanTextForEmbedding(`User: ${PREFIX}`), "");
+    assert.deepEqual(prepareEmbeddingText(PREFIX, { enabled: true }), { text: PREFIX, mode: "raw" });
+    assert.deepEqual(embeddingTextForStoredMode(`${PREFIX}\n\nJa`, "clean-v1"), { text: "Ja", mode: "clean-v1" });
+    assert.equal(cleanQueryForEmbedding(PREFIX, { enabled: true }), PREFIX);
+  });
+
+  it("ohne Präfix byte-gleich; der Satz mitten im Text bleibt", () => {
+    for (const text of ["Normaler Text.  ", "Er sagte: Talk Mode active. Reply in a concise, spoken tone.", "Talk Mode ist aus."]) {
+      assert.equal(cleanTextForEmbedding(text), text);
+    }
+  });
+});
+
 describe("Konfiguration und Modus", () => {
   it("Default an, Sprecher bleibt; false schaltet ab", () => {
     assert.deepEqual(resolveEmbeddingCleanTextConfig(undefined), { enabled: true, stripSpeaker: false });

@@ -15,6 +15,7 @@ import {
   NEO_DEFAULT_MAX_REFLECTIONS,
   NEO_RECALL_LANES,
   routeNeoRecall,
+  scoreNeoRecallItem,
   formatNeoRecallContext,
   dedupeNeoLanesAgainstTexts,
   filterNeoItemsAgainstTexts,
@@ -185,6 +186,24 @@ describe("routeNeoRecall: fast gleiche Texte im strengen Modus", () => {
     assert.equal(Object.values(legacy).flat().length, 3);
     const off = routeNeoRecall(items, "Status exec sessions", { ...HOOK_OPTS, queryVector: [1, 0], nearDuplicateJaccard: false });
     assert.equal(off.agent_private_reflections.length, 3);
+  });
+});
+
+describe("Talk-Mode-Präfix zählt im Neo-Score nicht (Befund TALK-EMB)", () => {
+  const PREFIX = "Talk Mode active. Reply in a concise, spoken tone.";
+  const query = `${PREFIX}\n\nWie wird das Wetter morgen`;
+  const talkJa = user("t1", `${PREFIX}\n\nJa`, "user_preference");
+  const wetter = user("w1", "Das Wetter morgen wird sonnig mit 20 Grad", "user_preference");
+
+  it("eine Talk-Mode-Anfrage hebt eine Talk-Mode-Zeile ohne Inhalt nicht über einen Treffer", () => {
+    // Bis 7.20.9 teilten Anfrage und "Ja"-Zeile die sieben Präfixwörter (Jaccard 0,54).
+    assert.ok(scoreNeoRecallItem(wetter, query, "user_preferences") > scoreNeoRecallItem(talkJa, query, "user_preferences"));
+    assert.equal(
+      scoreNeoRecallItem(talkJa, query, "user_preferences"),
+      scoreNeoRecallItem(user("t2", "Ja", "user_preference"), "Wie wird das Wetter morgen", "user_preferences"),
+    );
+    const lanes = routeNeoRecall([talkJa, wetter], query, { ...HOOK_OPTS, requesterWorkspaceKey: "main", minScore: 0, laneMinRelevance: 0.1 });
+    assert.deepEqual(lanes.user_preferences.map((row) => row.item.id), ["w1"], "laneMinRelevance misst ohne Präfix");
   });
 });
 
