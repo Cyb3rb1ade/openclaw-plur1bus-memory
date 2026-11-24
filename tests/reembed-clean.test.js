@@ -120,9 +120,13 @@ describe("planCleanReembed", () => {
   });
 
   it("Beispiele zeigen nur Hüllen, keinen privaten Inhalt", () => {
-    const plan = planCleanReembed([{ id: IDS.audio, text: TEXTS.audio }], { stripSpeaker: true });
+    const plan = planCleanReembed([
+      { id: IDS.audio, text: TEXTS.audio },
+      { id: IDS.filler, text: "<think>Das geheime Projekt Nordlicht</think> Ähm, Antwort folgt" },
+    ], { stripSpeaker: true });
     const json = JSON.stringify(plan.examples);
     assert.doesNotMatch(json, /Nordlicht|geheime|Christian/);
+    assert.match(json, /<thinkBlock: \d+ chars>/);
     assert.match(json, /audioEnvelope/);
     assert.match(json, /räuspert sich/);
   });

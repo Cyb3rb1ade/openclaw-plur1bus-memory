@@ -47,6 +47,8 @@ describe("cleanTextForEmbedding — Regelsatz clean-v1", () => {
     assert.equal(cleanTextForEmbedding("[User schickte audio: voice.ogg (audio/ogg)]"), "");
     assert.equal(cleanTextForEmbedding("[visible thinking]\nDie Antwort ist 42.\n[visible toolCall: exec]"), "Die Antwort ist 42.");
     assert.equal(cleanTextForEmbedding("<think>intern</think>Die Antwort ist 42."), "Die Antwort ist 42.");
+    const prose = "Die <think>-Blöcke zeigen wir nicht an, der Rest bleibt stehen.";
+    assert.equal(cleanTextForEmbedding(prose), prose, "ein erwähntes <think> ohne Abschluss ist kein Block");
   });
 
   it("Klammern mit Inhalt, Etiketten und Rollenpräfix bleiben (ohne stripSpeaker)", () => {
