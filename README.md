@@ -37,10 +37,12 @@ disk, one call per vector; once the page cache was dropped that took seconds
 on the main thread and could push the whole recall over its time limit. The
 vectors now stay in a process-wide cache (512 MiB for all workspaces,
 `PLUR1BUS_NEO_VECTOR_CACHE_MAX_BYTES`, `0` turns it off). New vectors,
-re-embeddings, compaction and replaced or shortened files are detected, and a
-cold start reads the vectors in a few large blocks. Results are bit-identical
-to 7.20.8; on the production data the search takes 40–100 ms instead of
-1–2 s after a page-cache drop.
+re-embeddings, compaction and replaced or shortened files are detected; after
+every change of the vector file a few cached vectors are compared with the
+disk. A cold start reads the vectors in a few large blocks, and a working set
+above the limit keeps a stable part cached and logs one warning instead of
+churning. Results are bit-identical to 7.20.8; on the production data the
+search takes 25–70 ms instead of 1–2.6 s after a page-cache drop.
 
 ### New in v7.20.8 — the time filter only answers "when did we talk"
 
