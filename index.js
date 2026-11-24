@@ -1027,6 +1027,7 @@ export async function runMergedNamespaceRecall(
       dedupEnabled: baseParams.dedupEnabled,
       dedupJaccard: baseParams.dedupJaccard,
       trace,
+      logger: baseParams.logger,
     });
     if (baseParams.adaptiveBudget?.enabled !== false) {
       merged = applyMergedRecallBudget(merged, baseParams.budget, { canonicalOutsideBudget: baseParams.canonicalOutsideLimit === true });

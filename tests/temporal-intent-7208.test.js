@@ -16,7 +16,9 @@ import {
   stripTemporalNoise,
 } from "../lib/temporal-parser.js";
 import { generateProactiveNudge } from "../lib/proactive-nudge.js";
-import { runRecallPipeline } from "../lib/recall-pipeline.js";
+import { createRecallDecisionTrace } from "../lib/recall-decision-trace.js";
+import { mergeNamespaceRecallResults, runRecallPipeline } from "../lib/recall-pipeline.js";
+import * as pluginModule from "../index.js";
 
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
@@ -634,5 +636,72 @@ describe("runRecallPipeline: temporalFilterMode", () => {
       assert.deepEqual(ids, ["grace", "old", "y"], temporalFilterMode);
       assert.deepEqual(temporalLines(lines), [], temporalFilterMode);
     }
+  });
+});
+
+// ─── Mehrere Namensräume: Sicherheitsnetz über die Vereinigung ─────────────
+
+describe("Namensräume: das Sicherheitsnetz 7.12.41 gilt für die Vereinigung", () => {
+  const item = (id, createdAt, score) => ({ entry: { id, text: `memory ${id}`, createdAt }, score, source: "vector" });
+  const range = { kind: "yesterday", from: YESTERDAY - CAPTURE_GRACE_MS, to: TODAY + CAPTURE_GRACE_MS };
+
+  it("Merge: Treffer außerhalb des Fensters aus dem ungefilterten Namensraum fallen weg", () => {
+    const { lines, logger } = capturingLogger();
+    const trace = createRecallDecisionTrace({ query: "q" });
+    const merged = mergeNamespaceRecallResults([
+      { namespace: "agent-private", sourceKind: "private", memories: [item("y", YESTERDAY + 10 * HOUR, 0.5)], canonical: [], temporalFilter: { ...range, keptUnfiltered: false } },
+      {
+        namespace: "shared-user", sourceKind: "user",
+        memories: [item("sept", Date.UTC(2026, 8, 1), 0.9), item("grace", TODAY + HOUR, 0.4)],
+        canonical: [], temporalFilter: { ...range, keptUnfiltered: true },
+      },
+    ], { maxOut: 10, dedupEnabled: false, logger, trace });
+    assert.deepEqual(merged.memories.map((m) => m.entry.id), ["y", "grace"]);
+    assert.deepEqual(lines, ["recall-pipeline: temporal filter across namespaces removed 1 results kept unfiltered by their namespace"]);
+    const rejected = trace.decisions.filter((d) => d.stage === "temporal-filter");
+    assert.deepEqual(rejected.map((d) => [d.memoryId, d.action]), [["sept", "rejection"]]);
+  });
+
+  it("Merge: liegt nirgends etwas im Fenster, bleibt alles; ohne Zeitfilter unverändert", () => {
+    const all = mergeNamespaceRecallResults([
+      { namespace: "agent-private", sourceKind: "private", memories: [item("a", Date.UTC(2026, 2, 1), 0.5)], canonical: [], temporalFilter: { ...range, keptUnfiltered: true } },
+      { namespace: "shared-user", sourceKind: "user", memories: [item("b", Date.UTC(2026, 8, 1), 0.9)], canonical: [], temporalFilter: { ...range, keptUnfiltered: true } },
+    ], { maxOut: 10, dedupEnabled: false });
+    assert.deepEqual(all.memories.map((m) => m.entry.id), ["b", "a"]);
+    const plain = mergeNamespaceRecallResults([
+      { namespace: "agent-private", sourceKind: "private", memories: [item("a", Date.UTC(2026, 2, 1), 0.5)], canonical: [] },
+      { namespace: "shared-user", sourceKind: "user", memories: [item("b", Date.UTC(2026, 8, 1), 0.9)], canonical: [] },
+    ], { maxOut: 10, dedupEnabled: false });
+    assert.deepEqual(plain.memories.map((m) => m.entry.id), ["b", "a"]);
+  });
+
+  it("runMergedNamespaceRecall: Gesprächszeit-Frage liefert keine alten Treffer aus anderen Namensräumen", async () => {
+    // runMergedNamespaceRecall nimmt die Systemzeit als now.
+    const today = Date.parse(new Date().toISOString().slice(0, 10) + "T00:00:00Z");
+    const uuid = (n) => `${String(n).repeat(8)}-${String(n).repeat(4)}-4${String(n).repeat(3)}-8${String(n).repeat(3)}-${String(n).repeat(12)}`;
+    const words = { 1: "auto werkstatt reifen wechsel", 2: "garten blumen erde beet", 3: "urlaub strand sonne meer" };
+    const nsRow = (n, distance, createdAt) => ({
+      id: uuid(n), text: words[n], _distance: distance, createdAt,
+      scope: "agent-private", agentId: "agent-a", storedBy: "agent-a",
+    });
+    const table = (rows) => ({ vectorSearch: () => ({ where() { return this; }, limit: () => ({ toArray: async () => rows }) }) });
+    const readDbs = [
+      { namespace: "private", sourceKind: "private", db: { table: table([nsRow(1, 0.2, today - DAY + 10 * HOUR), nsRow(2, 0.1, Date.parse("2026-03-01T10:00:00Z"))]) } },
+      { namespace: "legacy", sourceKind: "legacy", optional: true, db: { table: table([nsRow(3, 0.05, Date.parse("2026-02-01T10:00:00Z"))]) } },
+    ];
+    const run = async (extra = {}) => {
+      const { lines, logger } = capturingLogger();
+      const merged = await pluginModule.runMergedNamespaceRecall(readDbs, {
+        query: "Was hab ich dir gestern über das Auto erzählt?", agentId: "agent-a", embeddings, topN: 10, budget: 10,
+        canonicalEnabled: false, associativeEnabled: false, logger, adaptiveBudget: { enabled: false }, ...extra,
+      }, null, null);
+      return { ids: merged.memories.map((m) => m.entry.id), lines: temporalLines(lines) };
+    };
+    const intent = await run();
+    assert.deepEqual(intent.ids, [uuid(1)]);
+    assert.ok(intent.lines.includes("recall-pipeline: temporal filter across namespaces removed 1 results kept unfiltered by their namespace"), intent.lines.join("\n"));
+    // legacy bleibt 7.20.7: das Netz entscheidet je Namensraum.
+    const legacy = await run({ temporalFilterMode: "legacy" });
+    assert.deepEqual([...legacy.ids].sort(), [uuid(1), uuid(3)].sort());
   });
 });
