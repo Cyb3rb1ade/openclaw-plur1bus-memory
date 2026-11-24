@@ -685,6 +685,67 @@ describe("Namensräume: das Sicherheitsnetz 7.12.41 gilt für die Vereinigung", 
     assert.deepEqual(plain.memories.map((m) => m.entry.id), ["b", "a"]);
   });
 
+  it("Merge: ein ungefilterter Namensraum löst das Netz nicht selbst aus (Treffer im Fenster kam später dazu)", () => {
+    const { lines, logger } = capturingLogger();
+    const trace = createRecallDecisionTrace({ query: "q" });
+    const merged = mergeNamespaceRecallResults([
+      {
+        namespace: "agent-private", sourceKind: "private",
+        memories: [item("seed-1", Date.UTC(2026, 2, 1), 0.9), item("seed-2", Date.UTC(2026, 2, 2), 0.8), item("assoc-1", YESTERDAY + 10 * HOUR, 0.4)],
+        canonical: [], temporalFilter: { ...range, keptUnfiltered: true },
+      },
+      { namespace: "shared-user", sourceKind: "user", memories: [item("sept", Date.UTC(2026, 8, 1), 0.7)], canonical: [], temporalFilter: { ...range, keptUnfiltered: true } },
+    ], { maxOut: 10, dedupEnabled: false, logger, trace });
+    assert.deepEqual(merged.memories.map((m) => m.entry.id), ["seed-1", "seed-2", "sept", "assoc-1"]);
+    assert.deepEqual(lines, []);
+    assert.deepEqual(trace.decisions.filter((d) => d.stage === "temporal-filter"), []);
+  });
+
+  it("Pipeline + Merge, ein Namensraum: Graph-Nachbar im Fenster verdrängt die Saat-Treffer nicht (7.12.41)", async () => {
+    const NOW_G = Date.UTC(2026, 10, 24, 10, 30);
+    const OLD = Date.UTC(2026, 2, 1, 10, 0);
+    const base = {
+      category: "fact", origin: "dm", status: "active", importance: 0.5, memoryStrength: 1.0,
+      scope: "agent-private", agentId: "agent-a", storedBy: "agent-a",
+    };
+    const seed1 = { ...base, id: "seed-1", text: "Auto Werkstatt Reifen", summary: "auto", createdAt: OLD, _distance: 0.1 };
+    const seed2 = { ...base, id: "seed-2", text: "Auto Versicherung Beitrag", summary: "auto2", createdAt: OLD + 1000, _distance: 0.15 };
+    const assoc = { ...base, id: "assoc-1", text: "Einkaufsliste Milch Brot", summary: "assoc", createdAt: Date.UTC(2026, 10, 23, 10, 0) };
+    // vectorSearch liefert nur die Saat; query().where("id IN (…)") lädt den Graph-Nachbarn nach.
+    const graphTable = {
+      vectorSearch: () => ({ limit: () => ({ toArray: async () => [seed1, seed2] }) }),
+      query: () => ({
+        where: (w) => ({
+          limit: () => ({
+            toArray: async () => {
+              const ids = new Set(String(w).match(/'([^']*)'/g)?.map((s) => s.slice(1, -1)) ?? []);
+              return [seed1, seed2, assoc].filter((r) => ids.has(r.id));
+            },
+          }),
+        }),
+      }),
+    };
+    const emb4 = { dim: 4, embed: async () => [0.1, 0.1, 0.1, 0.1], embedQuery: async () => [0.1, 0.1, 0.1, 0.1] };
+    for (const temporalFilterMode of ["intent", "legacy"]) {
+      const { lines, logger } = capturingLogger();
+      const res = await runRecallPipeline({
+        query: "Was hab ich dir gestern über das Auto erzählt?", dbTable: graphTable, embeddings: emb4,
+        workspaceDir: null, topN: 10, recallMinScore: 0.1, importanceBoost: 0, canonicalEnabled: false, associativeEnabled: true,
+        graphEdges: [{ source: "seed-1", target: "assoc-1", type: "semantic", strength: 0.9, directed: false }],
+        agentId: "agent-a", logger, now: NOW_G, deferFinalCap: true, candidateHardLimit: 100, temporalFilterMode,
+      });
+      const pipelineIds = res.memories.map((m) => m.entry.id).sort();
+      assert.deepEqual(pipelineIds, ["assoc-1", "seed-1", "seed-2"], temporalFilterMode);
+      if (temporalFilterMode === "intent") {
+        assert.equal(res.temporalFilter?.keptUnfiltered, true, JSON.stringify(res.temporalFilter));
+        assert.ok(lines.some((l) => /temporal filter would remove all 2 results — kept unfiltered kind=yesterday/.test(l)), lines.join("\n"));
+      }
+      const merged = mergeNamespaceRecallResults([{ namespace: "private", sourceKind: "private", ...res }], { maxOut: 10, dedupEnabled: false, logger });
+      assert.deepEqual(merged.memories.map((m) => m.entry.id).sort(), ["assoc-1", "seed-1", "seed-2"], temporalFilterMode);
+      assert.ok(!lines.some((l) => /across namespaces/.test(l)), `${temporalFilterMode}\n${lines.join("\n")}`);
+    }
+  });
+
   it("runMergedNamespaceRecall: Gesprächszeit-Frage liefert keine alten Treffer aus anderen Namensräumen", async () => {
     // runMergedNamespaceRecall nimmt die Systemzeit als now.
     const today = Date.parse(new Date().toISOString().slice(0, 10) + "T00:00:00Z");
