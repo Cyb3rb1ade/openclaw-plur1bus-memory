@@ -121,8 +121,12 @@ describe("routeNeoRecall strictLanes", () => {
   });
 
   it("15 assistant-Einträge ergeben höchstens 4 Reflexionen und kein fremdes Etikett", () => {
-    const items = Array.from({ length: 15 }, (_, i) =>
-      assistant(`r${i}`, `Bericht Nummer ${i} ueber den Recall-Test mit eigenem Inhalt ${i}`, { embedding: unitVector(0.6 + i * 0.01) }));
+    // Eigener Inhalt je Eintrag: Texte, die sich nur in Zahlen unterscheiden,
+    // teilen sich seit dem Befund NEO-1-PARTIAL einen Platz (Test unten).
+    const topics = ["Kalender", "Wetterdienst", "Gasspeicher", "Kohlrouladen", "Vault-Sync", "Telegram-Bot", "Cron-Plan",
+      "Snapshot", "Reranker", "Embedding", "Dashboard", "Dreaming", "Obsidian", "Heartbeat", "Benchmark"];
+    const items = topics.map((topic, i) =>
+      assistant(`r${i}`, `${topic}: Bericht zum Recall-Test`, { embedding: unitVector(0.6 + i * 0.01) }));
     const lanes = routeNeoRecall(items, "Recall-Test Bericht", { ...HOOK_OPTS, queryVector: [1, 0] });
     const rows = Object.entries(lanes).flatMap(([lane, list]) => list.map((row) => ({ lane, id: row.item.id, score: row.score })));
     assert.equal(rows.length, 4);
@@ -171,13 +175,62 @@ describe("routeNeoRecall: fast gleiche Texte im strengen Modus", () => {
     assert.deepEqual(lanes.agent_private_reflections.map((row) => row.item.id), ["st0", "x1", "x2", "x3"]);
   });
 
-  it("Texte, die sich nur in Zahlen oder Daten unterscheiden, bleiben beide", () => {
+  it("Texte, die sich nur in Zahlen oder Daten unterscheiden: ein Platz, der neueste Stand", () => {
     const items = [
-      assistant("d1", "Daily Notes für 2026-08-23 angelegt und im Vault abgelegt.", { embedding: unitVector(0.9) }),
-      assistant("d2", "Daily Notes für 2026-08-27 angelegt und im Vault abgelegt.", { embedding: unitVector(0.89) }),
+      assistant("d1", "Daily Notes für 2026-08-23 angelegt und im Vault abgelegt.", { createdAt: "2026-08-23T07:00:00.000Z", embedding: unitVector(0.9) }),
+      assistant("d2", "Daily Notes für 2026-08-27 angelegt und im Vault abgelegt.", { createdAt: "2026-08-27T07:00:00.000Z", embedding: unitVector(0.89) }),
     ];
     const lanes = routeNeoRecall(items, "Daily Notes", { ...HOOK_OPTS, queryVector: [1, 0] });
-    assert.deepEqual(lanes.agent_private_reflections.map((row) => row.item.id), ["d1", "d2"]);
+    assert.deepEqual(lanes.agent_private_reflections.map((row) => row.item.id), ["d2"]);
+    // Der Platz behält den Score des besten Eintrags der Gruppe.
+    const best = routeNeoRecall([items[0]], "Daily Notes", { ...HOOK_OPTS, queryVector: [1, 0] });
+    assert.equal(lanes.agent_private_reflections[0].score, best.agent_private_reflections[0].score);
+  });
+
+  it("Produktionsfall heisenberg: vier Fassungen einer Statuszeile, der neueste Stand füllt einen Platz (Befund NEO-1-PARTIAL)", () => {
+    // Texte wie im Neo-Store heisenberg (24.11.2026); paarweise Jaccard meist 0,72–1,0,
+    // teils mit anderen Zahlen ("Sep 21" statt "Monday's"). Der neueste
+    // Eintrag hat den niedrigsten Score.
+    const tail = "IPv6/OSPFv3 lab, fully delivered. Nothing to recover.\n\nNO_REPLY";
+    const items = [
+      assistant("s254", `[visible thinking]\nNo active exec sessions, no subagents, no media tasks — runtime confirms clean state. Last user interaction was Monday's ${tail}`, { createdAt: "2026-09-26T04:52:58.996Z", embedding: unitVector(0.9) }),
+      assistant("s5265", `No active exec sessions, no subagents, no media tasks — runtime confirms clean state. Last user interaction was Sep 21 — ${tail}`, { createdAt: "2026-09-30T23:48:37.035Z", embedding: unitVector(0.86) }),
+      assistant("s786", "No active exec sessions, no subagents, no media tasks. Last user interaction was Monday's IPv6/OSPFv3 lab work — fully delivered. Nothing to recover.\n\nNO_REPLY", { createdAt: "2026-09-23T01:42:08.737Z", embedding: unitVector(0.85) }),
+      assistant("s7610", `No active exec sessions, no subagents, no media tasks — runtime confirms clean state. Last user interaction was Monday's ${tail}`, { createdAt: "2026-09-24T22:01:37.088Z", embedding: unitVector(0.84) }),
+      // Fünfte Fassung: zum neuesten Text nur 0,63, zu s786 0,86 — gehört über s786 zur Gruppe.
+      assistant("sfed", "No active work confirmed — no exec sessions, no subagents, no media tasks. Last user interaction was Monday's IPv6/OSPFv3 lab. Fully delivered, nothing pending.\n\nNO_REPLY", { createdAt: "2026-09-23T04:51:33.424Z", embedding: unitVector(0.83) }),
+      assistant("n1", "Nothing was written yet; redo the run fully.", { createdAt: "2026-11-22T01:46:57.433Z", embedding: unitVector(0.88) }),
+      assistant("n2", "Der Bericht zum Recall-Test liegt im Workspace.", { embedding: unitVector(0.7) }),
+      assistant("n3", "Kohlrouladen brauchen etwa eine Stunde im Ofen.", { embedding: unitVector(0.69) }),
+    ];
+    const lanes = routeNeoRecall(items, "Exec completed (brisk-ot, code 0) :: 0", { ...HOOK_OPTS, queryVector: [1, 0] });
+    const ids = lanes.agent_private_reflections.map((row) => row.item.id);
+    assert.deepEqual(ids, ["s5265", "n1", "n2", "n3"], "ein Platz für die Statuszeile, an der Stelle ihres besten Scores");
+    // Ohne createdAt am neueren Eintrag bleibt der mit dem besten Score.
+    const undated = items.map((item) => (item.id === "s5265" ? { ...item, createdAt: undefined } : item));
+    const lanes2 = routeNeoRecall(undated, "Exec completed (brisk-ot, code 0) :: 0", { ...HOOK_OPTS, queryVector: [1, 0] });
+    assert.deepEqual(lanes2.agent_private_reflections.map((row) => row.item.id), ["s254", "n1", "n2", "n3"]);
+  });
+
+  it("ein neuerer Eintrag der Gruppe übernimmt den Platz auch, wenn die Lane schon voll ist", () => {
+    const items = [
+      assistant("old", "Gasspeicher Rehden ist zu 71 Prozent gefuellt laut Bundesnetzagentur.", { createdAt: "2026-10-01T08:00:00.000Z", embedding: unitVector(0.95) }),
+      assistant("a", "Kalender: Termin beim Zahnarzt verschoben.", { embedding: unitVector(0.9) }),
+      assistant("b", "Wetterdienst meldet Frost fuer Dienstag.", { embedding: unitVector(0.89) }),
+      assistant("c", "Telegram-Bot antwortet wieder normal.", { embedding: unitVector(0.88) }),
+      assistant("new", "Gasspeicher Rehden ist zu 64 Prozent gefuellt laut Bundesnetzagentur.", { createdAt: "2026-11-20T08:00:00.000Z", embedding: unitVector(0.6) }),
+    ];
+    const lanes = routeNeoRecall(items, "Gasspeicher", { ...HOOK_OPTS, queryVector: [1, 0] });
+    assert.deepEqual(lanes.agent_private_reflections.map((row) => row.item.id), ["new", "a", "b", "c"]);
+  });
+
+  it("unter 0,7 Wort-Jaccard bleiben ähnliche Texte getrennt", () => {
+    const items = [
+      assistant("e1", "Eva bevorzugt kurze Antworten mit Rezepten.", { createdAt: "2026-10-01T08:00:00.000Z", embedding: unitVector(0.9) }),
+      assistant("e2", "Erik bevorzugt lange Antworten mit Laborbeispielen.", { createdAt: "2026-11-01T08:00:00.000Z", embedding: unitVector(0.89) }),
+    ];
+    const lanes = routeNeoRecall(items, "Antworten", { ...HOOK_OPTS, queryVector: [1, 0] });
+    assert.deepEqual(lanes.agent_private_reflections.map((row) => row.item.id), ["e1", "e2"]);
   });
 
   it("ohne strictLanes (memory_search) bleibt alles, nearDuplicateJaccard überschreibt die Schwelle", () => {

@@ -142,8 +142,13 @@ Seit 7.20.10 im Auto-Recall: Lanes nur bei passender Kategorie (kein Überlauf
 in fremde Lanes), ohne `recent_turns` und `behavior_cards`, kein Selbst-Echo
 der aktuellen Anfrage, keine Einträge des laufenden Gesprächs, die noch im
 Kontext stehen, keine Platzhalterzeilen (`[visible thinking]` …), gleicher
-Text nur einmal, fast gleicher Text (Wort-Jaccard ≥ 0,8 bei denselben Zahlen
-und Daten) ebenfalls nur einmal, nach der Dedupe gegen den LanceDB-Block neu geroutet,
+Text nur einmal, fast gleicher Text (Wort-Jaccard ≥ 0,7, auch mit anderen
+Zahlen oder Daten) ebenfalls nur einmal: die Gruppe bekommt den Platz zum
+Score ihres besten Eintrags, gezeigt wird der neueste (`createdAt`). Damit
+belegt eine Statuszeile in mehreren Fassungen nur einen Platz mit dem jüngsten
+Stand; der Preis: zwei Texte mit über 70 % gleichen Wörtern über verschiedene
+Dinge (z. B. zwei Termine, die sich nur im Datum unterscheiden) teilen sich im
+Auto-Recall einen Platz, `memory_search` findet beide. Danach wird nach der Dedupe gegen den LanceDB-Block neu geroutet,
 Einträge auf 300 Zeichen gekürzt, über alle Lanes nach Score sortiert, mit
 `created-at`/`age` aus `createdAt`.
 
