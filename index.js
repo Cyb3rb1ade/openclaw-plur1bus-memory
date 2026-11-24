@@ -13016,7 +13016,8 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               }
               recallPrelude.globalMs = Date.now() - globalStartedAt;
               const lanesStartedAt = Date.now();
-              neoLanes = routeNeoRecall(neoItems, event.prompt, { ...requester, queryVector, maxPerLane: 2, minScore: 0.08 });
+              // 7.20.10: Selbst-Echo der aktuellen Anfrage nicht einspielen.
+              neoLanes = routeNeoRecall(neoItems, event.prompt, { ...requester, queryVector, maxPerLane: 2, minScore: 0.08, excludeQueryEcho: true });
               neoContext = formatNeoRecallContext(neoLanes, { idempotencyKey: injectionKey || undefined });
               recallPrelude.lanesMs = Date.now() - lanesStartedAt;
             }
