@@ -113,8 +113,9 @@ describe("Konfiguration und Modus", () => {
     const cleanText = manifest.configSchema.properties.embedding.properties.cleanText;
     assert.equal(cleanText.additionalProperties, false);
     assert.deepEqual(Object.keys(cleanText.properties).sort(), ["enabled", "stripSpeaker"]);
-    assert.equal(cleanText.properties.enabled.default, true);
-    assert.equal(cleanText.properties.stripSpeaker.default, false);
+    // Keine Schema-Defaults: Profile und Installer schreiben sonst cleanText in jede Konfiguration.
+    assert.equal(Object.hasOwn(cleanText.properties.enabled, "default"), false);
+    assert.equal(Object.hasOwn(cleanText.properties.stripSpeaker, "default"), false);
   });
 });
 

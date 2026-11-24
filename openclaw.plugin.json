@@ -266,13 +266,11 @@
             "properties": {
               "enabled": {
                 "type": "boolean",
-                "default": true,
-                "description": "Embed the cleaned text (default true). false embeds the stored text as before (embeddingTextMode raw)."
+                "description": "Embed the cleaned text (default true when unset). false embeds the stored text as before (embeddingTextMode raw)."
               },
               "stripSpeaker": {
                 "type": "boolean",
-                "default": false,
-                "description": "Also drop the role prefix (User:/Assistant:) and the speaker right after a voice-transcript envelope (mode clean-v1-nospeaker). Default false until measured."
+                "description": "Also drop the role prefix (User:/Assistant:) and the speaker right after a voice-transcript envelope (mode clean-v1-nospeaker). Default false when unset, until measured."
               }
             }
           },

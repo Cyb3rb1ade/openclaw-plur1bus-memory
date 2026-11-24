@@ -1,13 +1,13 @@
 // 7.20.10: scripts/reembed-clean.mjs — Bestand bereinigt neu einbetten.
 // Kleine LanceDB-Tabellen in einem Temp-Verzeichnis, Fake-Embedder, keine API.
-import { after, before, describe, it } from "node:test";
+import { before, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as lancedb from "@lancedb/lancedb";
 
 import { parseArgs, planCleanReembed, runCli } from "../scripts/reembed-clean.mjs";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const DIM = 4;
 const IDS = {
@@ -26,9 +26,14 @@ const TEXTS = {
 };
 
 let root;
+let counter = 0;
 
+// Alles unter einem Wurzelverzeichnis des aufräumenden Helfers (löscht beim Prozessende).
 function freshDir(name) {
-  return mkdtempSync(join(root, `${name}-`));
+  counter += 1;
+  const dir = join(root, `${name}-${counter}`);
+  mkdirSync(dir, { recursive: true });
+  return dir;
 }
 
 async function makeTable(base, agent, { withMode = true, extraRows = [] } = {}) {
@@ -79,12 +84,7 @@ const stopped = () => ({ systemd: "inactive", processes: [], running: false });
 const running = () => ({ systemd: "active", processes: [1], running: true });
 
 before(() => {
-  root = mkdtempSync(join(tmpdir(), "plur1bus-reembed-clean-"));
-});
-
-after(() => {
-  // Temp-Verzeichnisse immer entfernen (kein Test-Temp-Leck).
-  rmSync(root, { recursive: true, force: true });
+  root = makeTempDir("plur1bus-reembed-clean-");
 });
 
 describe("parseArgs", () => {
