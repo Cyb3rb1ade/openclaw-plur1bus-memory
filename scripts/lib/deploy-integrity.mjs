@@ -24,6 +24,8 @@ export const DEPLOY_FILES = [
   "package.json",
   // ── core runtime ──────────────────────────────────────────────────────────
   "lib/neo-arch.js",
+  // 7.20.10: von neo-arch.js importiert (Selbst-Echo im Auto-Recall).
+  "lib/query-echo.js",
   "lib/neo-worker-runner.js",
   "lib/neo-worker-runtime.js",
   "lib/abort.js",
