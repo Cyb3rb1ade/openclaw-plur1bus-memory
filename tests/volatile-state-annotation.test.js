@@ -136,7 +136,11 @@ describe("annotateVolatileStateForPrompt: Zeitanker", () => {
     const errors = [];
     const r = annotate("aktuell 7.12.2", SEPT, { timeZone: "Kein/Ort", onError: (e) => errors.push(e) });
     assert.equal(r.text, "aktuell [Stand 14.09.2026] 7.12.2");
+    assert.equal(r.timeZoneFallback, true);
     assert.equal(errors.length, 1);
+    // ohne onError bleibt der Rückfall am Ergebnis sichtbar
+    assert.equal(annotate("aktuell 7.12.2", SEPT, { timeZone: "Kein/Ort" }).timeZoneFallback, true);
+    assert.equal(annotate("aktuell 7.12.2").timeZoneFallback, undefined);
   });
 
   it("toObservedAtMs", () => {
