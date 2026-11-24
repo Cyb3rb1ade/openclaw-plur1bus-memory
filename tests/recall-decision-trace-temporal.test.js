@@ -53,7 +53,8 @@ describe("RecallDecisionTrace temporal enrichment", () => {
 
     const decision = trace.decisions.find(d => d.memoryId === "m1");
     assert.ok(decision.temporal, "expected temporal metadata on decision");
-    assert.strictEqual(decision.temporal.operationalRisk, "high");
+    // 7.21.1: "cron" alone is no longer a high-risk keyword (no change verb).
+    assert.strictEqual(decision.temporal.operationalRisk, "medium");
   });
 
   it("adds guard records for stale operational memories", () => {
