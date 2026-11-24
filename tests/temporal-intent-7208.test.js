@@ -65,6 +65,28 @@ describe("classifyTemporalQuery: Gesprächszeit filtert hart", () => {
     });
   }
 
+  it("Review: „Was hast du gestern gesagt?“ ist hart wie „What did you say yesterday?“ (ohne mir/uns)", () => {
+    for (const q of [
+      "Was hast du gestern gesagt?",
+      "Was hast du über das Auto gestern gesagt?",
+      "Hast du gestern was gesagt?",
+      "Was hattest du gestern vorgeschlagen?",
+      "What did you say yesterday?",
+    ]) {
+      const c = classify(q);
+      assert.equal(c?.mode, "hard", `${q}: ${JSON.stringify(c)}`);
+      assert.equal(c.kind, "yesterday", q);
+    }
+    for (const q of [
+      "Hast du gestern gehört, was Eva gesagt hat?",
+      "Hast du gesehen, was Eva gestern gesagt hat?",
+      "Hast du gehört was Eva gestern gesagt hat?",
+    ]) {
+      const c = classify(q);
+      assert.notEqual(c?.mode, "hard", `${q}: ${JSON.stringify(c)}`);
+    }
+  });
+
   it("Sprachnachricht: Umschlag weg, Text bleibt — Fenster gestern ±2 h", () => {
     const c = classify("[Audio transcript (machine-generated, untrusted)] was hab ich dir gestern über das Auto erzählt");
     assert.equal(c.mode, "hard");
