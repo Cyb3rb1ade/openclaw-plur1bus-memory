@@ -112,6 +112,9 @@ bisher. Gespeichert, archiviert oder gelöscht wird nichts.
 |-----|-----|---------|--------------|
 | `qualityWeighting.enabled` | `boolean` | `true` | Gewicht anwenden. `false` lässt nur die beiden Echo-Regeln aktiv. |
 | `qualityWeighting.floor` | `number` (0–1) | `0.35` | Untergrenze des Gewichts. |
+| `qualityWeighting.staleAssistant` | `boolean` | `true` | 7.21.1: alte Assistenten-Antworten und Floskeln zusätzlich abwerten (siehe unten). |
+| `mergeTurnParts` | `boolean` | `true` | 7.21.1: Einträge desselben Zugs und Sprechers zu einem zusammenlegen; Neo-Einträge, deren Wörter schon in einer gerenderten Erinnerung stehen, fallen aus dem Neo-Block. |
+| `keywordFallback.enabled` | `boolean` | `true` | 7.21.1: Schlüsselwort-/Jüngste-Einträge-Suche, wenn der Anfragevektor nicht rechtzeitig kommt (siehe „Recall-Budget und Rückfall“). |
 
 Regeln (Faktoren werden multipliziert): reine Host-Hülle ohne Nutzlast
 („Continue the OpenClaw runtime event.“, „Exec failed (…)“, eingefangener
@@ -129,6 +132,51 @@ active. Reply in a concise, spoken tone.“) zählt nicht mit; die Äußerung
 dahinter wird wie Nutzertext gewogen und auch bei der Echo-Prüfung, beim
 Einbetten (Erinnerung und Anfrage) und im Wort-Score von Neo ohne Präfix
 verglichen.
+
+Seit 7.21.1 (`qualityWeighting.staleAssistant`, Standard an): Assistenten-
+Antworten ohne Inhaltsanker oder unter 200 Zeichen sinken mit dem Alter
+(ab 14 Tagen × 0,8, ab 60 × 0,65, ab 180 × 0,55). Antworten mit Zahl, URL,
+Bezeichner oder Zitat und mindestens 200 Zeichen gelten als informativ und
+sinken erst nach 60 Tagen, dann × 0,85. Floskeln ohne Inhalt („Danke fürs
+Teilen!“, „Gute Nachrichten: …“, „Game-Changer“, bis 400 Zeichen) × 0,6.
+Nutzeraussagen altern nie. Mit `mergeTurnParts` werden Einträge mit gleicher
+`sourceTurnId` und gleicher Sprecherrolle für den Prompt zu einem Eintrag
+zusammengelegt (Teile, die ein anderer Teil enthält, entfallen); Teilstücke
+einer Chunk-Gruppe und Träume nicht. Gespeichert wird nichts davon.
+
+### Recall-Budget und Rückfall (7.21.1)
+
+Der Auto-Recall hat ein festes Budget (`runtime.recallTimeoutMs`). Damit es
+nicht vom Neo-Vorlauf aufgebraucht wird:
+
+- Der Neo-Vorlauf darf ab Beginn des Recalls höchstens
+  `min(neo.recall.global.embedTimeoutMs, recallTimeoutMs / 4)` brauchen (bei
+  12 000 ms also 3 000 ms). Danach überspringt er globale Suche und Lanes; die
+  Logzeile `recall prelude` zeigt `budget=…ms(exceeded)`.
+- Der Store-Recall wartet auf den Anfragevektor höchstens bis ein Viertel des
+  Budgets übrig ist (mindestens 1,5 s bzw. das halbe Budget, höchstens 3 s
+  Reserve); hat der Vorlauf das Embedding
+  schon als langsam gesehen, nur noch ein Achtel des Budgets (200 ms–1,5 s).
+- Kommt der Vektor nicht oder scheitert das Embedding, sucht der Recall nach
+  Wörtern der Nachricht (bis zu sechs, ohne Füllwörter) und nach den
+  Einträgen der letzten 7 Tage, mit denselben Toren wie der Vektorweg
+  (Lebenszyklus, ACL, Echo, Qualitätsgewicht). Der Block trägt
+  `retrieval="keyword-recent-fallback"` und einen Hinweis an das Modell; das
+  Ergebnis meldet `degraded.reason = "embedding-unavailable"`.
+  `recall.keywordFallback.enabled: false` stellt den alten Weg wieder her.
+- Ein Stall des Main-Threads (Logzeile `main-thread stall`) unterbricht auch
+  Timer; ist er länger als das Budget, bleibt der Recall leer.
+
+`runtime.recallPrewarm` (Standard an): 20 s nach `gateway_start` läuft je
+Chat-Agent ein lesender Warm-Recall (Embedding-Verbindung, Neo-Vektor-Cache,
+LanceDB-Handles), ohne Reranker und ohne Schreiben.
+
+| Key | Typ | Default | Beschreibung |
+|-----|-----|---------|--------------|
+| `runtime.recallPrewarm.enabled` | `boolean` | `true` | Warm-Recall nach dem Start. |
+| `runtime.recallPrewarm.delayMs` | `number` (0–600 000) | `20000` | Wartezeit nach `gateway_start`. |
+| `runtime.recallPrewarm.agents` | `string[]` (≤ 8) | Schlüssel von `chatModels`, sonst die Agenten aus `obsidianBridge.workspaces` | Welche Agenten. |
+| `conversationReactivationRecall.timeoutMs` | `number` | `250` | Seit 7.21.1 250 statt 50 ms (begrenzt auf 10–2000 ms). |
 
 ### Neo im Auto-Recall (7.20.10)
 

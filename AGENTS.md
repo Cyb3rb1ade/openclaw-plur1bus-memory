@@ -69,8 +69,27 @@ These features sit **after** normal recall and only append results. They must ne
 - Triggers: idle gap (45 min), continuation signal, first substantive message, post-compaction gap.
 - Default `enabled: false`; `visibleHints: false`.
 - Hard caps: `maxReactivationMemories: 3`, `maxFadedReactivationMemories: 1`, `maxOpenThreads: 3`, `maxCommunities: 2`.
-- Hard timeout 50 ms; silent fallback on error.
+- Hard timeout 250 ms since 7.21.1 (`timeoutMs`, was 50 ms); silent fallback on error.
 - Module-level in-memory state only; no persistence, no writes to cards/tags/graph/records/quarantine.
+
+### Recall budget, fallback and warm start (7.21.1)
+
+- The Neo prelude has a hard budget from the recall's start:
+  `min(neo.recall.global.embedTimeoutMs, recallTimeoutMs / 4)`
+  (`neoPreludeBudgetMs`). Past it, global search and lanes are skipped.
+- The store recall waits for the query vector until a quarter of the budget
+  (at least 1.5 s, at most 3 s) is left (`recallEmbedDeadline`), then runs `lib/recall-keyword-fallback.js`
+  (keywords + last 7 days, same lifecycle/ACL/policy gates). The block is
+  marked `retrieval="keyword-recent-fallback"`, the result reports
+  `embedding-unavailable`. Never let the fallback write or replace a working
+  vector recall. `recall.keywordFallback.enabled=false` restores the old path.
+- A main-thread stall also stops timers; no timeout in JS can cut it.
+- `runtime.recallPrewarm`: one warm-only recall per chat agent after
+  `gateway_start` (`adapter/openclaw/register-recall-prewarm.js`).
+- Light dreams bind to a user only with a proved principal for the same turn
+  (`adapter/openclaw/proved-turn-principals.js` →
+  `engine/capture/light-dream-identity.js`); never derive a user binding from
+  a raw hook `senderId`.
 
 ### Graph-link managed blocks / semanticDiscovery
 

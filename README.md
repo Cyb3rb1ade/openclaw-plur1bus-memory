@@ -35,6 +35,27 @@ separate login); reach it through however you already reach your Gateway
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
 
+### New in v7.21.1 — the recall keeps its budget, and the block gets leaner
+
+- **Hard budget for the Neo prelude.** It may use at most
+  `min(neo.recall.global.embedTimeoutMs, runtime.recallTimeoutMs / 4)` from
+  the start of the recall; past that it skips the global search and the lanes.
+- **Keyword/recent fallback.** If the query vector does not arrive in time or
+  the embedding fails, the automatic recall searches by the prompt's words and
+  the last 7 days instead of returning nothing. The block is marked
+  `retrieval="keyword-recent-fallback"` (`recall.keywordFallback.enabled`).
+- **Warm start.** `runtime.recallPrewarm`: 20 s after `gateway_start` one
+  read-only warm recall per chat agent (reranker off, nothing written).
+- **Leaner selection** (automatic recall only, nothing deleted): old assistant
+  replies without new information and content-free pleasantries sink
+  (`recall.qualityWeighting.staleAssistant`); records of the same turn and
+  speaker are joined, and Neo entries already shown as memories are left out
+  (`recall.mergeTurnParts`).
+- **Fixes:** a bare system word in quoted text ("Cron" in a table) is no
+  longer marked `operational-risk="high"`; light dreams are bound to a user
+  only when the recall proved that user (`acl.user.missing_principal`); CRR
+  timeout 250 ms instead of 50; no Python bytecode in the release tarball.
+
 ### New in v7.21.0 — releases come from `main` (engine/adapter layout)
 
 7.21.0 is the first release built from `main`. The plugin is now
@@ -1172,7 +1193,7 @@ MVP reactivation hook that appends a `<memory-reactivation>` block when a conver
 - Default: `enabled: false` in schema; `visibleHints: false`.
 - Triggers: idle threshold (45 min), continuation signal, first substantive message, or post-compaction gap.
 - Caps: `maxReactivationMemories: 3`, `maxFadedReactivationMemories: 1`, `maxOpenThreads: 3`, `maxCommunities: 2`.
-- Hard timeout: 50 ms; silent fallback on error.
+- Hard timeout: 250 ms since 7.21.1 (`timeoutMs`, was 50 ms); silent fallback on error.
 - State is module-level in-memory only; no writes to cards, tags, graph links, records, or quarantine.
 
 ### Graph-link managed blocks / semanticDiscovery
