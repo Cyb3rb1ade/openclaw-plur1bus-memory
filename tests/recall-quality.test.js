@@ -1,5 +1,6 @@
 // 7.20.10 (Bernds Vorschlag 2): Qualitätsgewicht aus einfachen Regeln.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
 import {
@@ -34,8 +35,20 @@ describe("computeRecallQualityWeight", () => {
     const r = weigh("Ich bin ein Memory-Search-Agent. Meine Aufgabe ist es, relevante Erinnerungen zu suchen und zurückzugeben, damit ein anderes Modell die endgültige Antwort vorbereiten kann.", { sourceMessageRole: "assistant" });
     assert.deepEqual(r.rules, ["selfIntro", "assistantClaim"]);
     assert.ok(Math.abs(r.weight - 0.36) < 1e-9, `0,4 × 0,9: ${r.weight}`);
-    assert.ok(weigh("Ich bin ein Cron-Job für die tägliche Memory-Konsolidierung. Ich werde die heutigen Memories lesen.").rules.includes("selfIntro"));
-    assert.ok(weigh("I am a helpful assistant designed to search memories.").rules.includes("selfIntro"));
+    assert.ok(weigh("Ich bin ein Cron-Job für die tägliche Memory-Konsolidierung. Ich werde die heutigen Memories lesen.", { sourceMessageRole: "assistant" }).rules.includes("selfIntro"));
+    assert.ok(weigh("I am a helpful assistant designed to search memories.", { sourceMessageRole: "assistant" }).rules.includes("selfIntro"));
+    assert.ok(computeRecallQualityWeight({ text: "Ich bin ein Memory-Search-Agent. Meine Aufgabe ist es, Erinnerungen zu suchen." }).rules.includes("selfIntro"), "Altzeile ohne Rolle");
+  });
+
+  it("Selbstbeschreibung des Nutzers ist keine Selbstvorstellung eines Agenten", () => {
+    for (const text of [
+      "Ich bin eine KI-Forscherin bei DeepMind und arbeite an Sprachmodellen.",
+      "Ich bin ein Bot-Entwickler und betreue den Telegram-Bot @foo_bot.",
+      "I'm a real estate agent in Munich.",
+    ]) {
+      assert.equal(weigh(text).rules.includes("selfIntro"), false, text);
+    }
+    assert.equal(computeRecallQualityWeight({ text: "User: Ich bin eine KI-Forscherin bei DeepMind und arbeite an Sprachmodellen." }).rules.includes("selfIntro"), false, "Rollenpräfix der Altzeilen");
   });
 
   it("keine Selbstvorstellung: andere Sätze mit 'Ich bin', lange Einträge", () => {
@@ -52,6 +65,17 @@ describe("computeRecallQualityWeight", () => {
     assert.equal(weigh("A background task completed. Use this result to reply to the user in your normal assistant voice. source: image_generation").weight, RECALL_QUALITY_WEIGHTS.hostEnvelope);
   });
 
+  it("Talk Mode: der Präfix zählt nicht, die Äußerung dahinter zählt wie Nutzertext", () => {
+    const prefix = "Talk Mode active. Reply in a concise, spoken tone.";
+    const hint = "You may optionally prefix the response with JSON (first line) to set ElevenLabs voice (id or alias), e.g. {\"voice\":\"<id>\",\"once\":true}.";
+    assert.deepEqual(weigh(`${prefix}\n\nMein Zug fährt um 7:40`), { weight: 1, rules: [] });
+    assert.deepEqual(weigh(`${prefix}\n${hint}\nAssistant speech interrupted at 2.5s.\n\nMein Zug fährt um 7:40`), { weight: 1, rules: [] });
+    assert.deepEqual(weigh(`${prefix} Es ist nicht herrlich`).rules, ["veryShort"], "keine Host-Meldung");
+    const long = "Erinnere mich bitte morgen früh daran, dass Eva am Freitag Geburtstag hat und wir noch ein Geschenk brauchen.";
+    assert.deepEqual(weigh(`${prefix}\n\n${long}`), { weight: 1, rules: [] }, "nicht pauschal 0,6");
+    assert.deepEqual(weigh(prefix).rules, ["hostEnvelope"], "nur der Präfix");
+  });
+
   it("normaler Text mit dem Wort Subagent ist keine Hülle", () => {
     assert.deepEqual(weigh("Der Subagent complex-researcher hat gestern die Recherche zum Gasspeicher abgeschlossen.").rules, []);
   });
@@ -63,8 +87,9 @@ describe("computeRecallQualityWeight", () => {
     assert.deepEqual(weigh("Also impulsiv ist sie eigentlich nicht, sie gleicht meinen Vater ruhig und bedacht aus.").rules, [], "zwei schwache Füllwörter in 14 Wörtern");
   });
 
-  it("kurz ohne Zahl, Name oder URL", () => {
+  it("kurz ohne Zahl, URL oder Bezeichner (gewöhnliche Namen sind kein Anker)", () => {
     assert.deepEqual(weigh("Ja, mach das bitte so.").rules, ["veryShort"]);
+    assert.deepEqual(weigh("Eva trinkt keinen Kaffee.").rules, ["veryShort"], "Name allein hebt die Längenregel nicht auf");
     assert.deepEqual(weigh("Also das funktioniert immer noch nicht, leider.").rules, ["short"]);
     assert.deepEqual(weigh("Gateway läuft auf 2026.11.6.").rules, [], "Zahl");
     assert.deepEqual(weigh("Schau auf https://docs.cohere.com nach").rules, [], "URL");
@@ -101,5 +126,16 @@ describe("resolveQualityWeightingConfig", () => {
     assert.deepEqual(resolveQualityWeightingConfig({ floor: 0.5 }), { enabled: true, floor: 0.5 });
     assert.deepEqual(resolveQualityWeightingConfig({ floor: 2 }), { enabled: true, floor: 0.35 });
     assert.deepEqual(resolveQualityWeightingConfig({ floor: "x" }), { enabled: true, floor: 0.35 });
+  });
+});
+
+describe("Beschreibung der Längenregel", () => {
+  it("verspricht keine Namenserkennung (Anker: Zahl, URL, Bezeichner)", () => {
+    const manifest = JSON.parse(readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"));
+    const description = manifest.configSchema.properties.recall.properties.qualityWeighting.description;
+    assert.doesNotMatch(description, /number\/name\/URL/);
+    assert.match(description, /without a number, URL or identifier \(plain names do not count\)/);
+    const docs = readFileSync(new URL("../docs/configuration.md", import.meta.url), "utf8");
+    assert.doesNotMatch(docs, /ohne Zahl, Name, URL/);
   });
 });

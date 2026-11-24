@@ -32,6 +32,23 @@ describe("normalizeForEcho", () => {
   it("NFKC und Kleinschreibung", () => {
     assert.equal(normalizeForEcho("ＡＢＣ Übung"), "abc übung");
   });
+
+  it("entfernt den Talk-Mode-Präfix samt Hinweiszeilen", () => {
+    const talk = "Talk Mode active. Reply in a concise, spoken tone.\nYou may optionally prefix the response with JSON (first line) to set ElevenLabs voice (id or alias), e.g. {\"voice\":\"<id>\",\"once\":true}.\n\n";
+    assert.equal(normalizeForEcho(`${talk}Mein Zug fährt um 7:40`), "mein zug fährt um 7 40");
+  });
+});
+
+describe("isQueryEcho mit Talk Mode", () => {
+  const talk = "Talk Mode active. Reply in a concise, spoken tone.\nYou may optionally prefix the response with JSON (first line) to set ElevenLabs voice (id or alias), e.g. {\"voice\":\"<id>\",\"once\":true}.\n\n";
+  it("zwei verschiedene kurze Sprachbefehle sind kein Echo, nur weil der Präfix gleich ist", () => {
+    assert.equal(isQueryEcho(`${talk}Wie spät ist es`, `${talk}Ich heiße Eva`), false);
+  });
+
+  it("dieselbe Äußerung bleibt ein Echo", () => {
+    const said = "Erinnere mich morgen früh an Evas Geburtstag am Freitag";
+    assert.equal(isQueryEcho(`${talk}${said}`, said), true);
+  });
 });
 
 describe("isQueryEcho", () => {

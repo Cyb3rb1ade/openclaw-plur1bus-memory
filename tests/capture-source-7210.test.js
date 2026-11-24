@@ -107,6 +107,27 @@ describe("isContentFreeHostEnvelope", () => {
     assert.equal(isContentFreeHostEnvelope("A background task completed. Use this result to reply to the user in your normal assistant voice."), true);
   });
 
+  it("auch kurze Nutzlast bleibt: Talk Mode, Exec-Ausgabe, Auftrag, System-Zeile", () => {
+    const talk = "Talk Mode active. Reply in a concise, spoken tone.";
+    assert.equal(isContentFreeHostEnvelope(`${talk}\n\nErinnere mich um 8 an Eva.`), false);
+    assert.equal(isContentFreeHostEnvelope(`${talk} Mein Zug fährt um 7:40`), false);
+    assert.equal(isContentFreeHostEnvelope(`${talk}\n\nJa`), false);
+    assert.equal(isContentFreeHostEnvelope("Exec completed (calm-ox, code 0) :: ok"), false);
+    assert.equal(isContentFreeHostEnvelope("Exec completed (calm-ox, code 0) :: 7.6G /tmp"), false);
+    assert.equal(isContentFreeHostEnvelope("[Subagent Task] Prüfe den Kalender"), false);
+    assert.equal(isContentFreeHostEnvelope("System: [2026-11-24 12:00:01] Ich heiße Eva und wohne in Bern"), false);
+    assert.equal(isContentFreeHostEnvelope("System: [2026-11-24 10:00 GMT+1] Exec failed (abc, signal SIGTERM)\n\nMein Zug fährt um 7:40"), false);
+  });
+
+  it("Hüllen ohne jeden Buchstaben oder Ziffer nach den Bausteinen", () => {
+    assert.equal(isContentFreeHostEnvelope("Talk Mode active. Reply in a concise, spoken tone."), true);
+    assert.equal(isContentFreeHostEnvelope("Exec completed (calm-ox, code 0)"), true);
+    assert.equal(isContentFreeHostEnvelope("Exec failed (brisk-tr, signal SIGTERM)\n\nThe command was terminated, but external side effects may already have completed. Verify the resulting state before retrying."), true);
+    assert.equal(isContentFreeHostEnvelope("[Subagent Task]"), true);
+    assert.equal(isContentFreeHostEnvelope("[Inter-session message]"), true);
+    assert.equal(isContentFreeHostEnvelope("[assistant turn failed before producing content]"), true);
+  });
+
   it("Hüllen mit Inhalt und normaler Text bleiben", () => {
     assert.equal(isContentFreeHostEnvelope("A background task completed. Use this result to reply to the user in your normal assistant voice.\n\nResult: Der Bericht hat 42 Seiten und nennt drei offene Punkte zur Migration."), false);
     assert.equal(isContentFreeHostEnvelope("[Subagent Task] Recherchiere den aktuellen Stand der OKX-API und fasse ihn zusammen"), false);
@@ -147,6 +168,17 @@ describe("Neo-Capture: Herkunft am Turn, Scope bleibt", () => {
     ], params);
     assert.equal(turns.length, 1);
     assert.match(turns[0].content, /drei passende Dokumente/);
+  });
+
+  it("kurzer Sprachbefehl im Talk Mode und kurze Exec-Ausgabe werden Turns", () => {
+    const turns = turnEventsFromMessages([
+      { role: "user", content: "Talk Mode active. Reply in a concise, spoken tone.\n\nErinnere mich um 8 an Eva." },
+      { role: "user", content: "Exec completed (calm-ox, code 0) :: 7.6G /tmp" },
+      { role: "user", content: "Talk Mode active. Reply in a concise, spoken tone." },
+    ], { workspaceKey: "main", agentId: "main", sessionId: "s", sessionKey: "agent:main:main" });
+    assert.equal(turns.length, 2, "nur der Präfix ohne Äußerung fällt weg");
+    assert.match(turns[0].content, /Erinnere mich um 8 an Eva/);
+    assert.match(turns[1].content, /7\.6G/);
   });
 });
 

@@ -1482,7 +1482,7 @@
           "qualityWeighting": {
             "type": "object",
             "additionalProperties": false,
-            "description": "Auto-recall only: final score = score after rerank × a rule-based quality weight (host envelopes and messages, content-free agent self-introductions, placeholder lines, filler-heavy fragments, very short texts without a number/name/URL, assistant claims), then re-sorted. Nothing is filtered or archived; memory_recall and memory_search stay unweighted. Defaults: enabled, floor 0.35.",
+            "description": "Auto-recall only: final score = score after rerank × a rule-based quality weight (host envelopes and messages, placeholder lines, filler-heavy fragments, content-free agent self-introductions (never for user text), very short texts without a number, URL or identifier (plain names do not count), assistant claims), then re-sorted. Nothing is filtered or archived; memory_recall and memory_search stay unweighted. Defaults: enabled, floor 0.35.",
             "properties": {
               "enabled": {
                 "type": "boolean"

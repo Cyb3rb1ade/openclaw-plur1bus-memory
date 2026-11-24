@@ -112,12 +112,17 @@ Regeln (Faktoren werden multipliziert): reine Host-Hülle ohne Nutzlast
 („Continue the OpenClaw runtime event.“, „Exec failed (…)“, eingefangener
 Recall-Block) 0,4; Host-Meldung mit Nutzlast („Exec completed (…) :: …“,
 Cron-Zustellung, `[Subagent Task]`) 0,6; inhaltsleere Selbstvorstellung eines
-Agenten („Ich bin ein …-Agent. Meine Aufgabe ist …“, bis 500 Zeichen) 0,4;
+Agenten („Ich bin ein …-Agent. Meine Aufgabe ist …“, bis 500 Zeichen, nie bei
+Nutzertext) 0,4;
 nur Platzhalterzeilen 0,35, Thinking-Präfix 0,7; Füllwortanteil (ähm, äh, hmm …
 ganz; also, halt, quasi … halb) ab 15 % 0,75, ab 8 % 0,9; unter 30 bzw. 60
-Zeichen ohne Zahl, Name, URL oder Bezeichner 0,8 bzw. 0,9;
+Zeichen ohne Zahl, URL oder Bezeichner 0,8 bzw. 0,9 (gewöhnliche Namen zählen
+nicht als Anker);
 Assistenten-Behauptung (`sourceMessageRole` assistant) 0,9. Herkunft allein
-(Subagent, Cron) wertet nicht ab.
+(Subagent, Cron) wertet nicht ab. Der Talk-Mode-Präfix des Hosts („Talk Mode
+active. Reply in a concise, spoken tone.“) zählt nicht mit; die Äußerung
+dahinter wird wie Nutzertext gewogen und auch bei der Echo-Prüfung ohne Präfix
+verglichen.
 
 ### Neo im Auto-Recall (7.20.10)
 
