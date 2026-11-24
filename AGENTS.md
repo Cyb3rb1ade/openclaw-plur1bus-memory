@@ -2,6 +2,19 @@
 
 This document supplements `README.md` with build steps, conventions, and agent-focused guidance for the PLUR1BUS memory plugin.
 
+## Releases and deploy
+
+- Since 7.21.0 there is one line: `main`. Work happens on branches from
+  `main`; a release is a version bump merged into `main` plus a tag `vX.Y.Z`
+  on that merge commit. Deployments check out that tag; nothing is deployed
+  from a branch or a working tree.
+- The separate release line (`release/*` branches, tags up to `v7.20.10`,
+  old single-file `index.js` layout) is retired. Do not cut releases there and
+  do not write `port(<version>)` commits any more.
+- New runtime files must be listed in `DEPLOY_FILES`
+  (`scripts/lib/deploy-integrity.mjs`); the deploy verifier copies and checks
+  exactly that list.
+
 ## Architecture Overview
 
 PLUR1BUS is an OpenClaw v6 plugin that provides per-agent long-term memory using:
