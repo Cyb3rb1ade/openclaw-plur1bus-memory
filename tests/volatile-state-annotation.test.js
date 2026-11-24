@@ -26,6 +26,20 @@ describe("annotateVolatileStateForPrompt: Erkennung", () => {
     assert.equal(r.stateAsOf, "2026-09-14");
   });
 
+  it("\"zur Zeit des …\" verweist auf ein Ereignis und bekommt kein Label, \"zurzeit\" schon", () => {
+    for (const text of [
+      "1. Angaben zur Zeit des Unfalls, 1.2 Art des Unternehmens",
+      "Name und Anschrift des Arbeitgebers zur Zeit des Unfalls, 1.2 Art des Unternehmens",
+      "Zur Zeit des Releases 7.12.2 war alles grün",
+      "Zur Zeit der Messung lief Sonnet 5.5",
+    ]) {
+      const r = annotate(text);
+      assert.equal(r.annotated, 0, text);
+      assert.equal(r.text, text);
+    }
+    assert.equal(annotate("Der Gateway nutzt zurzeit 2026.11.6.").text, "Der Gateway nutzt zurzeit [Stand 14.09.2026] 2026.11.6.");
+  });
+
   it("englische Marker und Kalenderversion", () => {
     assert.equal(annotate("The gateway currently runs 2026.11.3.").text, "The gateway currently [Stand 14.09.2026] runs 2026.11.3.");
     assert.equal(annotate("latest release is 7.20.9").annotated, 1);
