@@ -5370,6 +5370,8 @@ const plugin = {
       for (const hit of global.hits) neoItems.push(hit.item);
       const top = global.hits[0];
       api.logger?.info?.(`plur1bus-neo: global candidate search scanned=${global.scanned} unique=${global.unique} eligible=${global.eligible} withVector=${global.withVector} hits=${global.hits.length}${top ? ` topSim=${top.similarity.toFixed(3)} topAgeDays=${top.ageDays.toFixed(1)}` : ""} index=${global.index}${global.indexLines ? `/${global.indexLines}` : ""} ms=${global.ms}`);
+      const cache = global.vectorCache;
+      if (cache) api.logger?.debug?.(cache.disabled ? "plur1bus-neo: global vector cache disabled" : `plur1bus-neo: global vector cache hits=${cache.hits} misses=${cache.misses} loaded=${cache.loaded} uncached=${cache.uncached} coldReads=${cache.coldReads} coldBytes=${cache.coldBytes}`);
       return new Set(global.hits.map((hit) => String(hit.item.id)));
     };
     // Der Wartungslauf nimmt sich die Warteschlange am Stueck vor. Die Frist
