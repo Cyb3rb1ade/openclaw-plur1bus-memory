@@ -94,7 +94,9 @@ describe("Kostenbremse reranker.maxDocChars", () => {
   it("normalizeCohereMaxDocChars", () => {
     assert.equal(normalizeCohereMaxDocChars(undefined), 1400);
     assert.equal(normalizeCohereMaxDocChars(0), 0);
-    assert.equal(normalizeCohereMaxDocChars(50), 1400, "unter 100 ungültig");
+    assert.equal(normalizeCohereMaxDocChars(50), 100, "1–99 zählt als 100");
+    assert.equal(normalizeCohereMaxDocChars(0.5), 100);
+    assert.equal(normalizeCohereMaxDocChars(-5), 1400, "negativ ungültig");
     assert.equal(normalizeCohereMaxDocChars(900.7), 900);
     assert.equal(normalizeCohereMaxDocChars("x"), 1400);
     assert.equal(normalizeRerankerConfig({ provider: "cohere", apiKeyEnv: "K", maxDocChars: 900 }).maxDocChars, 900);

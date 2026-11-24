@@ -277,7 +277,7 @@ schickt PLUR1BUS seit 7.20.10 nicht mehr; es gehört nicht zur v2-Schnittstelle.
 
 | Key | Typ | Default | Beschreibung |
 |-----|-----|---------|--------------|
-| `maxDocChars` | `integer` | `1400` | Jedes Dokument wird vor dem Senden auf so viele Zeichen gekürzt, abzüglich dessen, was die Anfrage über 400 Zeichen hinaus belegt, nie unter 300. `0` schaltet die Kürzung ab. |
+| `maxDocChars` | `integer` | `1400` | Jedes Dokument wird vor dem Senden auf so viele Zeichen gekürzt, abzüglich dessen, was die Anfrage über 400 Zeichen hinaus belegt, nie unter 300. `0` schaltet die Kürzung ab, Werte von 1 bis 99 zählen als 100. |
 
 Cohere rechnet eine Suche als bis zu 100 Dokumente ab; ein Dokument, das mit
 der Anfrage über 500 Tokens kommt, wird geteilt und zählt mehrfach. Gekürzt
