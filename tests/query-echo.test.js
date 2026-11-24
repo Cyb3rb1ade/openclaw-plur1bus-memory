@@ -150,6 +150,7 @@ describe("routeNeoRecall excludeQueryEcho", () => {
 
   it("der Auto-Recall-Hook setzt die Option", () => {
     const source = readFileSync(join(__dirname, "..", "index.js"), "utf8");
-    assert.match(source, /routeNeoRecall\(neoItems, event\.prompt, \{[^}]*excludeQueryEcho: true/);
+    assert.match(source, /neoRouteOptions = \{[^}]*excludeQueryEcho: true/);
+    assert.match(source, /routeNeoRecall\(neoItems, event\.prompt, neoRouteOptions\)/);
   });
 });

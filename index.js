@@ -315,6 +315,10 @@ import {
   stripNeoHiddenPlaceholders,
   searchNeoCandidatesGlobal,
   dedupeNeoLanesAgainstTexts,
+  filterNeoItemsAgainstTexts,
+  resolveNeoLaneMinRelevance,
+  NEO_AUTO_RECALL_LANES,
+  NEO_DEFAULT_MAX_REFLECTIONS,
   transitionRecordStatus,
   workspaceKeyFromContext,
   turnIdentityParams,
@@ -5362,6 +5366,17 @@ const plugin = {
       // 7.12.30: Budget fuer die Anfrage-Einbettung im Prompt-Recall; danach
       // laeuft der Neo-Pfad ohne Vektor weiter (Lanes lexikalisch).
       embedTimeoutMs: Math.max(500, Number(neoGlobalRecallCfg.embedTimeoutMs) || 4000),
+    };
+    // 7.20.10: Lane-Regeln des Auto-Recalls. maxReflections begrenzt die
+    // Assistant-Einträge (agent_private_reflections), laneMinRelevance ist ein
+    // Mindestwert für den Textbezug (max(Kosinus, Jaccard)) und standardmäßig aus.
+    const neoPromptRecallCfg = neoCfg.recall || {};
+    const neoMaxReflectionsRaw = Number(neoPromptRecallCfg.maxReflections);
+    const neoPromptRecall = {
+      maxReflections: Number.isFinite(neoMaxReflectionsRaw) && neoMaxReflectionsRaw >= 0
+        ? Math.min(20, Math.floor(neoMaxReflectionsRaw))
+        : NEO_DEFAULT_MAX_REFLECTIONS,
+      laneMinRelevance: resolveNeoLaneMinRelevance(neoPromptRecallCfg.laneMinRelevance),
     };
     const NEO_RECALL_PRELUDE_LOG_MS = 2000;
     const runNeoGlobalSearch = (store, neoItems, queryVector, requester) => {
@@ -12956,6 +12971,10 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         let neoLanes = null;
         let neoGlobalIds = null;
         let neoInjectionKey = null;
+        // 7.20.10: Pool und Optionen des Routings, damit nach der Dedupe gegen
+        // den LanceDB-Block neu geroutet werden kann (keine Lücken).
+        let neoRouteItems = null;
+        let neoRouteOptions = null;
         if (neoEnabled) {
           // 7.12.27: Der Warm-up bei gateway_start erreicht nur die erste
           // Plugin-Instanz; Instanzen, die der Host spaeter je Agent anlegt,
@@ -12986,7 +13005,10 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             recallPrelude.hookRecordMs = Date.now() - hookRecordStartedAt;
             if (injectionKey !== null && event?.prompt && event.prompt.length >= 5) {
               const windowStartedAt = Date.now();
-              const neoItems = [...neoStore.readCandidates(500, requester), ...neoStore.readBehaviorCards(200, requester)];
+              // 7.20.10: keine Behavior Cards mehr im Auto-Recall (Lane
+              // behavior_cards enthielt nur Überlauf; die Karten haben keinen
+              // Scope und sind meist conflict/candidate). memory_search liest sie weiter.
+              const neoItems = [...neoStore.readCandidates(500, requester)];
               recallPrelude.windowMs = Date.now() - windowStartedAt;
               let queryVector = null;
               const embedStartedAt = Date.now();
@@ -13016,8 +13038,22 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               }
               recallPrelude.globalMs = Date.now() - globalStartedAt;
               const lanesStartedAt = Date.now();
-              // 7.20.10: Selbst-Echo der aktuellen Anfrage nicht einspielen.
-              neoLanes = routeNeoRecall(neoItems, event.prompt, { ...requester, queryVector, maxPerLane: 2, minScore: 0.08, excludeQueryEcho: true });
+              // 7.20.10: Lanes nur bei passender Kategorie (assistant_* nur als
+              // Reflexion, höchstens neo.recall.maxReflections), ohne recent_turns
+              // und behavior_cards, ohne Selbst-Echo der aktuellen Anfrage.
+              neoRouteOptions = {
+                ...requester,
+                queryVector,
+                lanes: NEO_AUTO_RECALL_LANES,
+                maxPerLane: 2,
+                minScore: 0.08,
+                excludeQueryEcho: true,
+                strictLanes: true,
+                laneCaps: { agent_private_reflections: neoPromptRecall.maxReflections },
+                laneMinRelevance: neoPromptRecall.laneMinRelevance,
+              };
+              neoRouteItems = neoItems;
+              neoLanes = routeNeoRecall(neoItems, event.prompt, neoRouteOptions);
               neoContext = formatNeoRecallContext(neoLanes, { idempotencyKey: injectionKey || undefined });
               recallPrelude.lanesMs = Date.now() - lanesStartedAt;
             }
@@ -13969,10 +14005,23 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           if (neoLanes && neoGlobalIds?.size > 0 && Array.isArray(ordered) && ordered.length > 0) {
             try {
               const memoryTexts = ordered.map((row) => row?.entry?.text || row?.text || "").filter(Boolean);
-              const deduped = dedupeNeoLanesAgainstTexts(neoLanes, memoryTexts, { onlyIds: neoGlobalIds, threshold: neoGlobalRecall.dedupeThreshold });
+              const dedupeOptions = { onlyIds: neoGlobalIds, threshold: neoGlobalRecall.dedupeThreshold };
+              const deduped = dedupeNeoLanesAgainstTexts(neoLanes, memoryTexts, dedupeOptions);
               if (deduped.dropped > 0) {
-                neoContext = formatNeoRecallContext(deduped.lanes, { idempotencyKey: neoInjectionKey || undefined });
-                api.logger?.info?.(`plur1bus-neo: global candidate search dropped ${deduped.dropped} hit(s) already injected as memories`);
+                let lanesForPrompt = deduped.lanes;
+                let rerouteNote = "";
+                // 7.20.10: Bis 7.20.9 blieben die Plätze der verworfenen Treffer
+                // leer. Jetzt fliegen alle globalen Treffer mit diesem Text aus
+                // dem Pool, und das Routing füllt die Lanes neu auf.
+                if (Array.isArray(neoRouteItems) && neoRouteOptions) {
+                  const rerouteStartedAt = Date.now();
+                  const filtered = filterNeoItemsAgainstTexts(neoRouteItems, memoryTexts, dedupeOptions);
+                  lanesForPrompt = routeNeoRecall(filtered.items, event.prompt, neoRouteOptions);
+                  const routedCount = Object.values(lanesForPrompt).reduce((sum, rows) => sum + (rows?.length || 0), 0);
+                  rerouteNote = ` rerouted=${routedCount} ms=${Date.now() - rerouteStartedAt}`;
+                }
+                neoContext = formatNeoRecallContext(lanesForPrompt, { idempotencyKey: neoInjectionKey || undefined });
+                api.logger?.info?.(`plur1bus-neo: global candidate search dropped ${deduped.dropped} hit(s) already injected as memories${rerouteNote}`);
               }
             } catch (dedupeErr) {
               api.logger?.debug?.(`plur1bus-neo: global dedupe skipped: ${String(dedupeErr)}`);

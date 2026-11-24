@@ -702,6 +702,26 @@
                     "minimum": 500
                   }
                 }
+              },
+              "maxReflections": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 20,
+                "description": "Auto-recall only: at most this many assistant-authored Neo records (assistant_claim/plan/suggestion) in the agent_private_reflections lane. 0 turns them off. Default 4."
+              },
+              "laneMinRelevance": {
+                "type": [
+                  "number",
+                  "object"
+                ],
+                "minimum": 0,
+                "maximum": 1,
+                "additionalProperties": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "description": "Auto-recall only: minimum text relevance max(cosine, word Jaccard) for a Neo record to enter a lane. A number applies to every lane; an object maps lane names (and \"default\" for the rest) to a value. Unset or 0 = off (default). Without a query vector (embedding timeout) only the word Jaccard counts, so a vector-calibrated value filters much harder then."
               }
             }
           }
