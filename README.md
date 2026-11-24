@@ -35,6 +35,23 @@ separate login); reach it through however you already reach your Gateway
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
 
+### New in v7.20.8 — the time filter only answers "when did we talk"
+
+The recall used to drop every candidate whose `createdAt` fell outside a time
+phrase in the question. `createdAt` is when something was said, so that only
+fits questions about the conversation itself ("what did I tell you last
+week", "was haben wir gestern besprochen", "Weißt du noch, was wir gestern
+besprochen haben?"); the time phrase has to belong to the speech act, not to
+what was said ("I told you he's coming on Thursday" does not filter). For
+"where was Calvin in the last week of October" or "which shoes did I clean
+last month" it threw away the evidence and kept fragments of the current day.
+Now only such conversation-time questions filter (window widened by 2 h, since
+auto-capture writes after the turn); event time, casual mentions, calendar dates and
+"after the X" anchors leave the recall unchanged. The parser also stops
+reading UUID fragments, line numbers and names like "Cyberpunk 2077" as years,
+and "last week of October 2026" is October. Without the filter the bench lost
+nothing and gained evidence for three LOCOMO and two LongMemEval questions.
+
 ### New in v7.20.7 — "yesterday" means the memory's yesterday
 
 A memory that says "yesterday we went hiking" was written on its own date.
@@ -1052,7 +1069,7 @@ The index is written to `.plur1bus/code-index.json` and contains normalized file
 
 - **ACL / Access Control** — Agent- and workspace-scoped memory access. `searchByTopic`, `getCard`, and recall pipeline filter by ACL. Unauthorized access is logged.
 - **Feedback loop (`/mf`)** — Thumbs-up/down/neutral feedback on any memory result. Persisted per workspace.
-- **Temporal reasoning** — Queries like "last month", "3 days ago", "Q2 2026" parsed to concrete date ranges before boost/rerank.
+- **Temporal reasoning** — Queries like "last month" or "3 days ago" parsed to concrete date ranges before boost/rerank. Since 7.20.8 only questions about the conversation time ("what did I tell you last week") filter by them.
 - **Collaborative memory (`/share`)** — Copy any card into a workspace-shared pool with ACL protection.
 - **Query refinement** — Automatic query rewrite on poor first results, merged and deduplicated.
 
