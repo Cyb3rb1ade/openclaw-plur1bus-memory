@@ -256,7 +256,10 @@ describe("Engine", () => {
     const pick = (name) => (...args) => (mode.hang ? hanging[name](...args) : flat[name](...args));
     const switching = { embed: pick("embed"), embedQuery: pick("embedQuery"), embedPassage: pick("embedPassage"), embedBatch: async (texts) => flat.embedBatch(texts), shutdown: async () => {} };
     const host = createStubHost({ stateDir: makeTempDir("ec-state-") });
-    const cfg = { ...config(makeTempDir("ec-db-")), runtime: { recallTimeoutMs: 400 } };
+    // 7.21.1: the keyword fallback would answer the hanging embedder before
+    // the scheduler's timeout; this test pins the timeout-from-cache path.
+    const baseCfg = config(makeTempDir("ec-db-"));
+    const cfg = { ...baseCfg, runtime: { recallTimeoutMs: 400 }, recall: { ...(baseCfg.recall || {}), keywordFallback: { enabled: false } } };
     const engine = createEngine(host, cfg, { internals: { embeddings: switching } });
     const query = "which release notes are still open";
     // Precondition: one clean recall fills the cache. The first recall of a
@@ -284,11 +287,19 @@ describe("Engine", () => {
     failing.embedQuery = async () => { throw new Error("vector store unavailable"); };
     failing.embed = failing.embedQuery;
     const host = createStubHost({ stateDir: makeTempDir("ec-state-"), workspaceDir: async () => makeTempDir("ec-ws-") });
-    const engine = createEngine(host, config(makeTempDir("ec-db-")), { internals: { embeddings: failing } });
+    // 7.21.1: with the keyword fallback (default) a failing embedder yields
+    // the fallback, still reported as degraded; without it, an error.
+    const baseCfg = config(makeTempDir("ec-db-"));
+    const engine = createEngine(host, { ...baseCfg, recall: { ...(baseCfg.recall || {}), keywordFallback: { enabled: false } } }, { internals: { embeddings: failing } });
     const result = await engine.recall({ query: "what did we decide about the roadmap", principal, agent, signal: AbortSignal.timeout(8_000) });
     assert.equal(result.degraded?.reason, "error");
     assert.equal(result.degraded?.capability, "recall");
     await engine.close({ budgetMs: 5_000 });
+    const withFallback = createEngine(createStubHost({ stateDir: makeTempDir("ec-state-"), workspaceDir: async () => makeTempDir("ec-ws-") }), config(makeTempDir("ec-db-")), { internals: { embeddings: failing } });
+    const fallbackResult = await withFallback.recall({ query: "what did we decide about the roadmap", principal, agent, signal: AbortSignal.timeout(8_000) });
+    assert.equal(fallbackResult.degraded?.reason, "embedding-unavailable");
+    assert.equal(fallbackResult.degraded?.capability, "recall");
+    await withFallback.close({ budgetMs: 5_000 });
   });
 
   it("an aborted recall does not mark due reminders presented (final review I7)", async () => {

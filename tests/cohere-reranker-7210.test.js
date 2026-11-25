@@ -42,13 +42,13 @@ beforeEach(() => { calls = []; });
 afterEach(() => { globalThis.fetch = realFetch; });
 
 describe("CohereRerankerProvider: Anfrage", () => {
-  it("Default-Modell rerank-v3.5, v2-Endpunkt, kein return_documents", async () => {
+  it("Default-Modell rerank-v5.0-fast (seit 7.21.1), v2-Endpunkt, kein return_documents", async () => {
     globalThis.fetch = fakeFetch();
     await provider().rerank("frage", ["a", "b"], 2);
     assert.equal(calls.length, 1);
     assert.equal(calls[0].url, "https://api.cohere.com/v2/rerank");
     assert.deepEqual(Object.keys(calls[0].body).sort(), ["documents", "model", "query", "top_n"]);
-    assert.equal(calls[0].body.model, "rerank-v3.5");
+    assert.equal(calls[0].body.model, "rerank-v5.0-fast");
     assert.equal(calls[0].body.top_n, 2);
     assert.equal(calls[0].headers.Authorization, "Bearer test-key");
   });

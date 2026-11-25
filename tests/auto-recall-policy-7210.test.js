@@ -90,6 +90,8 @@ const POLICY = {
   sessionKey: SESSION,
   sessionContextSince: NOW - 2 * HOUR,
   qualityWeighting: { enabled: true },
+  // 7.21.1: fixed reference time for the assistant aging rule.
+  now: NOW,
 };
 
 describe("runRecallPipeline ohne autoRecallPolicy", () => {
@@ -136,7 +138,13 @@ describe("runRecallPipeline mit autoRecallPolicy", () => {
   it("die Namensraum-Zusammenführung sortiert nach weightedScore", async () => {
     const { memories } = await runRecallPipeline(baseParams({ autoRecallPolicy: POLICY, deferFinalCap: true, candidateHardLimit: 100 }));
     const merged = mergeNamespaceRecallResults([{ namespace: "default", canonical: [], memories }], { maxOut: 3, dedupEnabled: false });
-    assert.deepEqual(merged.memories.map((m) => m.entry.id), ["fact", "plain", "intro"]);
+    // 7.21.1: "intro" is a 30-day-old assistant self-introduction; the
+    // assistant aging rule (qualityWeighting.staleAssistant) puts it behind
+    // the user's host envelope.
+    assert.deepEqual(merged.memories.map((m) => m.entry.id), ["fact", "plain", "envelope"]);
+    const without = await runRecallPipeline(baseParams({ autoRecallPolicy: { ...POLICY, qualityWeighting: { enabled: true, staleAssistant: false } }, deferFinalCap: true, candidateHardLimit: 100 }));
+    const mergedWithout = mergeNamespaceRecallResults([{ namespace: "default", canonical: [], memories: without.memories }], { maxOut: 3, dedupEnabled: false });
+    assert.deepEqual(mergedWithout.memories.map((m) => m.entry.id), ["fact", "plain", "intro"], "7.20.10 order with staleAssistant off");
   });
 
   it("Gewichtung abgeschaltet: nur die Echos fallen weg, Reihenfolge des Rerankers", async () => {

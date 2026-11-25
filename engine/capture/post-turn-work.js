@@ -36,6 +36,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { throwIfAborted } from "../../lib/abort.js";
 import { lightDream, writeLightDreamToVault } from "../../lib/dreaming/light-dream.js";
+import { lightDreamIdentity } from "./light-dream-identity.js";
 import { recordLightDreamRun } from "../../lib/dreaming/dreaming-status-provider.js";
 import { filterAlreadyEpisoded, mergeEpisodedTurnIds } from "../../lib/episode-watermark.js";
 import { extractEpisodesWithState, writeEpisodeToVault } from "../../lib/episodes.js";
@@ -62,6 +63,8 @@ export function postTurnContext(ctx = {}) {
     messageProvider: pick(ctx?.messageProvider),
     accountId: pick(ctx?.accountId ?? ctx?.channelContext?.accountId),
     chatId: pick(ctx?.chatId),
+    // 7.21.1: the user principal the recall proved for this turn (or "").
+    provedUserPrincipal: pick(ctx?.provedUserPrincipal),
   };
 }
 
@@ -99,25 +102,15 @@ export function createPostTurnWorkers(deps) {
         } catch (_) { /* try next */ }
       }
     }
-    let lightRequestContext = null;
-    try {
-      lightRequestContext = resolveMemoryRequestContext({
-        agentId,
-        workspaceDir: ctx?.workspaceDir,
-        workspaceKey: ctx?.workspaceKey,
-        userId: ctx?.userId ?? ctx?.senderId,
-        channel: ctx?.channel ?? ctx?.messageProvider,
-        accountId: ctx?.accountId ?? ctx?.channelContext?.accountId,
-        chatId: ctx?.chatId,
-      }, { workspaceAliases: memoryWorkspaceAliases });
-    } catch (_) {
-      lightRequestContext = null;
-    }
-    const lightAclBindings = lightRequestContext
-      ? (lightRequestContext.userPrincipal
-        ? { scope: "user", agentId: lightRequestContext.agentId, workspaceIdentity: "", ownerUserId: lightRequestContext.userPrincipal }
-        : { scope: "workspace", agentId: lightRequestContext.agentId, workspaceIdentity: lightRequestContext.workspaceIdentity, ownerUserId: "" })
-      : null;
+    const { requestContext: lightRequestContext, aclBindings: lightAclBindings } = lightDreamIdentity(null, () => resolveMemoryRequestContext({
+      agentId,
+      workspaceDir: ctx?.workspaceDir,
+      workspaceKey: ctx?.workspaceKey,
+      userId: ctx?.userId ?? ctx?.senderId,
+      channel: ctx?.channel ?? ctx?.messageProvider,
+      accountId: ctx?.accountId ?? ctx?.channelContext?.accountId,
+      chatId: ctx?.chatId,
+    }, { workspaceAliases: memoryWorkspaceAliases }), { provedUserPrincipal: ctx?.provedUserPrincipal });
     return lightDream({
       turns: normalizedTurns,
       neoStore,

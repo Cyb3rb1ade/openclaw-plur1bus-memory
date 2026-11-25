@@ -36,11 +36,18 @@ import { describeError } from "../../lib/log-redact.js";
  *   resolveSessionEchoCutoff); its records still in context are left out.
  * @param {{maxReflections?: number, laneMinRelevance?: object|number|null}} [args.neoPromptRecall]
  *   7.20.10: neo.recall.maxReflections / laneMinRelevance.
+ * @param {number|null} [args.deadlineAt] 7.21.1: absolute end of the
+ *   prelude budget (epoch ms). The embedding wait is cut to what is left,
+ *   and once the deadline has passed (a slow embedding, or a main-thread
+ *   stall the timer could not interrupt) the global search and the lane
+ *   routing are skipped: the prelude returns empty lanes and sets
+ *   `prelude.budgetExceeded`, so the store recall keeps its share of the
+ *   recall budget. Without a deadline nothing changes.
  * @returns {Promise<{neoItems: object[], queryVector: number[]|null, neoGlobalIds: Set<string>|null, neoLanes: object, routeOptions: object}>}
  *   `routeOptions` are the lane options used, so the caller can route the
  *   pool again after its dedupe against the LanceDB block.
  */
-export async function readNeoPrelude({ neoStore, requester, prompt, embeddings, embedTimeoutMs, timeoutSymbol, runNeoGlobalSearch, logger, prelude, embeddingQuery, sessionEcho, neoPromptRecall }) {
+export async function readNeoPrelude({ neoStore, requester, prompt, embeddings, embedTimeoutMs, timeoutSymbol, runNeoGlobalSearch, logger, prelude, embeddingQuery, sessionEcho, neoPromptRecall, deadlineAt = null }) {
   const windowStartedAt = Date.now();
   // 7.20.10: keine Behavior Cards mehr im Auto-Recall (Lane
   // behavior_cards enthielt nur Überlauf; die Karten haben keinen
@@ -49,19 +56,25 @@ export async function readNeoPrelude({ neoStore, requester, prompt, embeddings, 
   prelude.windowMs = Date.now() - windowStartedAt;
   let queryVector = null;
   const embedStartedAt = Date.now();
+  // 7.21.1: Hat die Frist die Wartezeit gekürzt und läuft das Embedding in
+  // diese Frist, ist das Budget erschöpft — auch wenn der Timer eine
+  // Millisekunde vor der Frist feuert.
+  let cutByDeadline = false;
   try {
     // 7.20.10: derselbe Einbettungstext wie im LanceDB-Recall
     // (embeddingQuery), damit der Embedding-Cache trifft.
     const neoEmbedQuery = typeof embeddingQuery === "string" && embeddingQuery.trim() ? embeddingQuery : prompt;
     const embedPromise = Promise.resolve(typeof embeddings.embedQuery === "function" ? embeddings.embedQuery(neoEmbedQuery, { agentId: requester.requesterAgentId }) : embeddings.embed(neoEmbedQuery, { agentId: requester.requesterAgentId }));
     let embedTimer = null;
-    const embedTimeout = new Promise((resolve) => { embedTimer = setTimeout(() => resolve(timeoutSymbol), embedTimeoutMs); });
+    const waitMs = Number.isFinite(deadlineAt) ? Math.max(0, Math.min(embedTimeoutMs, deadlineAt - Date.now())) : embedTimeoutMs;
+    cutByDeadline = Number.isFinite(deadlineAt) && waitMs < embedTimeoutMs;
+    const embedTimeout = new Promise((resolve) => { embedTimer = setTimeout(() => resolve(timeoutSymbol), waitMs); });
     try {
       const outcome = await Promise.race([embedPromise, embedTimeout]);
       if (outcome === timeoutSymbol) {
         prelude.embedTimedOut = true;
         embedPromise.catch(() => {});
-        logger.warn(`plur1bus-neo: prompt query embedding exceeded ${embedTimeoutMs} ms, continuing without vector`);
+        logger.warn(`plur1bus-neo: prompt query embedding exceeded ${waitMs} ms, continuing without vector`);
       } else {
         queryVector = outcome;
       }
@@ -70,6 +83,14 @@ export async function readNeoPrelude({ neoStore, requester, prompt, embeddings, 
     }
   } catch (error) { logger.debug(`plur1bus-neo: prompt query embedding unavailable: ${describeError(error)}`); }
   prelude.embedMs = Date.now() - embedStartedAt;
+  // 7.21.1: Frist vorbei (langsames Embedding oder ein Stall des
+  // Main-Threads, den kein Timer unterbrechen kann): keine globale Suche und
+  // kein Routing mehr, der Store-Recall bekommt den Rest des Budgets.
+  if (Number.isFinite(deadlineAt) && (Date.now() >= deadlineAt || (cutByDeadline && prelude.embedTimedOut))) {
+    prelude.budgetExceeded = true;
+    logger.warn(`plur1bus-neo: recall prelude budget exhausted after ${Date.now() - (prelude.startedAt ?? embedStartedAt)} ms, skipping global search and lanes`);
+    return { neoItems, queryVector, neoGlobalIds: null, neoLanes: {}, routeOptions: null };
+  }
   let neoGlobalIds = null;
   const globalStartedAt = Date.now();
   try {

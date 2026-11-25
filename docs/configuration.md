@@ -112,6 +112,9 @@ bisher. Gespeichert, archiviert oder gelöscht wird nichts.
 |-----|-----|---------|--------------|
 | `qualityWeighting.enabled` | `boolean` | `true` | Gewicht anwenden. `false` lässt nur die beiden Echo-Regeln aktiv. |
 | `qualityWeighting.floor` | `number` (0–1) | `0.35` | Untergrenze des Gewichts. |
+| `qualityWeighting.staleAssistant` | `boolean` | `true` | 7.21.1: alte Assistenten-Antworten und Floskeln zusätzlich abwerten (siehe unten). |
+| `mergeTurnParts` | `boolean` | `true` | 7.21.1: Einträge desselben Zugs und Sprechers zu einem zusammenlegen; Neo-Einträge, deren Wörter schon in einer gerenderten Erinnerung stehen, fallen aus dem Neo-Block. |
+| `keywordFallback.enabled` | `boolean` | `true` | 7.21.1: Schlüsselwort-/Jüngste-Einträge-Suche, wenn der Anfragevektor nicht rechtzeitig kommt (siehe „Recall-Budget und Rückfall“). |
 
 Regeln (Faktoren werden multipliziert): reine Host-Hülle ohne Nutzlast
 („Continue the OpenClaw runtime event.“, „Exec failed (…)“, eingefangener
@@ -129,6 +132,51 @@ active. Reply in a concise, spoken tone.“) zählt nicht mit; die Äußerung
 dahinter wird wie Nutzertext gewogen und auch bei der Echo-Prüfung, beim
 Einbetten (Erinnerung und Anfrage) und im Wort-Score von Neo ohne Präfix
 verglichen.
+
+Seit 7.21.1 (`qualityWeighting.staleAssistant`, Standard an): Assistenten-
+Antworten ohne Inhaltsanker oder unter 200 Zeichen sinken mit dem Alter
+(ab 14 Tagen × 0,8, ab 60 × 0,65, ab 180 × 0,55). Antworten mit Zahl, URL,
+Bezeichner oder Zitat und mindestens 200 Zeichen gelten als informativ und
+sinken erst nach 60 Tagen, dann × 0,85. Floskeln ohne Inhalt („Danke fürs
+Teilen!“, „Gute Nachrichten: …“, „Game-Changer“, bis 400 Zeichen) × 0,6.
+Nutzeraussagen altern nie. Mit `mergeTurnParts` werden Einträge mit gleicher
+`sourceTurnId` und gleicher Sprecherrolle für den Prompt zu einem Eintrag
+zusammengelegt (Teile, die ein anderer Teil enthält, entfallen); Teilstücke
+einer Chunk-Gruppe und Träume nicht. Gespeichert wird nichts davon.
+
+### Recall-Budget und Rückfall (7.21.1)
+
+Der Auto-Recall hat ein festes Budget (`runtime.recallTimeoutMs`). Damit es
+nicht vom Neo-Vorlauf aufgebraucht wird:
+
+- Der Neo-Vorlauf darf ab Beginn des Recalls höchstens
+  `min(neo.recall.global.embedTimeoutMs, recallTimeoutMs / 4)` brauchen (bei
+  12 000 ms also 3 000 ms). Danach überspringt er globale Suche und Lanes; die
+  Logzeile `recall prelude` zeigt `budget=…ms(exceeded)`.
+- Der Store-Recall wartet auf den Anfragevektor höchstens bis ein Viertel des
+  Budgets übrig ist (mindestens 1,5 s bzw. das halbe Budget, höchstens 3 s
+  Reserve); hat der Vorlauf das Embedding
+  schon als langsam gesehen, nur noch ein Achtel des Budgets (200 ms–1,5 s).
+- Kommt der Vektor nicht oder scheitert das Embedding, sucht der Recall nach
+  Wörtern der Nachricht (bis zu sechs, ohne Füllwörter) und nach den
+  Einträgen der letzten 7 Tage, mit denselben Toren wie der Vektorweg
+  (Lebenszyklus, ACL, Echo, Qualitätsgewicht). Der Block trägt
+  `retrieval="keyword-recent-fallback"` und einen Hinweis an das Modell; das
+  Ergebnis meldet `degraded.reason = "embedding-unavailable"`.
+  `recall.keywordFallback.enabled: false` stellt den alten Weg wieder her.
+- Ein Stall des Main-Threads (Logzeile `main-thread stall`) unterbricht auch
+  Timer; ist er länger als das Budget, bleibt der Recall leer.
+
+`runtime.recallPrewarm` (Standard an): 20 s nach `gateway_start` läuft je
+Chat-Agent ein lesender Warm-Recall (Embedding-Verbindung, Neo-Vektor-Cache,
+LanceDB-Handles), ohne Reranker und ohne Schreiben.
+
+| Key | Typ | Default | Beschreibung |
+|-----|-----|---------|--------------|
+| `runtime.recallPrewarm.enabled` | `boolean` | `true` | Warm-Recall nach dem Start. |
+| `runtime.recallPrewarm.delayMs` | `number` (0–600 000) | `20000` | Wartezeit nach `gateway_start`. |
+| `runtime.recallPrewarm.agents` | `string[]` (≤ 8) | Schlüssel von `chatModels`, sonst die Agenten aus `obsidianBridge.workspaces` | Welche Agenten. |
+| `conversationReactivationRecall.timeoutMs` | `number` | `250` | Seit 7.21.1 250 statt 50 ms (begrenzt auf 10–2000 ms). |
 
 ### Neo im Auto-Recall (7.20.10)
 
@@ -288,8 +336,10 @@ setzt ihn als `model`/`local.model` und BGE als kontrollierten Fallback:
 
 ### Cohere-Reranker: Modell und Kostenbremse (7.20.10)
 
-`reranker.model` wählt das Cohere-Modell; Default bleibt `rerank-v3.5`.
-Rerank 4 und 5 (`rerank-v5.0-fast`, `rerank-v5.0-pro`, 32k Kontext) laufen über
+`reranker.model` wählt das Cohere-Modell; seit 7.21.1 ist der Default
+`rerank-v5.0-fast` (vorher `rerank-v3.5`). Wer v3.5 behalten will, setzt
+`reranker.model: "rerank-v3.5"`. Rerank 4 und 5 (`rerank-v5.0-fast`,
+`rerank-v5.0-pro`, 32k Kontext) laufen über
 denselben v2-Aufruf (`model`, `query`, `documents`, `top_n`). `return_documents`
 schickt PLUR1BUS seit 7.20.10 nicht mehr; es gehört nicht zur v2-Schnittstelle.
 
@@ -297,8 +347,11 @@ schickt PLUR1BUS seit 7.20.10 nicht mehr; es gehört nicht zur v2-Schnittstelle.
 |-----|-----|---------|--------------|
 | `maxDocChars` | `integer` | `1400` | Jedes Dokument wird vor dem Senden auf so viele Zeichen gekürzt, abzüglich dessen, was die Anfrage über 400 Zeichen hinaus belegt, nie unter 300. `0` schaltet die Kürzung ab, Werte von 1 bis 99 zählen als 100. |
 
-Cohere rechnet eine Suche als bis zu 100 Dokumente ab; ein Dokument, das mit
-der Anfrage über 500 Tokens kommt, wird geteilt und zählt mehrfach. Gekürzt
+Abrechnung: `rerank-v3.5` zählt Suchen (bis zu 100 Dokumente je Suche; ein
+Dokument, das mit der Anfrage über 500 Tokens kommt, wird geteilt und zählt
+mehrfach). Rerank 5 (`rerank-v5.0-fast`, Standard seit 7.21.1) rechnet nach
+Eingabe-Tokens ab (`meta.billed_units.input_tokens`); hier begrenzt
+`maxDocChars` die Kosten direkt. Gekürzt
 wird nur der Text an Cohere; Recall-Ausgabe und lokaler Rückfall-Reranker
 sehen den vollen Text. Die Anfrage selbst wird nicht gekürzt: Ist sie allein
 länger als etwa 1800 Zeichen, liegt jedes Paar trotzdem über 500 Tokens.
@@ -596,7 +649,7 @@ Vorgaben, die alle überschreibbar sind; `remote` hat keine Vorgaben.
 |---|---|
 | `baseUrl` | Basis-URL; Ziel ist `{baseUrl}/rerank`, außer die URL endet schon auf `/rerank`. Vorgaben: `https://api.cohere.com/v2`, `https://api.jina.ai/v1`, `https://api.voyageai.com/v1`; bei `remote` Pflicht. Keine Zugangsdaten in der URL. |
 | `protocol` | `cohere`/`jina` (`{model, query, documents, top_n}` → `results`; Cohere, Jina, vLLM, Infinity, LocalAI), `voyage` (`top_k` → `data`), `tei` (`{query, texts}` → `[{index, score}]`). Vorgabe aus dem Preset, bei `remote` `cohere`. |
-| `model` | Vorgaben `rerank-v3.5`, `jina-reranker-v2-base-multilingual`, `rerank-2.5`; bei `remote` ohne Vorgabe (Server-Standard). |
+| `model` | Vorgaben `rerank-v5.0-fast` (seit 7.21.1, vorher `rerank-v3.5`), `jina-reranker-v2-base-multilingual`, `rerank-2.5`; bei `remote` ohne Vorgabe (Server-Standard). |
 | `apiKeyRef` / `apiKeyEnv` / `apiKey` | Schlüsselquelle, Reihenfolge wie genannt, danach `COHERE_API_KEY`/`JINA_API_KEY`/`VOYAGE_API_KEY`. `remote` darf ohne Schlüssel laufen. |
 | `maxDocuments` / `maxRequestBytes` / `maxResponseBytes` | Grenzen pro Aufruf, Vorgaben 1000 / 4 MiB / 1 MiB. |
 

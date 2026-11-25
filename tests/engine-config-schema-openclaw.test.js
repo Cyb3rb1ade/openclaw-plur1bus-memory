@@ -237,10 +237,17 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
       [afterSchema.properties.reranker, "maxDocChars"],
       [afterSchema.properties.recall, "qualityWeighting"],
       [afterSchema.properties.recall, "volatileStateAnnotation"],
+      // 7.21.1: keyword/recent fallback and the start-up warm recall.
+      [afterSchema.properties.recall, "keywordFallback"],
+      [afterSchema.properties.runtime, "recallPrewarm"],
+      [afterSchema.properties.recall, "mergeTurnParts"],
     ]) {
       assert.ok(Object.hasOwn(node.properties, key), key);
       delete node.properties[key];
     }
+    // 7.21.1: the CRR timeout default moved from 50 to 250 ms.
+    assert.equal(afterSchema.properties.conversationReactivationRecall.properties.timeoutMs.default, 250);
+    afterSchema.properties.conversationReactivationRecall.properties.timeoutMs.default = 50;
 
     assert.deepStrictEqual(stripAnnotations(afterSchema), stripAnnotations(before.configSchema));
     assert.deepStrictEqual(Object.keys(afterSchema.properties), Object.keys(before.configSchema.properties));

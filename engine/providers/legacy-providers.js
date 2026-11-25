@@ -8,6 +8,7 @@
 import { hostFetch, sdkFetchOptions } from "../../lib/host-network.js";
 import { createEmbeddingCache } from "../../lib/embedding-cache.js";
 import { getOpenAI } from "../store/lancedb-loader.js";
+import { DEFAULT_COHERE_RERANK_MODEL } from "../../lib/providers/dimensions.js";
 import { createProviderHttpError, sanitizeProviderSdkError } from "../../lib/provider-error.js";
 
 // ============================================================================
@@ -15,7 +16,7 @@ import { createProviderHttpError, sanitizeProviderSdkError } from "../../lib/pro
 // ============================================================================
 
 class Reranker {
-  constructor(apiKey, model = "rerank-v3.5") {
+  constructor(apiKey, model = DEFAULT_COHERE_RERANK_MODEL) {
     this.apiKey = apiKey;
     this.model = model;
   }

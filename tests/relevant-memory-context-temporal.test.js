@@ -36,7 +36,8 @@ describe("formatRelevantMemoriesContext — temporal provenance", () => {
       baseMemory({ id: "m1", display: "Cronjob may produce duplicates", createdAt: "2026-06-16T12:00:00.000Z" }),
     ], { now: NOW_MS });
     assert.ok(out.includes('operational="true"'), `expected operational attribute in: ${out}`);
-    assert.ok(out.includes('operational-risk="high"'), `expected operational-risk attribute in: ${out}`);
+    // 7.21.1: "cron" alone is no longer a high-risk keyword (no change verb).
+    assert.ok(out.includes('operational-risk="medium"'), `expected operational-risk attribute in: ${out}`);
     assert.ok(out.includes('requires-live-verification="true"'), `expected requires-live-verification attribute in: ${out}`);
     assert.ok(out.includes('freshness="stale"'), `expected stale freshness in: ${out}`);
   });

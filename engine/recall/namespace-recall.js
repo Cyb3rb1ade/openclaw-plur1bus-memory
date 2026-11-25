@@ -258,6 +258,10 @@ async function runMergedNamespaceRecall(
     if (baseParams.adaptiveBudget?.enabled !== false) {
       merged = applyMergedRecallBudget(merged, baseParams.budget, { canonicalOutsideBudget: baseParams.canonicalOutsideLimit === true });
     }
+    // 7.21.1: Lief ein Namensraum ohne Anfragevektor (Schlüsselwort-/
+    // Jüngste-Einträge-Rückfall), trägt das Ergebnis die Kennzeichnung.
+    const fallbackResult = namespaceResults.find((result) => result.fallback);
+    if (fallbackResult) merged.fallback = fallbackResult.fallback;
     emitRetrievalLedger({
       retrievalLogger: baseParams.retrievalLogger,
       logger: baseParams.logger,

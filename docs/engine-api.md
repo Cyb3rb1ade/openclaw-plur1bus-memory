@@ -218,7 +218,7 @@ top_n}` → `results`; `voyage`: `top_k` → `data`; `tei`: `{query, texts}` →
 `[{index, score}]`), `model`, `apiKeyRef | apiKeyEnv | apiKey`,
 `maxDocuments` (1000), `maxRequestBytes` (4 MiB), `maxResponseBytes` (1 MiB).
 Presets supply default `baseUrl`/`protocol`/`model`/key variable (Cohere
-`https://api.cohere.com/v2`, `rerank-v3.5`, `COHERE_API_KEY`; Jina
+`https://api.cohere.com/v2`, `rerank-v5.0-fast` (bis 7.21.0 `rerank-v3.5`), `COHERE_API_KEY`; Jina
 `https://api.jina.ai/v1`, `jina-reranker-v2-base-multilingual`,
 `JINA_API_KEY`; Voyage `https://api.voyageai.com/v1`, `rerank-2.5`,
 `VOYAGE_API_KEY`); `remote` has none (baseUrl required, key optional for a

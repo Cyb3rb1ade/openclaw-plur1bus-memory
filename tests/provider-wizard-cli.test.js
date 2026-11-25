@@ -127,7 +127,7 @@ describe("provider wizard CLI input validation", () => {
 
     assert.strictEqual(result.code, 0, result.stderr);
     assert.match(result.stderr, /\[1\] Local: woxpas-ai\/bge-reranker-v2-m3-onnx/);
-    assert.match(result.stderr, /\[2\] Cohere rerank-v3\.5/);
+    assert.match(result.stderr, /\[2\] Cohere rerank-v5\.0-fast/);
     assert.deepStrictEqual(parseWizardResult(result.stdout)?.reranker, {
       provider: "local-transformers",
       model: "woxpas-ai/bge-reranker-v2-m3-onnx",
@@ -145,7 +145,7 @@ describe("provider wizard CLI input validation", () => {
     assert.deepStrictEqual(parseWizardResult(result.stdout)?.reranker, {
       provider: "cohere",
       apiKeyEnv: "COHERE_API_KEY",
-      model: "rerank-v3.5",
+      model: "rerank-v5.0-fast",
       candidates: 20,
       timeoutMs: 5000,
       fallbackOnError: true,

@@ -999,6 +999,28 @@
               "default": 60000
             }
           }
+        },
+        "recallPrewarm": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "7.21.1: one read-only warm recall per chat agent shortly after gateway_start (embedding connection, Neo vector cache, LanceDB handles), reranker off, nothing written. Defaults: enabled, delayMs 20000, agents = keys of chatModels, else the agents of obsidianBridge.workspaces.",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "delayMs": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 600000
+            },
+            "agents": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 8
+            }
+          }
         }
       },
       "readAt": "construction",
@@ -1104,7 +1126,7 @@
         },
         "model": {
           "type": "string",
-          "description": "Reranker model. Cohere default rerank-v3.5; Rerank 4/5 models (e.g. rerank-v5.0-fast, rerank-v5.0-pro) use the same v2 request."
+          "description": "Reranker model. Cohere default rerank-v5.0-fast since 7.21.1 (billed per token); set \"rerank-v3.5\" to keep the per-search model. Other Rerank 4/5 models (e.g. rerank-v5.0-pro) use the same v2 request."
         },
         "maxDocChars": {
           "type": "integer",
@@ -1640,6 +1662,10 @@
               "type": "number",
               "minimum": 0,
               "maximum": 1
+            },
+            "staleAssistant": {
+              "type": "boolean",
+              "description": "7.21.1: also weight down old assistant replies (from 14 days, stronger from 60 and 180 days; replies with numbers, identifiers or quotes only after 60 days and mildly) and content-free assistant pleasantries. Default: enabled."
             }
           }
         },
@@ -1777,6 +1803,20 @@
               "default": false
             }
           }
+        },
+        "keywordFallback": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Automatic recall only (7.21.1): when the query embedding does not arrive in time (cold start, provider outage) or fails, the recall searches by keyword and recency instead of returning nothing. The block is marked retrieval=\"keyword-recent-fallback\". Default: enabled.",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          }
+        },
+        "mergeTurnParts": {
+          "type": "boolean",
+          "description": "Automatic recall only (7.21.1): records of the same turn and speaker (same sourceTurnId) are joined into one record for the prompt, and Neo entries whose words already stand in a rendered memory are left out of the Neo block. The store is not changed. Default: enabled."
         }
       },
       "readAt": "construction",
@@ -2054,7 +2094,7 @@
         },
         "timeoutMs": {
           "type": "number",
-          "default": 50
+          "default": 250
         },
         "visibleHints": {
           "type": "boolean",

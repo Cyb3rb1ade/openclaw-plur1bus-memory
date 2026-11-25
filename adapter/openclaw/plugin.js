@@ -43,6 +43,8 @@ import { createLightVoicePromptContext, registerVoiceModelOverride } from "./reg
 import { registerMemoryTools, registerMemoryCapability } from "./register-tools.js";
 import { registerDeferredFeatureCronBootstrap, registerUnsafeDirectCronGuard } from "./register-cron.js";
 import { registerGatewayShutdownServices, registerNeoServiceLifecycle, registerNeoWorkerWarmUp, registerObsidianBridgeLifecycle } from "./register-gateway.js";
+import { registerRecallPrewarm } from "./register-recall-prewarm.js";
+import { createProvedTurnPrincipals } from "./proved-turn-principals.js";
 import { CORRECTION_PREVIEW_CHARS } from "../../engine/runtime/constants.js";
 import { callLlm } from "../../engine/runtime/llm-calls.js";
 import { makeQuerySummarizer } from "../../engine/runtime/env-config.js";
@@ -299,6 +301,10 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
     : {});
   // 4. Neo worker warm-up (lone gateway_start).
   registerNeoWorkerWarmUp({ api, host, neoWorkerRuntime });
+  // 4b. 7.21.1: read-only warm recall per chat agent shortly after the start.
+  registerRecallPrewarm({ api, host, engine, cfg });
+  // 7.21.1: recall → capture hand-over of proved user principals per turn.
+  const provedTurnPrincipals = createProvedTurnPrincipals();
   // 4a. 7.19.0: the independent Jev mood owner (lib/jevEmotionRuntime.js),
   // registered at the release line's position — after the warm-up, ahead of
   // every other before_prompt_build/agent_end/gateway_stop handler.
@@ -563,7 +569,17 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
   if (autoCapture) {
     host.logger.info(`memory-lancedb-namespaced: enabling autoCapture`);
 
-    registerCaptureHook({ api, ...internals.captureContext, captureTurn: internals.getCaptureTurn() });
+    // 7.21.1: the light dream of a turn binds to its user only when the
+    // recall proved that user (adapter/openclaw/proved-turn-principals.js).
+    const captureTurn = internals.getCaptureTurn();
+    registerCaptureHook({
+      api,
+      ...internals.captureContext,
+      captureTurn: (event, hookCtx, opts = {}) => captureTurn(event, hookCtx, {
+        ...opts,
+        provedUserPrincipal: opts.provedUserPrincipal ?? provedTurnPrincipals.userPrincipalFor(event, hookCtx),
+      }),
+    });
   }
 
   // Reply-based Outcome Tracking: Assistant-Antwort an das Pending-Outcome anhängen.
@@ -640,6 +656,7 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
     registerRecallHook({
       api,
       ...internals.recallContext,
+      provedTurnPrincipals,
       lightVoicePromptContext: createLightVoicePromptContext({ baseDbPath, automaticWorkspacePolicyDecision, policyNeedsWorkspaceDir: true }),
     });
   } else if (neoEnabled || schicht15Enabled || gcEnabled) {

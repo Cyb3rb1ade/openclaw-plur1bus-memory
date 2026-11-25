@@ -193,9 +193,9 @@ async function main() {
       let cfg;
       if (keyChoice === "2") {
         const literal = await askLine("Enter key: ");
-        cfg = { provider: "cohere", apiKey: literal, model: "rerank-v3.5", candidates: 20, timeoutMs: 5000, fallbackOnError: true, fallbackProvider: "disabled" };
+        cfg = { provider: "cohere", apiKey: literal, model: "rerank-v5.0-fast", candidates: 20, timeoutMs: 5000, fallbackOnError: true, fallbackProvider: "disabled" };
       } else {
-        cfg = { provider: "cohere", apiKeyEnv: "COHERE_API_KEY", model: "rerank-v3.5", candidates: 20, timeoutMs: 5000, fallbackOnError: true, fallbackProvider: "disabled" };
+        cfg = { provider: "cohere", apiKeyEnv: "COHERE_API_KEY", model: "rerank-v5.0-fast", candidates: 20, timeoutMs: 5000, fallbackOnError: true, fallbackProvider: "disabled" };
       }
       console.error(t("setup.reranker.cohere_fallback_ask", { lang, tone }));
       const fb = await askLine("[1/2]: ");

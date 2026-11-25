@@ -20,7 +20,7 @@ import { normalizeMemorySessionKey, resolveSessionEchoCutoff } from "../../lib/r
  * @param {Record<string, any>} event The before_prompt_build event (`prompt`, `messages`, `sessionKey`).
  * @param {Record<string, any>|undefined} hookCtx The hook context (`sessionKey`).
  * @param {number} [now] Clock for the 6 h fallback window.
- * @returns {{query: string, sessionKey: string, sessionContextSince: number, qualityWeighting: object}}
+ * @returns {{query: string, sessionKey: string, sessionContextSince: number, qualityWeighting: object, mergeTurnParts: boolean, now: number}}
  */
 export function autoRecallPolicyOptionsFor(ctx, event, hookCtx, now = Date.now()) {
   return {
@@ -28,6 +28,10 @@ export function autoRecallPolicyOptionsFor(ctx, event, hookCtx, now = Date.now()
     sessionKey: normalizeMemorySessionKey(hookCtx?.sessionKey || event?.sessionKey),
     sessionContextSince: resolveSessionEchoCutoff(event?.messages, { now }).since,
     qualityWeighting: ctx.qualityWeightingCfg,
+    // 7.21.1: recall.mergeTurnParts (Standard an) und die Bezugszeit für das
+    // Alter der Assistenten-Antworten.
+    mergeTurnParts: ctx.cfg?.recall?.mergeTurnParts !== false,
+    now,
   };
 }
 
@@ -55,6 +59,10 @@ export function autoRecallPolicyOptionsFor(ctx, event, hookCtx, now = Date.now()
  * @param {Function|null} call.retrievalLogger Retrieval-ledger writer, or null.
  * @param {boolean} [call.readOnly] Persist nothing (no canonical cache, no graph metrics).
  * @param {object|null} [call.autoRecallPolicy] 7.20.10: autoRecallPolicyOptionsFor() of this turn.
+ * @param {number|null} [call.embedDeadlineAt] 7.21.1: latest instant (epoch ms)
+ *   the pipeline waits for the query vector before it falls back.
+ * @param {boolean} [call.keywordFallback] 7.21.1: keyword/recent fallback when
+ *   the query vector is late or the embedding fails (per-turn recall only).
  * @returns {Record<string, any>} The pipeline parameters. `embeddingQuery`
  *   (7.20.10) is the prompt without host envelopes (cleanQueryForEmbedding);
  *   the query vector comes from it, rerank and echo check read `query`.
@@ -76,6 +84,8 @@ export function autoRecallParams(ctx, {
   retrievalLogger,
   readOnly = false,
   autoRecallPolicy = null,
+  embedDeadlineAt = null,
+  keywordFallback = false,
 }) {
   const {
     adaptiveBudgetCfg,
@@ -146,5 +156,7 @@ export function autoRecallParams(ctx, {
     decisionTrace,
     retrievalLogger,
     readOnly,
+    embedDeadlineAt,
+    keywordFallback,
   };
 }

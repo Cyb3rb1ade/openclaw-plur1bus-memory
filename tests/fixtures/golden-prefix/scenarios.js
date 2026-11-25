@@ -308,7 +308,22 @@ export const SCENARIOS = [
         ageDays: 20,
       },
     ],
-    config: { runtime: { recallTimeoutMs: 300 } },
+    // 7.21.1: the keyword/recent fallback would answer before the budget
+    // runs out; this scenario pins the timeout path, so it is off here
+    // (tests/recall-fallback-7211.test.js covers the fallback). The recall
+    // keys restate the driver defaults (baseConfig merges shallowly).
+    config: {
+      runtime: { recallTimeoutMs: 300 },
+      recall: {
+        dedup: false,
+        canonicalFirst: true,
+        canonicalMaxItems: 1,
+        maxPromptMemories: 5,
+        decisionTrace: { enabled: false, includeInPrompt: false },
+        globalInjectMaxChars: 17_000,
+        keywordFallback: { enabled: false },
+      },
+    },
     event: eventFor("what happened while I was away", "golden-session-8", "golden-run-8"),
     ctx: ctxFor("golden-session-8", "golden-run-8"),
   },

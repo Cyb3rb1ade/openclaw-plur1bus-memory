@@ -194,7 +194,8 @@ describe("Schema-Default-Typen (Conversation Reactivation Recall)", () => {
   it("conversationReactivationRecall.maxCommunities ist eine Zahl", () =>
     assertNumberDefault("conversationReactivationRecall.maxCommunities", 2));
   it("conversationReactivationRecall.timeoutMs ist eine Zahl", () =>
-    assertNumberDefault("conversationReactivationRecall.timeoutMs", 50));
+    // 7.21.1: 250 ms (was 50; CRR timed out 20 times on 24.11.2026).
+    assertNumberDefault("conversationReactivationRecall.timeoutMs", 250));
   it("conversationReactivationRecall.visibleHints ist false", () =>
     assertBooleanDefault("conversationReactivationRecall.visibleHints", false));
 });

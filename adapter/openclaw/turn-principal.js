@@ -12,15 +12,16 @@ import { isBackgroundTurn, shouldSkipAutoRecallForInternalTurn } from "../../lib
 
 /**
  * Was engine/recall/assemble-prompt-context.js:165-192.
- * @param {{host: object, hostRoutingLoader: () => Promise<object>, getMemoryTurnRoutes: () => Promise<object|null>, memoryWorkspaceAliases: object, memoryAccountTopology: object}} ctx
+ * @param {{host: object, hostRoutingLoader: () => Promise<object>, getMemoryTurnRoutes: () => Promise<object|null>, memoryWorkspaceAliases: object, memoryAccountTopology: object, provedTurnPrincipals?: object|null}} ctx
+ *   `provedTurnPrincipals` (7.21.1): memo that receives every proved principal.
  * @returns {(event: object, hookCtx: object) => Promise<{memoryCtx: object, trust: "proved"|"inferred"}>}
  */
-export function createTurnPrincipalResolver({ host, hostRoutingLoader, getMemoryTurnRoutes, memoryWorkspaceAliases, memoryAccountTopology }) {
+export function createTurnPrincipalResolver({ host, hostRoutingLoader, getMemoryTurnRoutes, memoryWorkspaceAliases, memoryAccountTopology, provedTurnPrincipals = null }) {
   return async function resolveTurnPrincipal(event, hookCtx) {
     const routingCapability = await hostRoutingLoader();
     const turnRoutes = await getMemoryTurnRoutes();
     if (turnRoutes) {
-      return resolveHostHookPrincipal({
+      const resolved = await resolveHostHookPrincipal({
         ...hookCtx,
         runId: hookCtx?.runId ?? event?.runId,
         sessionKey: hookCtx?.sessionKey ?? event?.sessionKey,
@@ -33,6 +34,10 @@ export function createTurnPrincipalResolver({ host, hostRoutingLoader, getMemory
         routingCapability,
         logger: host.logger,
       });
+      // 7.21.1: the capture of this turn binds its light dream to this user
+      // only if the recall proved it (adapter/openclaw/proved-turn-principals.js).
+      provedTurnPrincipals?.record(event, hookCtx, resolved);
+      return resolved;
     }
     return {
       trust: "inferred",

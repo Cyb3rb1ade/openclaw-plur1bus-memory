@@ -138,6 +138,11 @@ export function createPromptContextAssembler(ctx) {
     volatileStateAnnotationCfg,
   } = ctx;
 
+  // 7.21.1: recall.keywordFallback.enabled (Standard an).
+  const keywordFallbackEnabled = cfg?.recall?.keywordFallback?.enabled !== false;
+  // 7.21.1: recall.mergeTurnParts (Standard an).
+  const mergeTurnPartsEnabled = cfg?.recall?.mergeTurnParts !== false;
+
   return async function assemblePromptContext(event, hookCtx, opts = {}) {
     const assemblerEntryAt = Date.now();
     // RecallQuery.warmOnly (E5 Task 9): the read-only heavy path only. It
@@ -284,7 +289,12 @@ export function createPromptContextAssembler(ctx) {
         }
         recallPrelude.hookRecordMs = Date.now() - hookRecordStartedAt;
         if (injectionKey !== null && event?.prompt && event.prompt.length >= 5) {
+          // 7.21.1: Der Neo-Vorlauf hat ein festes Teilbudget ab Beginn des
+          // Recalls (höchstens neo.recall.global.embedTimeoutMs, höchstens ein
+          // Viertel von runtime.recallTimeoutMs); danach geht es ohne ihn weiter.
+          recallPrelude.budgetMs = neoPreludeBudgetMs(runtimeScheduler.config.recallTimeoutMs, neoGlobalRecall.embedTimeoutMs);
           const prelude = await readNeoPrelude({
+            deadlineAt: startedAt + recallPrelude.budgetMs,
             neoStore,
             requester,
             prompt: event.prompt,
@@ -316,7 +326,7 @@ export function createPromptContextAssembler(ctx) {
     completed.neo = neoContext;
     {
       const preludeMs = Date.now() - recallPrelude.startedAt;
-      const preludeLine = `plur1bus-neo: recall prelude total=${preludeMs}ms identity=${recallPrelude.identityMs}ms hookRecord=${recallPrelude.hookRecordMs}ms window=${recallPrelude.windowMs}ms embed=${recallPrelude.embedMs}ms${recallPrelude.embedTimedOut ? "(timeout)" : ""} global=${recallPrelude.globalMs}ms lanes=${recallPrelude.lanesMs}ms authenticated=${memoryCtx?.userPrincipal ? "yes" : "no"} agent=${hookCtx?.agentId || "default"}`;
+      const preludeLine = `plur1bus-neo: recall prelude total=${preludeMs}ms identity=${recallPrelude.identityMs}ms hookRecord=${recallPrelude.hookRecordMs}ms window=${recallPrelude.windowMs}ms embed=${recallPrelude.embedMs}ms${recallPrelude.embedTimedOut ? "(timeout)" : ""} global=${recallPrelude.globalMs}ms lanes=${recallPrelude.lanesMs}ms${recallPrelude.budgetMs ? ` budget=${recallPrelude.budgetMs}ms${recallPrelude.budgetExceeded ? "(exceeded)" : ""}` : ""} authenticated=${memoryCtx?.userPrincipal ? "yes" : "no"} agent=${hookCtx?.agentId || "default"}`;
       if (preludeMs >= NEO_RECALL_PRELUDE_LOG_MS) host.logger.info(preludeLine);
       else host.logger.debug(preludeLine);
     }
@@ -529,8 +539,19 @@ export function createPromptContextAssembler(ctx) {
             })]);
           } catch (_e) { dbg(_e); }
         },
+        // 7.21.1: Der Anfragevektor darf nicht das ganze Budget kosten. Kommt
+        // er nicht rechtzeitig, sucht die Pipeline nach Schlüsselwort und
+        // jüngsten Einträgen (recall.keywordFallback, Standard an).
+        keywordFallback: keywordFallbackEnabled,
+        embedDeadlineAt: keywordFallbackEnabled
+          ? recallEmbedDeadline({
+            startedAt,
+            recallTimeoutMs: runtimeScheduler.config.recallTimeoutMs,
+            embedKnownSlow: recallPrelude.embedTimedOut === true || recallPrelude.budgetExceeded === true,
+          })
+          : null,
       });
-      const { canonical: canonicalHits, memories: ordered, trace: pipelineTrace, degraded: identityDegraded } = await runMergedNamespaceRecall(
+      const { canonical: canonicalHits, memories: ordered, trace: pipelineTrace, degraded: identityDegraded, fallback: recallFallback } = await runMergedNamespaceRecall(
         readDbs,
         _autoRecallBaseParams,
         trace,
@@ -544,8 +565,11 @@ export function createPromptContextAssembler(ctx) {
       );
       trace = pipelineTrace || trace;
       if (identityDegraded) innerFailure = identityDegraded;
+      if (recallFallback && !innerFailure) {
+        innerFailure = { reason: "embedding-unavailable", capability: "recall", detail: `keyword/recent fallback (${recallFallback.reason})` };
+      }
 
-      host.logger.info?.(`memory-lancedb-namespaced: injecting ${ordered.length} memories + ${canonicalHits.length} canonical for agent=${agentId || "default"}${reranker ? " (reranked)" : ""}`);
+      host.logger.info?.(`memory-lancedb-namespaced: injecting ${ordered.length} memories + ${canonicalHits.length} canonical for agent=${agentId || "default"}${recallFallback ? ` (keyword/recent fallback: ${recallFallback.reason})` : reranker ? " (reranked)" : ""}`);
 
       const items = [];
       for (const c of canonicalHits) {
@@ -895,7 +919,7 @@ export function createPromptContextAssembler(ctx) {
               decisionTrace: traceEnabled ? trace : null,
             }),
             new Promise((_, reject) =>
-              setTimeout(() => reject(new Error("crr_timeout")), crrCfg.timeoutMs ?? 50)
+              setTimeout(() => reject(new Error("crr_timeout")), crrTimeoutMs(crrCfg))
             ),
           ]);
           reactivationContext = crrResult?.context || "";
@@ -1029,6 +1053,7 @@ export function createPromptContextAssembler(ctx) {
         onTruncate: ({ from, to }) => {
           memoryDeferrals.push({ block: "memories", kind: "clipped", from, to, reason: "memories-cap" });
         },
+        retrievalFallback: recallFallback || null,
       });
       let personaDirective = null;
       let personaEmojiPalette = null;
@@ -1276,7 +1301,11 @@ export function createPromptContextAssembler(ctx) {
       throwIfAborted(signal, "recall aborted");
       // 7.12.27: Globale Neo-Treffer, die als LanceDB-Erinnerung schon im
       // selben Prompt stehen, nicht doppelt injizieren.
-      if (neoLanes && neoGlobalIds?.size > 0 && Array.isArray(ordered) && ordered.length > 0) {
+      // 7.21.1 (recall.mergeTurnParts): gegen ALLE Neo-Einträge, nicht nur die
+      // globalen Treffer, und mit Enthaltensein — Bernds Antwort von 22:32
+      // stand als Reflexion im Neo-Block und als Erinnerung im Hauptblock.
+      const neoDedupeAll = mergeTurnPartsEnabled;
+      if (neoLanes && (neoGlobalIds?.size > 0 || neoDedupeAll) && Array.isArray(ordered) && ordered.length > 0) {
         try {
           // 7.20.10 (B3): nur gegen Erinnerungen, die im Block tatsächlich
           // stehen. Bis 7.20.9 zählten alle 30 Treffer, auch die hinter der
@@ -1286,7 +1315,9 @@ export function createPromptContextAssembler(ctx) {
             .filter((row) => renderedMemoryIds.has(row?.entry?.id))
             .map((row) => row?.entry?.text || row?.text || "")
             .filter(Boolean);
-          const dedupeOptions = { onlyIds: neoGlobalIds, threshold: neoGlobalRecall.dedupeThreshold };
+          const dedupeOptions = neoDedupeAll
+            ? { onlyIds: null, threshold: neoGlobalRecall.dedupeThreshold, containment: true }
+            : { onlyIds: neoGlobalIds, threshold: neoGlobalRecall.dedupeThreshold };
           const deduped = dedupeNeoLanesAgainstTexts(neoLanes, memoryTexts, dedupeOptions);
           if (deduped.dropped > 0) {
             let lanesForPrompt = deduped.lanes;
@@ -1302,7 +1333,7 @@ export function createPromptContextAssembler(ctx) {
               rerouteNote = ` rerouted=${routedCount} ms=${Date.now() - rerouteStartedAt}`;
             }
             neoContext = formatNeoRecallContext(lanesForPrompt, neoFormatOptions(neoInjectionKey));
-            host.logger.info(`plur1bus-neo: global candidate search dropped ${deduped.dropped} hit(s) already injected as memories${rerouteNote}`);
+            host.logger.info(`plur1bus-neo: ${neoDedupeAll ? "neo recall" : "global candidate search"} dropped ${deduped.dropped} hit(s) already injected as memories${rerouteNote}`);
           }
         } catch (dedupeErr) {
           host.logger.debug(`plur1bus-neo: global dedupe skipped: ${String(dedupeErr)}`);
@@ -1409,4 +1440,55 @@ export function createPromptContextAssembler(ctx) {
     emit("recall.completed", { agentId: agentIdForCache, timing, degraded: result.degraded });
     return result;
   };
+}
+
+/**
+ * 7.21.1: Budget of the Neo prelude, counted from the start of the recall:
+ * at most `neo.recall.global.embedTimeoutMs` and at most a quarter of
+ * `runtime.recallTimeoutMs` (never below 250 ms).
+ *
+ * @param {number} recallTimeoutMs The scheduler's hard recall budget.
+ * @param {number} embedTimeoutMs The configured Neo embedding budget.
+ * @returns {number} milliseconds
+ */
+export function neoPreludeBudgetMs(recallTimeoutMs, embedTimeoutMs) {
+  const budget = Number.isFinite(recallTimeoutMs) && recallTimeoutMs > 0 ? recallTimeoutMs : 12_000;
+  const share = Math.max(250, Math.round(budget * 0.25));
+  const embed = Number.isFinite(embedTimeoutMs) && embedTimeoutMs > 0 ? embedTimeoutMs : 4_000;
+  return Math.min(embed, share);
+}
+
+/**
+ * 7.21.1: Latest instant the store recall waits for its query vector. A
+ * quarter of the budget (at least 1.5 s or half a small budget, at most 3 s)
+ * stays for the keyword fallback and the
+ * rest of the assembly. When the prelude already saw the embedding time out,
+ * the pipeline waits only a short grace (an eighth of the budget, 200 ms–1.5 s)
+ * — the vector is known to be slow and the shared request is still running.
+ *
+ * @param {{startedAt: number, recallTimeoutMs: number, embedKnownSlow?: boolean, now?: number}} args
+ * @returns {number} epoch ms
+ */
+export function recallEmbedDeadline({ startedAt, recallTimeoutMs, embedKnownSlow = false, now = Date.now() }) {
+  const budget = Number.isFinite(recallTimeoutMs) && recallTimeoutMs > 0 ? recallTimeoutMs : 12_000;
+  // Reserve: a quarter of the budget, at least 1.5 s (half of a small
+  // budget), at most 3 s — the fallback's first LanceDB scan can be cold.
+  const reserve = Math.min(3_000, Math.max(Math.round(budget * 0.25), Math.min(1_500, Math.round(budget * 0.5))));
+  const deadline = startedAt + budget - reserve;
+  if (!embedKnownSlow) return deadline;
+  const grace = Math.min(1_500, Math.max(200, Math.round(budget * 0.125)));
+  return Math.min(deadline, now + grace);
+}
+
+/** 7.21.1: CRR timeout, default 250 ms (was 50), clamped to 10–2000 ms. */
+export const CRR_DEFAULT_TIMEOUT_MS = 250;
+
+/**
+ * @param {{timeoutMs?: number}} crrCfg conversationReactivationRecall config.
+ * @returns {number} milliseconds
+ */
+export function crrTimeoutMs(crrCfg) {
+  const raw = Number(crrCfg?.timeoutMs);
+  if (!Number.isFinite(raw) || raw <= 0) return CRR_DEFAULT_TIMEOUT_MS;
+  return Math.min(2_000, Math.max(10, Math.round(raw)));
 }

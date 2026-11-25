@@ -140,6 +140,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: Run tests
+        # The suite runs the Telegram speech scripts with python3; without
+        # this, scripts/telegramTts/__pycache__ ends up in the tarball (7.21.0).
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
         run: npm test
       - name: Pack the plugin and write SHA256SUMS
         id: pack
@@ -147,7 +151,11 @@ jobs:
           set -euo pipefail
           out="$RUNNER_TEMP/release"
           mkdir -p "$out"
+          # Test artefacts never ship: remove Python bytecode the suite may
+          # still have left behind, and refuse a tarball that contains any.
+          find . -path ./node_modules -prune -o -type d -name __pycache__ -prune -exec rm -rf {} +
           npm pack --json --pack-destination "$out" > "$RUNNER_TEMP/npm-pack.json"
+          node -e 'const f=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))[0].files.map(x=>x.path).filter(p=>/(^|\/)__pycache__\/|\.pyc$/.test(p)); if(f.length){console.error("::error::tarball contains Python bytecode: "+f.join(", ")); process.exit(1)}' "$RUNNER_TEMP/npm-pack.json"
           tgz=$(node -e 'const p=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))[0]; if(p.version!==process.argv[2]) throw new Error("pack version "+p.version+" is not "+process.argv[2]); process.stdout.write(p.filename)' "$RUNNER_TEMP/npm-pack.json" "$VERSION")
           [ "$tgz" = "cyb3rb1ade-plur1bus-memory-$VERSION.tgz" ] || { echo "::error::packed $tgz, expected cyb3rb1ade-plur1bus-memory-$VERSION.tgz"; exit 1; }
           cd "$out"
