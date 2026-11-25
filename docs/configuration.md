@@ -144,6 +144,33 @@ Nutzeraussagen altern nie. Mit `mergeTurnParts` werden Einträge mit gleicher
 zusammengelegt (Teile, die ein anderer Teil enthält, entfallen); Teilstücke
 einer Chunk-Gruppe und Träume nicht. Gespeichert wird nichts davon.
 
+### Herkunft und Vertraulichkeit (7.21.2)
+
+`recall.contextWeighting` gilt für den Auto-Recall, CRR, Semantic Lens, den
+Neo-Block und `memory_recall`/`memory_search` in einem erkennbaren Chat (nicht
+für CLI und Webchat). Derselbe Chat ist die ganze Gruppe bzw. der ganze DM.
+
+| Key | Typ | Default | Beschreibung |
+|-----|-----|---------|--------------|
+| `contextWeighting.enabled` | `boolean` | `true` | Gewichtung und Vertraulichkeitsfilter. |
+| `contextWeighting.weights.sameChat` | `number` (0–1) | `1` | Derselbe Chat. |
+| `contextWeighting.weights.groupInDirect` | `number` | `0.85` | Gruppenwissen im DM. |
+| `contextWeighting.weights.otherGroup` | `number` | `0.5` | Erinnerung aus einer anderen Gruppe. |
+| `contextWeighting.weights.unknown` | `number` | `0.5` | Herkunft unbekannt. |
+| `contextWeighting.weights.foreignDirect` | `number` | `0.35` | DM-Erinnerung in einer Gruppe oder einem anderen DM. |
+| `contextWeighting.maxForeignPerBlock` | `integer` (0–100) | `5` | Höchstens so viele fremde Erinnerungen je Block. |
+| `contextWeighting.owners` | `{agentId: string[]}` | – | Besitzer je Agent (`telegram:<id>`); ohne Eintrag die Allowlist des Kanal-Kontos, wenn sie genau eine Person nennt. Im DM mit dem Besitzer (bewiesener Absender) zählt Altbestand ohne `sessionKey` als derselbe Chat. |
+| `contextWeighting.classifier.enabled` | `boolean` | `true` | Hintergrund-Einstufung eingereihter fremder Erinnerungen per LLM (Route von `criticalPush`, sonst `merging`). |
+| `contextWeighting.classifier.intervalMs` | `number` | `120000` | Abstand der Läufe (mindestens 30 s). |
+| `contextWeighting.classifier.batchSize` | `integer` (1–50) | `20` | Erinnerungen je LLM-Aufruf. |
+
+Vertraulich (`confidential`) sind Gesundheit, Finanzen, Beziehung/Intimes,
+Familienkonflikte, Adressen/Zugangsdaten und Rechtliches; `personal` ist harmlos
+Persönliches, alles andere `banal`. Fremde vertrauliche oder nicht eingestufte
+Erinnerungen erscheinen nie; in Gruppen braucht eine fremde Erinnerung ein
+LLM-Urteil, sonst wird sie beim ersten Auftreten zurückgehalten und eingereiht.
+Die Urteile liegen in `{baseDbPath}/_sensitivity/verdicts.jsonl` (ohne Text).
+
 ### Recall-Budget und Rückfall (7.21.1)
 
 Der Auto-Recall hat ein festes Budget (`runtime.recallTimeoutMs`). Damit es

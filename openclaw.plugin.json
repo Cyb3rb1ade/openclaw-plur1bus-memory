@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "PLUR1BUS Memory: Make your agent yours",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
-  "version": "7.21.1",
+  "version": "7.21.2",
   "kind": "memory",
   "controlUi": {
     "entry": "dist/control-ui/jev-key/index.js"
@@ -1993,6 +1993,83 @@
           "mergeTurnParts": {
             "type": "boolean",
             "description": "Automatic recall only (7.21.1): records of the same turn and speaker (same sourceTurnId) are joined into one record for the prompt, and Neo entries whose words already stand in a rendered memory are left out of the Neo block. The store is not changed. Default: enabled."
+          },
+          "contextWeighting": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Automatic recall and memory tools (7.21.2): weight hits by where they come from. Same chat (whole group or whole direct chat) counts fully; other origins are multiplied down (a strong hit still makes it), at most maxForeignPerBlock foreign memories per block. Foreign memories that are confidential or not classified never appear; in groups a foreign memory also needs an LLM verdict (queued in the background on its first appearance). Dreaming, skill mining, consolidation and promotion are not affected. Defaults: enabled, weights sameChat 1, groupInDirect 0.85, otherGroup 0.5, unknown 0.5, foreignDirect 0.35, maxForeignPerBlock 5.",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "weights": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "sameChat": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "groupInDirect": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "otherGroup": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "unknown": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "foreignDirect": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  }
+                }
+              },
+              "maxForeignPerBlock": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "owners": {
+                "type": "object",
+                "description": "Per agent id the owner's sender ids (e.g. \"telegram:55736530\"). In a direct chat with the owner (proved sender), legacy rows with origin dm and no sessionKey count as the same chat. Without an entry: the host channel account allowlist when it names exactly one person.",
+                "additionalProperties": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 20
+                }
+              },
+              "classifier": {
+                "type": "object",
+                "additionalProperties": false,
+                "description": "Background LLM classification of queued foreign memories (criticalPush route, else merging).",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "intervalMs": {
+                    "type": "number",
+                    "minimum": 30000,
+                    "maximum": 3600000
+                  },
+                  "batchSize": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50
+                  }
+                }
+              }
+            }
           }
         },
         "description": "Recall pipeline tuning: candidate count, importance boost, deduplication, canonical-first selection, prompt budgets, query refinement, adaptive budget, semantic compression, the soft time budget and its fallback, half-lives per memory type and the decision trace."

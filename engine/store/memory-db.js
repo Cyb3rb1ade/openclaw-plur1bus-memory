@@ -592,6 +592,9 @@ class MemoryDB {
     // 7.20.10: Aus welchem Text der Vektor stammt (lib/embedding-text.js).
     // Ohne Angabe: der gespeicherte Text ("raw").
     if (normalized.embeddingTextMode == null || normalized.embeddingTextMode === "") normalized.embeddingTextMode = "raw";
+    // 7.21.2: Vertraulichkeit (lib/sensitivity.js); '' = nicht eingestuft.
+    if (normalized.sensitivity == null) normalized.sensitivity = "";
+    if (normalized.sensitivitySource == null) normalized.sensitivitySource = "";
     if (!this.schemaFieldNames) return normalized;
     const filtered = {};
     for (const [key, value] of Object.entries(normalized)) {
@@ -768,6 +771,12 @@ class MemoryDB {
             // 'clean-v1'/'clean-v1-nospeaker' (lib/embedding-text.js). Bestand
             // = 'raw'; scripts/reembed-clean.mjs bettet ihn bereinigt neu ein.
             { name: 'embeddingTextMode', valueSql: "'raw'" },
+            // 7.21.2: Vertraulichkeit 'banal'|'personal'|'confidential' und
+            // wer sie bestimmt hat ('rules'|'llm'). Bestand = '' (nicht
+            // eingestuft); fremd und uneingestuft zählt im Auto-Recall als
+            // vertraulich (lib/recall-context.js).
+            { name: 'sensitivity', valueSql: "''" },
+            { name: 'sensitivitySource', valueSql: "''" },
           ];
 
           for (const col of allColumns) {
@@ -878,6 +887,8 @@ class MemoryDB {
             chunkGroupId: "",
             sessionKey: "",
             embeddingTextMode: "raw",
+            sensitivity: "",
+            sensitivitySource: "",
           },
         ]), "MemoryDB.createTable", "created-table", false);
         if (this.identity) {

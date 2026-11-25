@@ -91,6 +91,22 @@ These features sit **after** normal recall and only append results. They must ne
   `engine/capture/light-dream-identity.js`); never derive a user binding from
   a raw hook `senderId`.
 
+### Origin weighting and confidentiality (7.21.2)
+
+- `lib/recall-context.js`: relation of a hit to the requesting chat (same
+  chat, group in direct, other group, foreign direct, unknown) from the
+  session key; multipliers and a foreign cap (`recall.contextWeighting`).
+  Applied in `runMergedNamespaceRecall` (before the topN cap), to the Neo
+  lanes, CRR, Semantic Lens and `memory_recall`. Never in dreaming, skill
+  mining, consolidation or promotion.
+- Foreign + (confidential or unclassified) never passes; in groups foreign
+  needs an LLM verdict (`lib/sensitivity-queue.js`, sidecar only — never
+  write memory rows from the queue).
+- Legacy rows count as the same chat only in a proved direct chat with the
+  agent's owner (`isOwnerDirectChat`).
+- Neo ACL: `requesterWorkspaceKey` from `workspaceKeyFromDirStrict` only; never
+  use the permissive `workspaceKeyFromContext` (defaults, session map) for ACL.
+
 ### Cohere reranker default (7.21.1)
 
 `DEFAULT_COHERE_RERANK_MODEL` (`lib/providers/dimensions.js`) is

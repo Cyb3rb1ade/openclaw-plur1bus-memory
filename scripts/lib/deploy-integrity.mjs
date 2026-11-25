@@ -128,6 +128,9 @@ export const DEPLOY_FILES = [
   "lib/recall-pipeline.js",
   "lib/recall-keyword-fallback.js",
   "lib/recall-turn-merge.js",
+  "lib/recall-context.js",
+  "lib/sensitivity.js",
+  "lib/sensitivity-queue.js",
   // 7.20.10: von recall-pipeline.js importiert (Qualitätsgewicht im Auto-Recall).
   "lib/recall-quality.js",
   // 7.20.10: bereinigte Einbettung (Capture, memory_store, Auto-Recall-Anfrage).
@@ -508,6 +511,7 @@ export const DEPLOY_FILES = [
   "scripts/reindex-provider.mjs",
   // 7.20.10: Bestand bereinigt neu einbetten (embeddingTextMode raw → clean-v1).
   "scripts/reembed-clean.mjs",
+  "scripts/sensitivity-backfill.mjs",
   "scripts/repair-dreaming-cron.mjs",
   "scripts/repair-installed-plugin.mjs",
   "scripts/backfill-manual-core-markers.mjs",

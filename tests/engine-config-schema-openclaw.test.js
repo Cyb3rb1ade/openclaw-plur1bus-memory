@@ -241,6 +241,8 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
       [afterSchema.properties.recall, "keywordFallback"],
       [afterSchema.properties.runtime, "recallPrewarm"],
       [afterSchema.properties.recall, "mergeTurnParts"],
+      // 7.21.2: origin weighting and confidentiality.
+      [afterSchema.properties.recall, "contextWeighting"],
     ]) {
       assert.ok(Object.hasOwn(node.properties, key), key);
       delete node.properties[key];

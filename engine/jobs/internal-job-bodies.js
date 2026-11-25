@@ -923,7 +923,15 @@ export function createInternalJobBodies(ctx) {
               continue;
             }
             consecutiveFailures = 0;
-            await agentDb.update(row.id, patch);
+            try {
+              await agentDb.update(row.id, patch);
+            } catch (updateError) {
+              // 7.21.2: Tabelle noch ohne Spalte sensitivity (Migration läuft
+              // beim ersten MemoryDB.init): ohne das Urteil erneut schreiben.
+              if (!("sensitivity" in patch)) throw updateError;
+              const { sensitivity: _s, sensitivitySource: _src, ...withoutSensitivity } = patch;
+              await agentDb.update(row.id, withoutSensitivity);
+            }
             counts.refined++;
           }
           counts.pending = Math.max(0, rows.length - counts.refined - counts.finalized);

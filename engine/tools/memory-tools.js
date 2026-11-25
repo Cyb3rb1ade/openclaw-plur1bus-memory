@@ -18,6 +18,8 @@
  * user-bound authorization context, unlike the chat commands.
  */
 
+import { classifySensitivityByRules } from "../../lib/sensitivity.js";
+import { buildContextPolicy } from "../../lib/recall-context.js";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -135,6 +137,9 @@ export function createMemoryTools(ctx) {
     withDeterministicLlmContext,
     withDurableMerge,
     workspacePolicyGuard,
+    // 7.21.2: Herkunftsgewichtung (optional, ältere Kontexte ohne sie).
+    contextWeightingCfg = null,
+    sensitivityStore = null,
   } = ctx;
 
   return (toolCtx) => {
@@ -251,6 +256,17 @@ export function createMemoryTools(ctx) {
               memoryCtx,
               queryRefinerEnabled,
               decisionTrace: trace,
+              // 7.21.2: dieselbe Herkunftsgewichtung wie der Auto-Recall, wenn
+              // das Werkzeug in einem erkennbaren Chat aufgerufen wird.
+              contextPolicy: buildContextPolicy({
+                contextWeightingCfg,
+                sensitivityStore,
+                sessionKey: toolCtx?.sessionKey,
+                memoryCtx,
+                agentId,
+                owners: cfg?.recall?.contextWeighting?.owners,
+                hostConfig: typeof host.config === "function" ? host.config() : null,
+              }),
               retrievalLogger: (ledgerInfo) => {
                 try {
                   const neoStore = getNeoStore(toolCtx, {});
@@ -523,6 +539,7 @@ export function createMemoryTools(ctx) {
                       emotionStatus: mergedEmotionStatus,
                       validFrom: mergedValidTime.validFrom, validUntil: mergedValidTime.validUntil,
                       embeddingTextMode: mergedEmbedInput.mode,
+                      sensitivity: classifySensitivityByRules(mergeResult.mergedText).sensitivity, sensitivitySource: "rules",
                     }, Date.now(), halfLifeOverrides, { intensityHalfLifeFactor: emotionIntensityHalfLifeFactor, flashbulbEncodingEnabled });
                     return { mergedEntry, mergeResult, mergedImportance };
                   },
@@ -564,6 +581,8 @@ export function createMemoryTools(ctx) {
               emotionStatus,
               validFrom: capturedValidFrom, validUntil: capturedValidUntil,
               embeddingTextMode: storeEmbedInput.mode,
+              // 7.21.2: Vertraulichkeit nach Regeln.
+              sensitivity: classifySensitivityByRules(params.text).sensitivity, sensitivitySource: "rules",
             }, Date.now(), halfLifeOverrides, { intensityHalfLifeFactor: emotionIntensityHalfLifeFactor, flashbulbEncodingEnabled });
             await db.store(entry);
             if (toolCtx.workspaceDir) appendCurationLog(toolCtx.workspaceDir, agentId, { event: "memory.stored", timestamp: new Date().toISOString(), agentId, memoryId: entry.id, text: params.text.slice(0, 200), category, origin, reason: "stored", relatedId: null });
@@ -784,12 +803,25 @@ export function createMemoryTools(ctx) {
                   // written, so this is the only exclusion point available.
                   pendingTexts = rows
                     .filter(r => normalizeEpistemicStatus(r.epistemicStatus) !== "invalidated")
+                    // 7.21.2: KNOWLEDGE.md wird vom Host in jede Sitzung
+                    // eingespielt, auch in Gruppen. Vertrauliches (nach Regeln,
+                    // auch Altbestand) kommt dort nicht hinein; es bleibt in der Warteschlange.
+                    .filter(r => classifySensitivityByRules(r.text).sensitivity !== "confidential" && r.sensitivity !== "confidential")
                     .map(r => ({ id: r.id, text: r.text, category: r.category || "fact", scope: r.scope || "agent-private", importance: r.importance ?? 0.5, pendingKey: keyById.get(r.id) }));
                   // Drop what can never be promoted (invalidated or gone from
                   // the table). Only the ids this query actually asked for —
                   // everything else stays queued. Without this the entries
                   // pile up forever and keep the maintenance nudge counting
                   // work that no longer exists.
+                  // 7.21.2: Vertrauliches kann nie in KNOWLEDGE.md; aus der Warteschlange nehmen.
+                  const confidentialPendingKeys = rows
+                    .filter(r => classifySensitivityByRules(r.text).sensitivity === "confidential" || r.sensitivity === "confidential")
+                    .map(r => keyById.get(r.id))
+                    .filter(Boolean);
+                  if (confidentialPendingKeys.length > 0) {
+                    removeKnowledgePending(toolCtx.workspaceDir, confidentialPendingKeys);
+                    host.logger.info(`memory-lancedb-namespaced: knowledge_update — ${confidentialPendingKeys.length} vertrauliche Einträge nicht nach KNOWLEDGE.md (agent=${agentId})`);
+                  }
                   const stalePendingKeys = selectStalePendingKeys({ pending: agentPending, rows, queriedIds });
                   if (stalePendingKeys.length > 0) {
                     removeKnowledgePending(toolCtx.workspaceDir, stalePendingKeys);
