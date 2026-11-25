@@ -113,6 +113,9 @@ import { dbg, getPluginLogger, runSpeakerProposalPipeline, setPluginLogger } fro
 import { DEFAULT_BASE_DB_PATH, DEFAULT_MODEL, EPISODED_TURN_ID_MEMORY, MAX_POSTPROCESSING_RETRIES, MAX_PROMPT_REPLY_OUTCOME_READ_BYTES } from "./runtime/constants.js";
 import { runSemanticDiscoveryBatches, selectSemanticDiscoveryWorkspaces } from "./runtime/semantic-discovery.js";
 import { callLlm, callMergeCheck, withDeterministicLlmContext } from "./runtime/llm-calls.js";
+import { resolveContextWeightingConfig } from "../lib/recall-context.js";
+import { createSensitivityStore } from "../lib/sensitivity-queue.js";
+import { classifySensitivityByRules } from "../lib/sensitivity.js";
 import { commandOption, generateSummary, makeQuerySummarizer, normalizedLlmErrorClass, resolveConfiguredApiKey, resolveEnvVars, resolveOptionalEnvVars, summarizeForCapture } from "./runtime/env-config.js";
 import { normalizeBoundedRecallInteger, resolveRuntimeRecallBudget, runMergedNamespaceRecall } from "./recall/namespace-recall.js";
 import { applyEpistemicStatusToLanceDb, waitForTimeoutSettlement } from "./store/memory-db.js";
@@ -899,6 +902,30 @@ export function createEngine(host, config, testOptions = {}) {
   // 7.20.10: Qualitätsgewicht im Auto-Recall (recall.qualityWeighting,
   // Default an, Untergrenze 0,35). memory_recall/memory_search bleiben ungewichtet.
   const qualityWeightingCfg = resolveQualityWeightingConfig(cfg.recall?.qualityWeighting);
+  // 7.21.2: Herkunftsgewichtung und Vertraulichkeit im Auto-Recall
+  // (recall.contextWeighting, lib/recall-context.js). LLM-Urteile über die
+  // Vertraulichkeit fremder Einträge liegen im Sidecar `_sensitivity`, die
+  // Warteschlange wird im Hintergrund gebündelt eingestuft.
+  const contextWeightingCfg = resolveContextWeightingConfig(cfg.recall?.contextWeighting);
+  const sensitivityStore = createSensitivityStore({ baseDir: baseDbPath, logger: host.logger });
+  const sensitivityLlmCfg = contextWeightingCfg.enabled
+    ? (createFeatureRoute("criticalPush", cfg.criticalPush || {}) || createFeatureRoute("merging", cfg.merging || {}))
+    : null;
+  const SENSITIVITY_INTERVAL_MS = Math.max(30_000, Number(cfg.recall?.contextWeighting?.classifier?.intervalMs) || 120_000);
+  const sensitivityTimer = sensitivityLlmCfg && cfg.recall?.contextWeighting?.classifier?.enabled !== false
+    ? setInterval(() => {
+      if (sensitivityStore.pending() === 0) return;
+      sensitivityStore.processBatch({
+        batchSize: cfg.recall?.contextWeighting?.classifier?.batchSize,
+        complete: (messages) => callLlm(messages, {
+          ...sensitivityLlmCfg,
+          maxTokens: 800,
+          callContext: { agentId: "plur1bus-sensitivity", purpose: "sensitivity-classification" },
+        }),
+      }).catch((error) => host.logger.warn?.(`plur1bus-sensitivity: batch failed: ${describeError(error)}`));
+    }, SENSITIVITY_INTERVAL_MS)
+    : null;
+  sensitivityTimer?.unref?.();
   // 7.20.10: roh speichern, bereinigt einbetten (embedding.cleanText,
   // Default an, Sprecherpräfix bleibt). Spalte embeddingTextMode.
   const embeddingCleanTextCfg = resolveEmbeddingCleanTextConfig(cfg.embedding?.cleanText);
@@ -2831,7 +2858,7 @@ export function createEngine(host, config, testOptions = {}) {
               const mergedEmbedInput = prepareEmbeddingText(mergeResult.mergedText, embeddingCleanTextCfg);
               const mergedVector = await embeddings.embed(mergedEmbedInput.text, { agentId: storeAgentId });
               const mergedValidTime = combineValidTimeForMerge(authoritativeCandidate, { validFrom: capturedValidFrom, validUntil: capturedValidUntil });
-              const mergedEntry = applyDynamicsDefaults({ id: replacementId, text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: mergedImportance, category, createdAt: Date.now(), mergedFrom: JSON.stringify(durableMergeLineage(authoritativeCandidate)), expiresAt, ...ownershipFields, ...durableMergeEpistemicMetadata(authoritativeCandidate), sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, validFrom: mergedValidTime.validFrom, validUntil: mergedValidTime.validUntil, embeddingTextMode: mergedEmbedInput.mode }, Date.now(), halfLifeOverrides, { flashbulbEncodingEnabled });
+              const mergedEntry = applyDynamicsDefaults({ id: replacementId, text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: mergedImportance, category, createdAt: Date.now(), mergedFrom: JSON.stringify(durableMergeLineage(authoritativeCandidate)), expiresAt, ...ownershipFields, ...durableMergeEpistemicMetadata(authoritativeCandidate), sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, validFrom: mergedValidTime.validFrom, validUntil: mergedValidTime.validUntil, embeddingTextMode: mergedEmbedInput.mode, sensitivity: classifySensitivityByRules(mergeResult.mergedText).sensitivity, sensitivitySource: "rules" }, Date.now(), halfLifeOverrides, { flashbulbEncodingEnabled });
               return { mergedEntry, mergeResult, mergedImportance };
             },
           });
@@ -2857,7 +2884,7 @@ export function createEngine(host, config, testOptions = {}) {
 
       // 3. Normal store
       const summary = generateSummary(params.text, summaryMaxWords);
-      const entry = applyDynamicsDefaults({ id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, ...ownershipFields, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, validFrom: capturedValidFrom, validUntil: capturedValidUntil, embeddingTextMode: storeEmbedInput.mode, epistemicStatus: decideEpistemicStatusForCapture({ text: params.text, sourceMessageRole: "", origin, cutoffFailed: !epistemicCutoffBoot.ok }) }, Date.now(), halfLifeOverrides, { flashbulbEncodingEnabled });
+      const entry = applyDynamicsDefaults({ id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, ...ownershipFields, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, validFrom: capturedValidFrom, validUntil: capturedValidUntil, embeddingTextMode: storeEmbedInput.mode, sensitivity: classifySensitivityByRules(params.text).sensitivity, sensitivitySource: "rules", epistemicStatus: decideEpistemicStatusForCapture({ text: params.text, sourceMessageRole: "", origin, cutoffFailed: !epistemicCutoffBoot.ok }) }, Date.now(), halfLifeOverrides, { flashbulbEncodingEnabled });
       await storeDb.store(entry);
       if (riCfg.enabled) {
         setImmediate(() => {
@@ -3241,6 +3268,7 @@ export function createEngine(host, config, testOptions = {}) {
     // Operations already running are awaited first (E2 Task 3); new ones are
     // refused because `closing` is set synchronously below. Both steps stay
     // inside the budget race.
+    if (sensitivityTimer) clearInterval(sensitivityTimer);
     closing = Promise.race([
       Promise.resolve()
         .then(() => memoryOpsContext.drain())
@@ -3447,6 +3475,9 @@ export function createEngine(host, config, testOptions = {}) {
     embeddingCleanTextCfg,
     qualityWeightingCfg,
     volatileStateAnnotationCfg,
+    // 7.21.2: Herkunftsgewichtung, Vertraulichkeit.
+    contextWeightingCfg,
+    sensitivityStore,
   };
 
   // Registration views (spec 3.1: views over EngineInternals are built once,
@@ -3535,6 +3566,8 @@ export function createEngine(host, config, testOptions = {}) {
     "embeddingCleanTextCfg",
     "qualityWeightingCfg",
     "volatileStateAnnotationCfg",
+    "contextWeightingCfg",
+    "sensitivityStore",
   ];
   const recallContextExtras = {
     MAX_PROMPT_REPLY_OUTCOME_READ_BYTES,
@@ -3673,6 +3706,8 @@ export function createEngine(host, config, testOptions = {}) {
     "traceEnabled",
     "withDurableMerge",
     "workspacePolicyGuard",
+    "contextWeightingCfg",
+    "sensitivityStore",
   ], {
     KNOWLEDGE_LOCK_FILE,
     appendConflictLog,

@@ -86,6 +86,7 @@ export function autoRecallParams(ctx, {
   autoRecallPolicy = null,
   embedDeadlineAt = null,
   keywordFallback = false,
+  contextPolicy = null,
 }) {
   const {
     adaptiveBudgetCfg,
@@ -158,5 +159,7 @@ export function autoRecallParams(ctx, {
     readOnly,
     embedDeadlineAt,
     keywordFallback,
+    // 7.21.2: Herkunftsgewichtung (lib/recall-context.js), nur Auto-Recall.
+    contextPolicy,
   };
 }

@@ -18,6 +18,8 @@
  * user-bound authorization context, unlike the chat commands.
  */
 
+import { classifySensitivityByRules } from "../../lib/sensitivity.js";
+import { buildContextPolicy } from "../../lib/recall-context.js";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -135,6 +137,9 @@ export function createMemoryTools(ctx) {
     withDeterministicLlmContext,
     withDurableMerge,
     workspacePolicyGuard,
+    // 7.21.2: Herkunftsgewichtung (optional, ältere Kontexte ohne sie).
+    contextWeightingCfg = null,
+    sensitivityStore = null,
   } = ctx;
 
   return (toolCtx) => {
@@ -251,6 +256,17 @@ export function createMemoryTools(ctx) {
               memoryCtx,
               queryRefinerEnabled,
               decisionTrace: trace,
+              // 7.21.2: dieselbe Herkunftsgewichtung wie der Auto-Recall, wenn
+              // das Werkzeug in einem erkennbaren Chat aufgerufen wird.
+              contextPolicy: buildContextPolicy({
+                contextWeightingCfg,
+                sensitivityStore,
+                sessionKey: toolCtx?.sessionKey,
+                memoryCtx,
+                agentId,
+                owners: cfg?.recall?.contextWeighting?.owners,
+                hostConfig: typeof host.config === "function" ? host.config() : null,
+              }),
               retrievalLogger: (ledgerInfo) => {
                 try {
                   const neoStore = getNeoStore(toolCtx, {});
@@ -523,6 +539,7 @@ export function createMemoryTools(ctx) {
                       emotionStatus: mergedEmotionStatus,
                       validFrom: mergedValidTime.validFrom, validUntil: mergedValidTime.validUntil,
                       embeddingTextMode: mergedEmbedInput.mode,
+                      sensitivity: classifySensitivityByRules(mergeResult.mergedText).sensitivity, sensitivitySource: "rules",
                     }, Date.now(), halfLifeOverrides, { intensityHalfLifeFactor: emotionIntensityHalfLifeFactor, flashbulbEncodingEnabled });
                     return { mergedEntry, mergeResult, mergedImportance };
                   },
@@ -564,6 +581,8 @@ export function createMemoryTools(ctx) {
               emotionStatus,
               validFrom: capturedValidFrom, validUntil: capturedValidUntil,
               embeddingTextMode: storeEmbedInput.mode,
+              // 7.21.2: Vertraulichkeit nach Regeln.
+              sensitivity: classifySensitivityByRules(params.text).sensitivity, sensitivitySource: "rules",
             }, Date.now(), halfLifeOverrides, { intensityHalfLifeFactor: emotionIntensityHalfLifeFactor, flashbulbEncodingEnabled });
             await db.store(entry);
             if (toolCtx.workspaceDir) appendCurationLog(toolCtx.workspaceDir, agentId, { event: "memory.stored", timestamp: new Date().toISOString(), agentId, memoryId: entry.id, text: params.text.slice(0, 200), category, origin, reason: "stored", relatedId: null });

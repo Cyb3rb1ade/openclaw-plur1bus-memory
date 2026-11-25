@@ -53,6 +53,7 @@ import { formatTemporalContinuityContext } from "../../lib/temporal-context.js";
 import { compressMemorySlotsForPrompt, generateSummary as libGenerateSummary } from "../../lib/text-utils.js";
 import { hourInTimeZone } from "../../lib/time-window.js";
 import { describeError } from "../../lib/log-redact.js";
+import { applyContextWeightingToNeoLanes, buildContextPolicy, contextAllows } from "../../lib/recall-context.js";
 
 /**
  * Build the `before_prompt_build` recall handler from an already-resolved
@@ -136,6 +137,9 @@ export function createPromptContextAssembler(ctx) {
     warmRecallPath = null,
     workspacePolicyGuard,
     volatileStateAnnotationCfg,
+    // 7.21.2: Herkunftsgewichtung, Vertraulichkeits-Urteile.
+    contextWeightingCfg = null,
+    sensitivityStore = null,
   } = ctx;
 
   // 7.21.1: recall.keywordFallback.enabled (Standard an).
@@ -252,6 +256,18 @@ export function createPromptContextAssembler(ctx) {
       timer.end("prelude");
       return undefined;
     }
+    // 7.21.2 (recall.contextWeighting): Herkunft und Vertraulichkeit. Ohne
+    // erkennbaren Chat (CLI, Webchat, Engine ohne Sitzung) bleibt alles wie bisher.
+    const contextPolicy = buildContextPolicy({
+      contextWeightingCfg,
+      sensitivityStore,
+      sessionKey: hookCtx?.sessionKey || event?.sessionKey,
+      memoryCtx,
+      agentId: memoryCtx?.agentId || hookCtx?.agentId,
+      owners: cfg?.recall?.contextWeighting?.owners,
+      hostConfig: typeof host.config === "function" ? host.config() : null,
+    });
+    const contextCounts = { memories: null, neo: null, lens: 0, crr: 0 };
     let neoContext = "";
     let neoLanes = null;
     let neoGlobalIds = null;
@@ -312,7 +328,8 @@ export function createPromptContextAssembler(ctx) {
             neoPromptRecall,
           });
           neoGlobalIds = prelude.neoGlobalIds;
-          neoLanes = prelude.neoLanes;
+          neoLanes = contextPolicy ? applyContextWeightingToNeoLanes(prelude.neoLanes, contextPolicy).lanes : prelude.neoLanes;
+          if (contextPolicy) contextCounts.neo = applyContextWeightingToNeoLanes(prelude.neoLanes, contextPolicy).counts;
           neoRouteItems = prelude.neoItems;
           neoRouteOptions = prelude.routeOptions;
           const formatStartedAt = Date.now();
@@ -550,8 +567,10 @@ export function createPromptContextAssembler(ctx) {
             embedKnownSlow: recallPrelude.embedTimedOut === true || recallPrelude.budgetExceeded === true,
           })
           : null,
+        // 7.21.2: Herkunftsgewichtung des Erinnerungsblocks (namespace-recall).
+        contextPolicy,
       });
-      const { canonical: canonicalHits, memories: ordered, trace: pipelineTrace, degraded: identityDegraded, fallback: recallFallback } = await runMergedNamespaceRecall(
+      const { canonical: canonicalHits, memories: ordered, trace: pipelineTrace, degraded: identityDegraded, fallback: recallFallback, contextCounts: memoryContextCounts } = await runMergedNamespaceRecall(
         readDbs,
         _autoRecallBaseParams,
         trace,
@@ -565,6 +584,7 @@ export function createPromptContextAssembler(ctx) {
       );
       trace = pipelineTrace || trace;
       if (identityDegraded) innerFailure = identityDegraded;
+      if (memoryContextCounts) contextCounts.memories = memoryContextCounts;
       if (recallFallback && !innerFailure) {
         innerFailure = { reason: "embedding-unavailable", capability: "recall", detail: `keyword/recent fallback (${recallFallback.reason})` };
       }
@@ -641,6 +661,8 @@ export function createPromptContextAssembler(ctx) {
             const memory = await db.getById(memoryId);
             // Authorize the raw ownership tuple before Lens projection or quotas.
             if (!memory || !checkAccess(memoryCtx, memory).allowed) return null;
+            // 7.21.2: fremde vertrauliche/unklassifizierte Einträge nicht über die Linse.
+            if (contextPolicy && !contextAllows(memory, contextPolicy)) { contextCounts.lens++; return null; }
             return memory;
           },
         });
@@ -914,6 +936,8 @@ export function createPromptContextAssembler(ctx) {
                 // baseRecallIds steht — dazu gehörten die Echos, die der
                 // Auto-Recall gerade entfernt hat.
                 if (autoRecallPolicy?.exclusionReason(memory)) return null;
+                // 7.21.2: auch CRR holt nichts Fremdes, Vertrauliches nach.
+                if (contextPolicy && !contextAllows(memory, contextPolicy)) { contextCounts.crr++; return null; }
                 return memory;
               },
               decisionTrace: traceEnabled ? trace : null,
@@ -1096,7 +1120,10 @@ export function createPromptContextAssembler(ctx) {
 
       // Open-threads injection: load reply-outcome log fail-open, derive context once per day.
       let openThreadsContext = null;
-      if (hookCtx?.workspaceDir) {
+      // 7.21.2: offene Fäden und Traum-Echo stammen aus den eigenen Gesprächen,
+      // ohne Einstufung; in Gruppen zählen sie als fremd und unklassifiziert.
+      const inGroupChat = contextPolicy?.request?.kind === "group" || contextPolicy?.request?.kind === "channel";
+      if (hookCtx?.workspaceDir && !inGroupChat) {
         try {
           const resolvedWorkspaceDir = resolve(hookCtx.workspaceDir);
           const outcomesPath = join(resolvedWorkspaceDir, ".adaptive-learning", "reply-outcomes.jsonl");
@@ -1133,7 +1160,7 @@ export function createPromptContextAssembler(ctx) {
 
       // Dream-Echo injection (Humanization F1): 1x/Tag, Governor-gebremst.
       let dreamEchoContext = null;
-      if (hookCtx?.workspaceDir && (cfg.dreamEcho?.enabled ?? true) !== false) {
+      if (hookCtx?.workspaceDir && !inGroupChat && (cfg.dreamEcho?.enabled ?? true) !== false) {
         try {
           const echoCooldownPath = join(resolve(hookCtx.workspaceDir), ".dream-echo-shown.json");
           let echoCooldownOk = true;
@@ -1329,6 +1356,8 @@ export function createPromptContextAssembler(ctx) {
               const rerouteStartedAt = Date.now();
               const filtered = filterNeoItemsAgainstTexts(neoRouteItems, memoryTexts, dedupeOptions);
               lanesForPrompt = routeNeoRecall(filtered.items, event.prompt, neoRouteOptions);
+              // 7.21.2: das neue Routing läuft wieder durch die Herkunftsregeln.
+              if (contextPolicy) lanesForPrompt = applyContextWeightingToNeoLanes(lanesForPrompt, contextPolicy).lanes;
               const routedCount = Object.values(lanesForPrompt).reduce((sum, rows) => sum + (rows?.length || 0), 0);
               rerouteNote = ` rerouted=${routedCount} ms=${Date.now() - rerouteStartedAt}`;
             }
@@ -1339,6 +1368,7 @@ export function createPromptContextAssembler(ctx) {
           host.logger.debug(`plur1bus-neo: global dedupe skipped: ${String(dedupeErr)}`);
         }
       }
+      if (contextPolicy) logContextCounts(host.logger, agentId, contextPolicy, contextCounts);
       const blocks = [
         contextBlock("neo", neoContext, true),
         contextBlock("start", startNoticeContext, true),
@@ -1491,4 +1521,11 @@ export function crrTimeoutMs(crrCfg) {
   const raw = Number(crrCfg?.timeoutMs);
   if (!Number.isFinite(raw) || raw <= 0) return CRR_DEFAULT_TIMEOUT_MS;
   return Math.min(2_000, Math.max(10, Math.round(raw)));
+}
+
+function logContextCounts(logger, agentId, policy, counts) {
+  const fmt = (c) => (c ? `same=${c.same} foreign=${c.foreignPassed} down=${c.downweighted} filtered=${c.filteredConfidential} queued=${c.queued} capped=${c.capped}` : "-");
+  try {
+    logger.info?.(`plur1bus-context: agent=${agentId || "default"} chat=${policy.request.kind} owner=${policy.request.ownerDirect ? "yes" : "no"} memories[${fmt(counts.memories)}] neo[${fmt(counts.neo)}] lens-filtered=${counts.lens} crr-filtered=${counts.crr}`);
+  } catch { /* logging is best-effort */ }
 }

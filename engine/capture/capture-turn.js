@@ -15,6 +15,7 @@ import { deriveBudgetedSignal, isAbortError, isBudgetExhaustion, throwIfAborted 
 import { captureSourceFromProvenance, categorizeMemoryWithReason } from "../../lib/categorize.js";
 import { lightDream, writeLightDreamToVault } from "../../lib/dreaming/light-dream.js";
 import { lightDreamIdentity } from "./light-dream-identity.js";
+import { classifySensitivityByRules } from "../../lib/sensitivity.js";
 import { recordLightDreamRun } from "../../lib/dreaming/dreaming-status-provider.js";
 import { serializeEmotionalValence } from "../../lib/emotion.js";
 import { filterAlreadyEpisoded, mergeEpisodedTurnIds, resolveWatermarkAdvance } from "../../lib/episode-watermark.js";
@@ -742,6 +743,9 @@ export function createTurnCapture(ctx) {
               sourceMessageRole: p.it.role || "",
               sessionKey: captureSessionKey,
               embeddingTextMode: p.embeddingTextMode || "raw",
+              // 7.21.2: Vertraulichkeit nach Regeln (lib/sensitivity.js), kein LLM-Aufruf.
+              sensitivity: classifySensitivityByRules(p.text).sensitivity,
+              sensitivitySource: "rules",
               epistemicStatus: decideEpistemicStatusForCapture({
                 text: p.text,
                 sourceMessageRole: p.it.role || "",

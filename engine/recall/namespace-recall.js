@@ -5,6 +5,7 @@
  * imports what the host registration still uses and re-exports the public names.
  */
 
+import { applyContextWeighting } from "../../lib/recall-context.js";
 import { identityError, identityId, embedIdentityQueries, fuseIdentityResults } from "../../lib/providers/embedding-identity.js";
 import { applyAutoRecallPolicy, createAutoRecallPolicy, emitRetrievalLedger, mergeNamespaceRecallResults, namespaceTemporalFilterHit, runRecallPipeline } from "../../lib/recall-pipeline.js";
 import { applyRecallBudget, resolveRecallBudget } from "../../lib/recall-budget.js";
@@ -210,8 +211,11 @@ async function runMergedNamespaceRecall(
       }
       fusionInput.push(...namespaceResults.map(({ namespace, sourceKind, trace }) => ({ namespace, sourceKind, trace })));
     }
+    // 7.21.2 (recall.contextWeighting): Herkunft gewichten braucht Nachrücker,
+    // deshalb erst nach der Gewichtung auf topN kappen.
+    const contextPolicy = baseParams.contextPolicy?.config?.enabled ? baseParams.contextPolicy : null;
     let merged = mergeNamespaceRecallResults(fusionInput, {
-      maxOut: multiIdentity && baseParams.reranker ? 100 : baseParams.topN,
+      maxOut: (multiIdentity && baseParams.reranker) || contextPolicy ? 100 : baseParams.topN,
       canonicalOutsideLimit: baseParams.canonicalOutsideLimit === true,
       canonicalMaxItems: baseParams.canonicalMaxItems,
       dedupEnabled: baseParams.dedupEnabled,
@@ -247,6 +251,18 @@ async function runMergedNamespaceRecall(
         merged.degraded = { reason: "reranker-unavailable", capability: "recall", detail: "rank fusion used after reranker failure" };
         trySafeWarn(baseParams.logger, "namespace-recall.reranker", error);
       } finally { controller.abort(); }
+    }
+    if (contextPolicy) {
+      const keep = Math.max(0, (baseParams.topN ?? 12) - (baseParams.canonicalOutsideLimit === true ? 0 : merged.canonical.length));
+      const weighted = applyContextWeighting(merged.memories, {
+        request: contextPolicy.request,
+        config: contextPolicy.config,
+        sensitivityLookup: contextPolicy.sensitivityLookup,
+        enqueueClassification: contextPolicy.enqueueClassification,
+        limit: keep,
+      });
+      merged.memories = weighted.results.slice(0, keep);
+      merged.contextCounts = weighted.counts;
     }
     // Mit canonicalOutsideLimit (automatischer Recall, 7.20.6) zaehlen die
     // kanonischen Treffer auch hier nicht gegen topN.
