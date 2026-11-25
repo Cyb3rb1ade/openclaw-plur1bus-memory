@@ -32,6 +32,7 @@ import { buildEdgesForSession, buildEpisodeAnchorEdges, createGraphMetrics, extr
 import { resolveMemoryRequestContext } from "../../lib/memory-request-context.js";
 import { shouldTriggerReflection } from "../../lib/meta-cognition.js";
 import { createNeoStore, isInjectedContextText, turnEventsFromMessages, turnIdentityParams } from "../../lib/neo-arch.js";
+import { graphEdgeExistenceIndex } from "../../lib/graph-edge-index.js";
 import { planReminderExtraction } from "../../lib/reminder-extraction.js";
 import { saveReminder } from "../../lib/reminder-store.js";
 import { classifyCaptureSource, isBackgroundTurn, shouldSkipAutoCaptureForInternalTurn } from "../../lib/runtime-scheduler.js";
@@ -313,7 +314,15 @@ export function createTurnCapture(ctx) {
             runner: event?.runner || event?.provider || "",
             background,
           };
-          neoStore.recordHook("agent_end", neoHookMeta);
+          // 7.21.4: Zaehler ohne synchrone Sperre im Main-Thread (wie
+          // before_prompt_build seit 7.12.30); das Watermark weiter unten
+          // bleibt synchron, der naechste Lauf liest es.
+          if (typeof neoStore.recordHookAsync === "function") {
+            neoStore.recordHookAsync("agent_end", neoHookMeta)
+              .catch((hookErr) => host.logger.debug(`plur1bus-neo: agent_end hook record skipped: ${String(hookErr?.message || hookErr)}`));
+          } else {
+            neoStore.recordHook("agent_end", neoHookMeta);
+          }
           const neoEvent = {
             workspaceKey: neoWorkspaceKey,
             workspaceId: snapshotNeoString(event?.workspaceId),
@@ -1194,9 +1203,17 @@ export function createTurnCapture(ctx) {
               ownerUserId: row.ownerUserId || "",
             }));
 
-            // Lade existierende Edges für Deduplizierung
-            const existingEdges = neoStore.readGraphEdges(10_000);
-            const { adjacency: existingAdj } = readBoundGraph(existingEdges);
+            // Lade existierende Edges für Deduplizierung. 7.21.4: Index über
+            // dieselben letzten 10 000 Zeilen, liest nur Angehängtes nach
+            // (vorher 0,3-0,5 s synchron je Capture); mit Legacy-Graph wie bisher.
+            const edgeIndex = graphEdgeExistenceIndex(neoStore, 10_000);
+            let edgeExists;
+            if (edgeIndex) {
+              edgeExists = (edge) => edgeIndex.has(edge.source, edge.target, edge.type);
+            } else {
+              const { adjacency: existingAdj } = readBoundGraph(neoStore.readGraphEdges(10_000));
+              edgeExists = (edge) => Boolean(existingAdj.get(edge.source)?.find(e => e.target === edge.target && e.type === edge.type));
+            }
 
             // Lade recent existing memories für vollständigen Edge-Aufbau
             let recentExisting = [];
@@ -1244,12 +1261,7 @@ export function createTurnCapture(ctx) {
             const combinedEdges = [...allEdges, ...episodeEdges];
 
             // Dedupliziere gegen existierende Edges
-            const newUniqueEdges = combinedEdges.filter(edge => {
-              const existing = existingAdj.get(edge.source)?.find(e =>
-                e.target === edge.target && e.type === edge.type
-              );
-              return !existing;
-            });
+            const newUniqueEdges = combinedEdges.filter(edge => !edgeExists(edge));
 
             if (newUniqueEdges.length > 0) {
               neoStore.appendGraphEdges(newUniqueEdges);
