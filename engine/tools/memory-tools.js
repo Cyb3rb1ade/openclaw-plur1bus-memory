@@ -803,12 +803,25 @@ export function createMemoryTools(ctx) {
                   // written, so this is the only exclusion point available.
                   pendingTexts = rows
                     .filter(r => normalizeEpistemicStatus(r.epistemicStatus) !== "invalidated")
+                    // 7.21.2: KNOWLEDGE.md wird vom Host in jede Sitzung
+                    // eingespielt, auch in Gruppen. Vertrauliches (nach Regeln,
+                    // auch Altbestand) kommt dort nicht hinein; es bleibt in der Warteschlange.
+                    .filter(r => classifySensitivityByRules(r.text).sensitivity !== "confidential" && r.sensitivity !== "confidential")
                     .map(r => ({ id: r.id, text: r.text, category: r.category || "fact", scope: r.scope || "agent-private", importance: r.importance ?? 0.5, pendingKey: keyById.get(r.id) }));
                   // Drop what can never be promoted (invalidated or gone from
                   // the table). Only the ids this query actually asked for —
                   // everything else stays queued. Without this the entries
                   // pile up forever and keep the maintenance nudge counting
                   // work that no longer exists.
+                  // 7.21.2: Vertrauliches kann nie in KNOWLEDGE.md; aus der Warteschlange nehmen.
+                  const confidentialPendingKeys = rows
+                    .filter(r => classifySensitivityByRules(r.text).sensitivity === "confidential" || r.sensitivity === "confidential")
+                    .map(r => keyById.get(r.id))
+                    .filter(Boolean);
+                  if (confidentialPendingKeys.length > 0) {
+                    removeKnowledgePending(toolCtx.workspaceDir, confidentialPendingKeys);
+                    host.logger.info(`memory-lancedb-namespaced: knowledge_update — ${confidentialPendingKeys.length} vertrauliche Einträge nicht nach KNOWLEDGE.md (agent=${agentId})`);
+                  }
                   const stalePendingKeys = selectStalePendingKeys({ pending: agentPending, rows, queriedIds });
                   if (stalePendingKeys.length > 0) {
                     removeKnowledgePending(toolCtx.workspaceDir, stalePendingKeys);
