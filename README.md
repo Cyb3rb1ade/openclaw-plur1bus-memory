@@ -35,6 +35,20 @@ separate login); reach it through however you already reach your Gateway
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
 
+### New in v7.21.2 — memories stay in their chat, confidential ones never leave it
+
+- **Origin weighting** (`recall.contextWeighting`): the same chat (whole
+  group or whole direct chat) counts fully; group knowledge in a direct chat
+  ×0.85, another group ×0.5, unknown ×0.5, a direct chat's memory elsewhere
+  ×0.35; at most 5 foreign memories per block.
+- **Confidentiality**: new columns `sensitivity`/`sensitivitySource`
+  (banal, personal, confidential), set by rules at capture and by the hourly
+  emotion refine. Foreign confidential or unclassified memories never appear;
+  in groups a foreign memory also needs an LLM verdict (queued in the
+  background). `scripts/sensitivity-backfill.mjs` classifies legacy rows.
+- **ACL fixes**: Neo `workspace_shared` records are visible to their own
+  workspace again; Telegram DM threads keep the sender proof.
+
 ### New in v7.21.1 — the recall keeps its budget, and the block gets leaner
 
 - **Hard budget for the Neo prelude.** It may use at most
