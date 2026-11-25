@@ -256,7 +256,8 @@ describe("runRecallPipeline — embeddingQuery", () => {
 describe("Verdrahtung in engine/", () => {
   it("Spalte embeddingTextMode: valueSql 'raw', Bootstrap-Zeile, Default im Schreibpfad", () => {
     assert.match(source, /\{ name: 'embeddingTextMode', valueSql: "'raw'" \}/);
-    assert.match(source, /sessionKey: "",\n\s*embeddingTextMode: "raw",\n\s*\},\n\s*\]\), "MemoryDB\.createTable"/);
+    // 7.21.2: weitere Spalten (sensitivity …) dürfen folgen.
+    assert.match(source, /sessionKey: "",\n\s*embeddingTextMode: "raw",\n(?:\s*\w+: "[^"\n]*",\n)*\s*\},\n\s*\]\), "MemoryDB\.createTable"/);
     assert.match(source, /if \(normalized\.embeddingTextMode == null \|\| normalized\.embeddingTextMode === ""\) normalized\.embeddingTextMode = "raw";/);
   });
 

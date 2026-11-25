@@ -98,6 +98,9 @@ const TABLE_NAME = "memories";
       "sessionKey",
       // 7.20.10: Text der Einbettung (raw/clean-v1).
       "embeddingTextMode",
+      // 7.21.2: Vertraulichkeit ('' = nicht eingestuft) und Herkunft des Urteils.
+      "sensitivity",
+      "sensitivitySource",
     ];
 
     for (const col of v6Columns) {
@@ -134,6 +137,8 @@ const TABLE_NAME = "memories";
     assert.equal(typeof oldRow.validUntil, "bigint", "migrated LanceDB int64 validUntil must exercise the native BigInt path");
     assert.strictEqual(oldRow.sessionKey, "", "default sessionKey = empty (Bestand: keine Sitzung bekannt)");
     assert.strictEqual(oldRow.embeddingTextMode, "raw", "default embeddingTextMode = raw (Bestand: Vektor aus dem gespeicherten Text)");
+    assert.strictEqual(oldRow.sensitivity, "", "default sensitivity = empty (Bestand: nicht eingestuft)");
+    assert.strictEqual(oldRow.sensitivitySource, "", "default sensitivitySource = empty");
 
     // 6. Verify idempotency: init() again should not throw
     await memoryDb.init();
@@ -216,6 +221,8 @@ const TABLE_NAME = "memories";
         chunkGroupId: "",
         sessionKey: "",
         embeddingTextMode: "raw",
+        sensitivity: "",
+        sensitivitySource: "",
       },
     ]);
 

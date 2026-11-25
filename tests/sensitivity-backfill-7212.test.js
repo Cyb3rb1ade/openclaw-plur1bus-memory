@@ -4,9 +4,9 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync } from "node:fs";
 import { join } from "node:path";
+import { makeTempDir } from "./helpers/temp-dir.js";
 import { createRequire } from "node:module";
 
 import { backfillTable } from "../scripts/sensitivity-backfill.mjs";
@@ -16,7 +16,7 @@ const lancedb = require("@lancedb/lancedb");
 
 describe("sensitivity backfill", () => {
   it("dry run counts, apply writes only unclassified rows, text untouched", async (t) => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-sbf-"));
+    const dir = makeTempDir("plur1bus-sbf-");
     t.after(() => rmSync(dir, { recursive: true, force: true }));
     const db = await lancedb.connect(dir);
     const table = await db.createTable("memories", [
@@ -37,7 +37,7 @@ describe("sensitivity backfill", () => {
   });
 
   it("refuses a table without the columns", async (t) => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-sbf-"));
+    const dir = makeTempDir("plur1bus-sbf-");
     t.after(() => rmSync(dir, { recursive: true, force: true }));
     const table = await (await lancedb.connect(dir)).createTable("memories", [{ id: "a", text: "x" }]);
     await assert.rejects(backfillTable(table), /no sensitivity columns/);

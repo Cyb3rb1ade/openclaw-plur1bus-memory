@@ -6,9 +6,9 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 import {
   applyContextWeighting,
@@ -163,7 +163,7 @@ describe("owner DM and policy", () => {
 
 describe("sensitivity queue", () => {
   it("queues once, classifies in one LLM call per batch, persists verdicts in the sidecar only", async (t) => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-sens-"));
+    const dir = makeTempDir("plur1bus-sens-");
     t.after(() => rmSync(dir, { recursive: true, force: true }));
     const store = createSensitivityStore({ baseDir: dir });
     assert.equal(store.enqueue({ id: "a", text: "Eva hat Geburtstag" }), true);
