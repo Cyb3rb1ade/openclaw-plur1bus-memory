@@ -512,7 +512,7 @@ test("episode enrichment receives only the episode owner descriptor", async () =
   assert.equal(calls[0].resultCacheContext.purpose, "episode-analysis");
 });
 
-test("tool and auto-recall query summaries carry global agent and scheduler context", async (t) => {
+test("tool query summary carries global agent context; auto-recall shortens instead (7.21.3)", async (t) => {
   const baseDbPath = makeTempDir("plur1bus-global-query-routes-");
   t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
   const originalEmbedPassage = LocalTransformersEmbeddingProvider.prototype.embedPassage;
@@ -562,13 +562,12 @@ test("tool and auto-recall query summaries carry global agent and scheduler cont
   await api._emit("before_prompt_build", autoTurn.event, autoTurn.ctx);
 
   const summaryCalls = runtimeCalls.filter((call) => call.purpose === "recall-query-summary");
-  assert.equal(summaryCalls.length, 2);
+  // 7.21.3: only memory_recall summarizes; the automatic recall embeds a
+  // head/tail excerpt (shortenAutoRecallQuery) and never waits for an LLM.
+  assert.equal(summaryCalls.length, 1);
   // The host resolves the agent itself; plugins must not send one.
   assert.equal(Object.hasOwn(summaryCalls[0], "agentId"), false);
-  assert.equal(Object.hasOwn(summaryCalls[1], "agentId"), false);
-  assert.equal(summaryCalls[1].signal instanceof AbortSignal, true);
   assert.equal(Object.hasOwn(summaryCalls[0], "model"), false);
-  assert.equal(Object.hasOwn(summaryCalls[1], "model"), false);
 });
 
 test("verified auto-recall tickets and /memory compose authorized shared pools", async (t) => {
