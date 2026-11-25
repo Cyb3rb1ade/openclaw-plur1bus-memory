@@ -278,8 +278,9 @@ describe("Verdrahtung in engine/", () => {
   it("Auto-Recall: Anfrage ohne Hüllen für LanceDB und Neo, nur dort", () => {
     // main: autoRecallParams (per-turn and warm path) sets embeddingQuery; the
     // per-turn and the warm path hand the same text to readNeoPrelude.
-    assert.equal((source.match(/embeddingQuery: cleanQueryForEmbedding\(query, embeddingCleanTextCfg\),/g) || []).length, 1);
-    assert.equal((source.match(/embeddingQuery: cleanQueryForEmbedding\((?:event\.prompt|prompt), embeddingCleanTextCfg\),/g) || []).length, 2);
+    // 7.21.3: shortened to at most 6 000 characters (shortenAutoRecallQuery).
+    assert.equal((source.match(/embeddingQuery: shortenAutoRecallQuery\(cleanQueryForEmbedding\(query, embeddingCleanTextCfg\)\),/g) || []).length, 1);
+    assert.equal((source.match(/embeddingQuery: shortenAutoRecallQuery\(cleanQueryForEmbedding\((?:event\.prompt|prompt), embeddingCleanTextCfg\)\),/g) || []).length, 2);
     assert.match(source, /const neoEmbedQuery = typeof embeddingQuery === "string" && embeddingQuery\.trim\(\) \? embeddingQuery : prompt;/);
     assert.doesNotMatch(readFileSync(join(root, "engine/tools/memory-tools.js"), "utf8"), /embeddingQuery/, "memory_recall/memory_search embed the query as before");
     assert.match(source, /const embeddingCleanTextCfg = resolveEmbeddingCleanTextConfig\(cfg\.embedding\?\.cleanText\);/);

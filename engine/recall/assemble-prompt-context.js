@@ -33,7 +33,7 @@ import { findBestPattern } from "../../lib/pattern-surface.js";
 import { addTraceDecision, addTraceStoreDecision, attachTraceToMemory, createRecallDecisionTrace } from "../../lib/recall-decision-trace.js";
 import { createRecallPhaseTimer } from "../../lib/recall-phase-timer.js";
 import { computeUseAssociative, createAutoRecallPolicy, normalizeMemorySessionKey, resolveSessionEchoCutoff } from "../../lib/recall-pipeline.js";
-import { cleanQueryForEmbedding } from "../../lib/embedding-text.js";
+import { cleanQueryForEmbedding, shortenAutoRecallQuery } from "../../lib/embedding-text.js";
 import { collectRenderedMemoryIds, formatRelevantMemoriesContext, resolveFadedThreshold } from "../../lib/relevant-memory-context.js";
 import { formatReminderNudge } from "../../lib/reminder-nudge.js";
 import { readPendingReminders, writePendingReminders } from "../../lib/reminder-pending.js";
@@ -41,7 +41,7 @@ import { listDueReminders, presentReminder } from "../../lib/reminder-store.js";
 import { readReplyOutcomeLog, recordPendingReplyOutcome, sessionKeyFrom } from "../../lib/reply-outcome-tracking.js";
 import { resolveCompactedAt } from "../checkpoint/checkpoint-store.js";
 import { emitEngineEvent } from "../events.js";
-import { readNeoPrelude } from "./neo-prelude.js";
+import { neoPreludeBudgetMs, readNeoPrelude } from "./neo-prelude.js";
 import { ABORTED, contextBlock, copyRecallResult, recallResult } from "./recall-result.js";
 import { autoRecallParams, autoRecallPolicyOptionsFor } from "./recall-params.js";
 import { isBackgroundTurn, shouldSkipAutoRecallForInternalTurn } from "../../lib/runtime-scheduler.js";
@@ -53,7 +53,7 @@ import { formatTemporalContinuityContext } from "../../lib/temporal-context.js";
 import { compressMemorySlotsForPrompt, generateSummary as libGenerateSummary } from "../../lib/text-utils.js";
 import { hourInTimeZone } from "../../lib/time-window.js";
 import { describeError } from "../../lib/log-redact.js";
-import { applyContextWeightingToNeoLanes, buildContextPolicy, contextAllows } from "../../lib/recall-context.js";
+import { applyContextWeightingToNeoLanes, buildContextPolicy, contextAllows, isSubagentCompletionTurn } from "../../lib/recall-context.js";
 
 /**
  * Build the `before_prompt_build` recall handler from an already-resolved
@@ -266,6 +266,8 @@ export function createPromptContextAssembler(ctx) {
       agentId: memoryCtx?.agentId || hookCtx?.agentId,
       owners: cfg?.recall?.contextWeighting?.owners,
       hostConfig: typeof host.config === "function" ? host.config() : null,
+      // 7.21.3: heartbeat/cron and subagent completions have no inbound message.
+      backgroundTurn: background || isSubagentCompletionTurn(event, hookCtx),
     });
     const contextCounts = { memories: null, neo: null, lens: 0, crr: 0 };
     let neoContext = "";
@@ -320,7 +322,7 @@ export function createPromptContextAssembler(ctx) {
             runNeoGlobalSearch,
             logger: host.logger,
             prelude: recallPrelude,
-            embeddingQuery: cleanQueryForEmbedding(event.prompt, embeddingCleanTextCfg),
+            embeddingQuery: shortenAutoRecallQuery(cleanQueryForEmbedding(event.prompt, embeddingCleanTextCfg)),
             sessionEcho: {
               sessionKey: normalizeMemorySessionKey(hookCtx?.sessionKey || event?.sessionKey),
               since: resolveSessionEchoCutoff(event?.messages, { now: Date.now() }).since,
@@ -1477,21 +1479,8 @@ export function createPromptContextAssembler(ctx) {
   };
 }
 
-/**
- * 7.21.1: Budget of the Neo prelude, counted from the start of the recall:
- * at most `neo.recall.global.embedTimeoutMs` and at most a quarter of
- * `runtime.recallTimeoutMs` (never below 250 ms).
- *
- * @param {number} recallTimeoutMs The scheduler's hard recall budget.
- * @param {number} embedTimeoutMs The configured Neo embedding budget.
- * @returns {number} milliseconds
- */
-export function neoPreludeBudgetMs(recallTimeoutMs, embedTimeoutMs) {
-  const budget = Number.isFinite(recallTimeoutMs) && recallTimeoutMs > 0 ? recallTimeoutMs : 12_000;
-  const share = Math.max(250, Math.round(budget * 0.25));
-  const embed = Number.isFinite(embedTimeoutMs) && embedTimeoutMs > 0 ? embedTimeoutMs : 4_000;
-  return Math.min(embed, share);
-}
+// 7.21.3: neoPreludeBudgetMs lives in neo-prelude.js (the warm path uses it too).
+export { neoPreludeBudgetMs };
 
 /**
  * 7.21.1: Latest instant the store recall waits for its query vector. A
@@ -1531,6 +1520,6 @@ export function crrTimeoutMs(crrCfg) {
 function logContextCounts(logger, agentId, policy, counts) {
   const fmt = (c) => (c ? `same=${c.same} foreign=${c.foreignPassed} down=${c.downweighted} filtered=${c.filteredConfidential} queued=${c.queued} capped=${c.capped}` : "-");
   try {
-    logger.info?.(`plur1bus-context: agent=${agentId || "default"} chat=${policy.request.kind} owner=${policy.request.ownerDirect ? "yes" : "no"} memories[${fmt(counts.memories)}] neo[${fmt(counts.neo)}] lens-filtered=${counts.lens} crr-filtered=${counts.crr}`);
+    logger.info?.(`plur1bus-context: agent=${agentId || "default"} chat=${policy.request.kind} owner=${policy.request.ownerDirect ? (policy.request.backgroundTurn ? "yes(background)" : "yes") : "no"} memories[${fmt(counts.memories)}] neo[${fmt(counts.neo)}] lens-filtered=${counts.lens} crr-filtered=${counts.crr}`);
   } catch { /* logging is best-effort */ }
 }

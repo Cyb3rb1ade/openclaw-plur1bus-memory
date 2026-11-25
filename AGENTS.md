@@ -99,6 +99,10 @@ These features sit **after** normal recall and only append results. They must ne
   Applied in `runMergedNamespaceRecall` (before the topN cap), to the Neo
   lanes, CRR, Semantic Lens and `memory_recall`. Never in dreaming, skill
   mining, consolidation or promotion.
+- 7.21.3: `isOwnerDirectChat` accepts a background turn (`isBackgroundTurn`
+  or `isSubagentCompletionTurn`) without a proved sender, only in the DM whose
+  peer is the configured owner. Never widen this to turns with an inbound
+  message or to `sessions_send`.
 - Foreign + (confidential or unclassified) never passes; in groups foreign
   needs an LLM verdict (`lib/sensitivity-queue.js`, sidecar only — never
   write memory rows from the queue).

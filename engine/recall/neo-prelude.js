@@ -13,6 +13,22 @@ import { NEO_AUTO_RECALL_LANES, NEO_DEFAULT_MAX_REFLECTIONS, routeNeoRecall } fr
 import { describeError } from "../../lib/log-redact.js";
 
 /**
+ * 7.21.1: Budget of the Neo prelude, counted from the start of the recall:
+ * at most `neo.recall.global.embedTimeoutMs` and at most a quarter of
+ * `runtime.recallTimeoutMs` (never below 250 ms).
+ *
+ * @param {number} recallTimeoutMs The scheduler's hard recall budget.
+ * @param {number} embedTimeoutMs The configured Neo embedding budget.
+ * @returns {number} milliseconds
+ */
+export function neoPreludeBudgetMs(recallTimeoutMs, embedTimeoutMs) {
+  const budget = Number.isFinite(recallTimeoutMs) && recallTimeoutMs > 0 ? recallTimeoutMs : 12_000;
+  const share = Math.max(250, Math.round(budget * 0.25));
+  const embed = Number.isFinite(embedTimeoutMs) && embedTimeoutMs > 0 ? embedTimeoutMs : 4_000;
+  return Math.min(embed, share);
+}
+
+/**
  * Read the neo candidates for one prompt and route them into lanes. Fills
  * the prelude's `windowMs`, `embedMs`, `embedTimedOut`, `globalMs` and
  * `lanesMs` fields as it goes.

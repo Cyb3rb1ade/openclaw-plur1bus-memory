@@ -35,6 +35,14 @@ separate login); reach it through however you already reach your Gateway
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
 
+### New in v7.21.3 — background turns and long prompts
+
+- Heartbeat, cron and subagent completions in the owner's direct chat count
+  as the owner's chat (no proved sender needed for these turns only).
+- The automatic recall embeds at most 6,000 characters of a long prompt
+  (head and tail) instead of waiting for an LLM summary; the warm path has
+  the same Neo prelude budget as the per-turn recall.
+
 ### New in v7.21.2 — memories stay in their chat, confidential ones never leave it
 
 - **Origin weighting** (`recall.contextWeighting`): the same chat (whole
