@@ -328,8 +328,13 @@ export function createPromptContextAssembler(ctx) {
             neoPromptRecall,
           });
           neoGlobalIds = prelude.neoGlobalIds;
-          neoLanes = contextPolicy ? applyContextWeightingToNeoLanes(prelude.neoLanes, contextPolicy).lanes : prelude.neoLanes;
-          if (contextPolicy) contextCounts.neo = applyContextWeightingToNeoLanes(prelude.neoLanes, contextPolicy).counts;
+          if (contextPolicy) {
+            const weightedNeo = applyContextWeightingToNeoLanes(prelude.neoLanes, contextPolicy);
+            neoLanes = weightedNeo.lanes;
+            contextCounts.neo = weightedNeo.counts;
+          } else {
+            neoLanes = prelude.neoLanes;
+          }
           neoRouteItems = prelude.neoItems;
           neoRouteOptions = prelude.routeOptions;
           const formatStartedAt = Date.now();

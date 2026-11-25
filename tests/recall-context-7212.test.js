@@ -181,6 +181,17 @@ describe("sensitivity queue", () => {
     assert.doesNotMatch(readFileSync(join(dir, "_sensitivity", "verdicts.jsonl"), "utf8"), /Geburtstag|Diagnose/, "no memory text on disk");
   });
 
+  it("one batch holds one agent's items, the call gets that agent", async () => {
+    const store = createSensitivityStore({ baseDir: "" });
+    store.enqueue({ id: "m1", text: "a b" }, "main");
+    store.enqueue({ id: "b1", text: "c d" }, "bernhardine");
+    store.enqueue({ id: "m2", text: "e f" }, "main");
+    const seen = [];
+    await store.processBatch({ complete: async (messages, agentId) => { seen.push([agentId, messages[1].content.match(/\[(\w+)\]/g).join(",")]); return "{}"; } });
+    assert.deepEqual(seen, [["main", "[m1],[m2]"]]);
+    assert.equal(store.pending(), 1);
+  });
+
   it("a failed call keeps the queue", async () => {
     const store = createSensitivityStore({ baseDir: "" });
     store.enqueue({ id: "a", text: "x y" });

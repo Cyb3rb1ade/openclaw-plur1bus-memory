@@ -31,6 +31,8 @@ describe("workspaceKeyFromDirStrict", () => {
     assert.equal(key("/srv/oc/workspace-bernhardine"), "bernhardine");
     assert.equal(key("/srv/oc/workspace-bernhardine/"), "bernhardine");
     assert.equal(key("/srv/oc/workspace-unknown"), "", "no basename guess");
+    assert.equal(key("/tmp/elsewhere/workspace"), "", "a foreign directory with the same name is not main");
+    assert.equal(key("/tmp/elsewhere/workspace-bernhardine"), "");
     assert.equal(key(""), "");
     assert.equal(key(undefined), "");
   });

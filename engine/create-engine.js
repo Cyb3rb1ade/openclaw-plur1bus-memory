@@ -917,10 +917,10 @@ export function createEngine(host, config, testOptions = {}) {
       if (sensitivityStore.pending() === 0) return;
       sensitivityStore.processBatch({
         batchSize: cfg.recall?.contextWeighting?.classifier?.batchSize,
-        complete: (messages) => callLlm(messages, {
+        complete: (messages, agentId) => callLlm(messages, {
           ...sensitivityLlmCfg,
           maxTokens: 800,
-          callContext: { agentId: "plur1bus-sensitivity", purpose: "sensitivity-classification" },
+          callContext: { agentId: agentId || "main", purpose: "sensitivity-classification" },
         }),
       }).catch((error) => host.logger.warn?.(`plur1bus-sensitivity: batch failed: ${describeError(error)}`));
     }, SENSITIVITY_INTERVAL_MS)
