@@ -292,6 +292,8 @@ export async function runScenario(scenario, { freezeClock: useFrozenClock = true
         createdAt: FROZEN_NOW - (memory.ageDays ?? 1) * 86_400_000,
         storedBy: scenario.agentId,
         workspaceKey: scenario.workspaceKey,
+        // 7.21.2: optional row fields (origin, sessionKey, sensitivity …).
+        ...(memory.fields || {}),
       });
     }
     const api = makeApi(baseConfig(baseDbPath, scenario.config));
