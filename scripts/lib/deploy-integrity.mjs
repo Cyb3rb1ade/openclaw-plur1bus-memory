@@ -227,6 +227,7 @@ export const DEPLOY_FILES = [
   "lib/memory-doctor.js",
   "lib/memory-dynamics.js",
   "lib/memory-fact-quality.js",
+  "lib/graph-edge-index.js",
   "lib/memory-graph.js",
   "lib/memory-merge-safety.js",
   "lib/memory-request-context.js",
