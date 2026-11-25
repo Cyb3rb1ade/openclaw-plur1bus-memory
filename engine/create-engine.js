@@ -67,7 +67,7 @@ import { appendTombstoneToRegistry, backfillCommittedTombstone, buildTombstone, 
 import { decideEpistemicStatusForCapture } from "../lib/epistemic-capture.js";
 import { ensureEpistemicCutoff } from "../lib/epistemic-cutoff.js";
 import { addTraceStoreDecision, createRecallDecisionTrace, textPreview } from "../lib/recall-decision-trace.js";
-import { NEO_DEFAULT_MAX_REFLECTIONS, buildNeoWorkspaceAliases, createNeoStore, neoSessionKeysFromContext, resolveNeoLaneMinRelevance, searchNeoCandidatesGlobal, workspaceKeyFromContext } from "../lib/neo-arch.js";
+import { NEO_DEFAULT_MAX_REFLECTIONS, buildNeoWorkspaceAliases, createNeoStore, neoSessionKeysFromContext, resolveNeoLaneMinRelevance, searchNeoCandidatesGlobal, workspaceKeyFromContext, workspaceKeyFromDirStrict } from "../lib/neo-arch.js";
 import { resolveQualityWeightingConfig } from "../lib/recall-quality.js";
 import { prepareEmbeddingText, resolveEmbeddingCleanTextConfig } from "../lib/embedding-text.js";
 import { resolveVolatileStateAnnotationConfig } from "../lib/temporal-provenance.js";
@@ -1274,8 +1274,14 @@ export function createEngine(host, config, testOptions = {}) {
   const neoRequester = (ctx = {}, event = {}) => ({
     requesterAgentId: [ctx?.agentId, event?.agentId].find(value => typeof value === "string" && value.trim()) || "",
     // ACL binding may not inherit routing defaults; an omitted trusted binding fails closed.
+    // 7.21.2: The host's hooks carry no workspaceKey, so workspace_shared
+    // records were invisible even to their own main agent. Without an
+    // explicit key the requester's key comes from its workspace directory,
+    // through configured paths/aliases only (workspaceKeyFromDirStrict).
     requesterWorkspaceKey: [ctx?.workspaceKey, event?.workspaceKey, ctx?.workspaceId, event?.workspaceId]
-      .find(value => typeof value === "string" && value.trim()) || "",
+      .find(value => typeof value === "string" && value.trim())
+      || workspaceKeyFromDirStrict([ctx?.workspaceDir, event?.workspaceDir].find(value => typeof value === "string" && value.trim()) || "", { workspaceAliases: neoWorkspaceAliases, rootDir: neoRoot })
+      || "",
     requesterOwnerId: [ctx?.ownerId, event?.ownerId, ctx?.userId, event?.userId].find(value => typeof value === "string" && value.trim()) || "",
   });
   const snapshotNeoContent = (content) => {
