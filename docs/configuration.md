@@ -336,8 +336,10 @@ setzt ihn als `model`/`local.model` und BGE als kontrollierten Fallback:
 
 ### Cohere-Reranker: Modell und Kostenbremse (7.20.10)
 
-`reranker.model` wählt das Cohere-Modell; Default bleibt `rerank-v3.5`.
-Rerank 4 und 5 (`rerank-v5.0-fast`, `rerank-v5.0-pro`, 32k Kontext) laufen über
+`reranker.model` wählt das Cohere-Modell; seit 7.21.1 ist der Default
+`rerank-v5.0-fast` (vorher `rerank-v3.5`). Wer v3.5 behalten will, setzt
+`reranker.model: "rerank-v3.5"`. Rerank 4 und 5 (`rerank-v5.0-fast`,
+`rerank-v5.0-pro`, 32k Kontext) laufen über
 denselben v2-Aufruf (`model`, `query`, `documents`, `top_n`). `return_documents`
 schickt PLUR1BUS seit 7.20.10 nicht mehr; es gehört nicht zur v2-Schnittstelle.
 
@@ -345,8 +347,11 @@ schickt PLUR1BUS seit 7.20.10 nicht mehr; es gehört nicht zur v2-Schnittstelle.
 |-----|-----|---------|--------------|
 | `maxDocChars` | `integer` | `1400` | Jedes Dokument wird vor dem Senden auf so viele Zeichen gekürzt, abzüglich dessen, was die Anfrage über 400 Zeichen hinaus belegt, nie unter 300. `0` schaltet die Kürzung ab, Werte von 1 bis 99 zählen als 100. |
 
-Cohere rechnet eine Suche als bis zu 100 Dokumente ab; ein Dokument, das mit
-der Anfrage über 500 Tokens kommt, wird geteilt und zählt mehrfach. Gekürzt
+Abrechnung: `rerank-v3.5` zählt Suchen (bis zu 100 Dokumente je Suche; ein
+Dokument, das mit der Anfrage über 500 Tokens kommt, wird geteilt und zählt
+mehrfach). Rerank 5 (`rerank-v5.0-fast`, Standard seit 7.21.1) rechnet nach
+Eingabe-Tokens ab (`meta.billed_units.input_tokens`); hier begrenzt
+`maxDocChars` die Kosten direkt. Gekürzt
 wird nur der Text an Cohere; Recall-Ausgabe und lokaler Rückfall-Reranker
 sehen den vollen Text. Die Anfrage selbst wird nicht gekürzt: Ist sie allein
 länger als etwa 1800 Zeichen, liegt jedes Paar trotzdem über 500 Tokens.
@@ -644,7 +649,7 @@ Vorgaben, die alle überschreibbar sind; `remote` hat keine Vorgaben.
 |---|---|
 | `baseUrl` | Basis-URL; Ziel ist `{baseUrl}/rerank`, außer die URL endet schon auf `/rerank`. Vorgaben: `https://api.cohere.com/v2`, `https://api.jina.ai/v1`, `https://api.voyageai.com/v1`; bei `remote` Pflicht. Keine Zugangsdaten in der URL. |
 | `protocol` | `cohere`/`jina` (`{model, query, documents, top_n}` → `results`; Cohere, Jina, vLLM, Infinity, LocalAI), `voyage` (`top_k` → `data`), `tei` (`{query, texts}` → `[{index, score}]`). Vorgabe aus dem Preset, bei `remote` `cohere`. |
-| `model` | Vorgaben `rerank-v3.5`, `jina-reranker-v2-base-multilingual`, `rerank-2.5`; bei `remote` ohne Vorgabe (Server-Standard). |
+| `model` | Vorgaben `rerank-v5.0-fast` (seit 7.21.1, vorher `rerank-v3.5`), `jina-reranker-v2-base-multilingual`, `rerank-2.5`; bei `remote` ohne Vorgabe (Server-Standard). |
 | `apiKeyRef` / `apiKeyEnv` / `apiKey` | Schlüsselquelle, Reihenfolge wie genannt, danach `COHERE_API_KEY`/`JINA_API_KEY`/`VOYAGE_API_KEY`. `remote` darf ohne Schlüssel laufen. |
 | `maxDocuments` / `maxRequestBytes` / `maxResponseBytes` | Grenzen pro Aufruf, Vorgaben 1000 / 4 MiB / 1 MiB. |
 

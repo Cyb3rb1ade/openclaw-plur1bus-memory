@@ -91,6 +91,14 @@ These features sit **after** normal recall and only append results. They must ne
   `engine/capture/light-dream-identity.js`); never derive a user binding from
   a raw hook `senderId`.
 
+### Cohere reranker default (7.21.1)
+
+`DEFAULT_COHERE_RERANK_MODEL` (`lib/providers/dimensions.js`) is
+`rerank-v5.0-fast`, billed per input token (`meta.billed_units.input_tokens`),
+not per search; `reranker.maxDocChars` bounds the cost directly. Configs that
+set `reranker.model: "rerank-v3.5"` keep v3.5. Bench runs name the model
+explicitly (`--rerank-model`); never measure with gateway keys.
+
 ### Graph-link managed blocks / semanticDiscovery
 
 - Record notes contain an idempotent managed block (`id="graph-links"`) with wikilinks.

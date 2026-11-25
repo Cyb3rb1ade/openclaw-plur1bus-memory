@@ -137,7 +137,7 @@ describe("presets", () => {
       "https://api.voyageai.com/v1/rerank",
       "https://gw.example.test/voyage/rerank",
     ]);
-    assert.equal(seen[0].body.model, "rerank-v3.5");
+    assert.equal(seen[0].body.model, "rerank-v5.0-fast");
     assert.equal(seen[3].body.model, "rerank-2.5-lite");
     assert.ok("top_k" in seen[2].body && !("top_n" in seen[2].body));
   });
@@ -235,7 +235,7 @@ describe("config and factories", () => {
     const cohere = normalizeRerankerConfig({ provider: "cohere", apiKeyEnv: "COHERE_API_KEY" });
     assert.equal(cohere.baseUrl, "https://api.cohere.com/v2");
     assert.equal(cohere.protocol, "cohere");
-    assert.equal(cohere.model, "rerank-v3.5");
+    assert.equal(cohere.model, "rerank-v5.0-fast");
     assert.equal(cohere.enabled, true);
 
     const jinaNoKey = normalizeRerankerConfig({ provider: "jina" });

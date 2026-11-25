@@ -161,7 +161,7 @@ export interface ProviderCredentialConfig {
 export type RerankProtocol = "cohere" | "jina" | "voyage" | "tei";
 
 /** 1.15.0: `config.reranker` for the HTTP providers. Presets (default baseUrl / protocol / model / env):
- *  cohere — https://api.cohere.com/v2, cohere, rerank-v3.5, COHERE_API_KEY;
+ *  cohere — https://api.cohere.com/v2, cohere, rerank-v5.0-fast (until 7.21.0 rerank-v3.5), COHERE_API_KEY;
  *  jina — https://api.jina.ai/v1, jina, jina-reranker-v2-base-multilingual, JINA_API_KEY;
  *  voyage — https://api.voyageai.com/v1, voyage, rerank-2.5, VOYAGE_API_KEY;
  *  remote — no defaults: baseUrl required, protocol "cohere", key optional (keyless self-hosted servers).

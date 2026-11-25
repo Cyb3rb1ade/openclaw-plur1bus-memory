@@ -1126,7 +1126,7 @@
         },
         "model": {
           "type": "string",
-          "description": "Reranker model. Cohere default rerank-v3.5; Rerank 4/5 models (e.g. rerank-v5.0-fast, rerank-v5.0-pro) use the same v2 request."
+          "description": "Reranker model. Cohere default rerank-v5.0-fast since 7.21.1 (billed per token); set \"rerank-v3.5\" to keep the per-search model. Other Rerank 4/5 models (e.g. rerank-v5.0-pro) use the same v2 request."
         },
         "maxDocChars": {
           "type": "integer",

@@ -51,6 +51,9 @@ By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/
   (`recall.qualityWeighting.staleAssistant`); records of the same turn and
   speaker are joined, and Neo entries already shown as memories are left out
   (`recall.mergeTurnParts`).
+- **Cohere default `rerank-v5.0-fast`** instead of `rerank-v3.5`. Rerank 5 is
+  billed per input token instead of per search; to keep v3.5, set
+  `reranker.model: "rerank-v3.5"`.
 - **Fixes:** a bare system word in quoted text ("Cron" in a table) is no
   longer marked `operational-risk="high"`; light dreams are bound to a user
   only when the recall proved that user (`acl.user.missing_principal`); CRR
@@ -1614,7 +1617,7 @@ The reranker is an HTTP provider with presets and a free `baseUrl`:
 
 | `reranker.provider` | default `baseUrl` | `protocol` | default `model` | default key variable |
 |---|---|---|---|---|
-| `cohere` | `https://api.cohere.com/v2` | `cohere` | `rerank-v3.5` | `COHERE_API_KEY` |
+| `cohere` | `https://api.cohere.com/v2` | `cohere` | `rerank-v5.0-fast` (until 7.21.0 `rerank-v3.5`) | `COHERE_API_KEY` |
 | `jina` | `https://api.jina.ai/v1` | `jina` | `jina-reranker-v2-base-multilingual` | `JINA_API_KEY` |
 | `voyage` | `https://api.voyageai.com/v1` | `voyage` | `rerank-2.5` | `VOYAGE_API_KEY` |
 | `remote` | required | `cohere` | none (server default) | none (keyless allowed) |
