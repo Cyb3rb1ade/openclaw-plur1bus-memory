@@ -511,6 +511,7 @@ export const DEPLOY_FILES = [
   "scripts/reindex-provider.mjs",
   // 7.20.10: Bestand bereinigt neu einbetten (embeddingTextMode raw → clean-v1).
   "scripts/reembed-clean.mjs",
+  "scripts/sensitivity-backfill.mjs",
   "scripts/repair-dreaming-cron.mjs",
   "scripts/repair-installed-plugin.mjs",
   "scripts/backfill-manual-core-markers.mjs",
