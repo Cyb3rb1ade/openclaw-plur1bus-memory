@@ -20,9 +20,9 @@
 
 import { isAbortError } from "../../lib/abort.js";
 import { computeUseAssociative, normalizeMemorySessionKey, resolveSessionEchoCutoff } from "../../lib/recall-pipeline.js";
-import { cleanQueryForEmbedding } from "../../lib/embedding-text.js";
+import { cleanQueryForEmbedding, shortenAutoRecallQuery } from "../../lib/embedding-text.js";
 import { withAccessReadDbs } from "../../lib/shared-memory.js";
-import { readNeoPrelude } from "./neo-prelude.js";
+import { neoPreludeBudgetMs, readNeoPrelude } from "./neo-prelude.js";
 import { autoRecallParams, autoRecallPolicyOptionsFor } from "./recall-params.js";
 import { recallResult } from "./recall-result.js";
 
@@ -79,6 +79,7 @@ export function createWarmRecallPath(ctx) {
     peekNeoStore,
     pool,
     runMergedNamespaceRecall,
+    runtimeScheduler,
     runNeoGlobalSearch,
     sharedMemoryPool,
     workspacePolicyGuard,
@@ -101,8 +102,12 @@ export function createWarmRecallPath(ctx) {
         try { neoWorkerRuntime?.warmUp?.(); } catch (_) { /* best-effort */ }
         if (prompt.length >= 5) {
           const prelude = { startedAt: Date.now(), windowMs: 0, embedMs: 0, embedTimedOut: false, globalMs: 0, lanesMs: 0 };
+          // 7.21.3: same prelude budget as the per-turn recall; without it a
+          // cold warm run waited the full Neo embed and ran into the 12 s limit.
+          prelude.budgetMs = neoPreludeBudgetMs(runtimeScheduler?.config?.recallTimeoutMs, neoGlobalRecall.embedTimeoutMs);
           try {
             await readNeoPrelude({
+              deadlineAt: prelude.startedAt + prelude.budgetMs,
               neoStore: peekNeoStore(hookCtx, event),
               requester: neoRequester(hookCtx, event),
               prompt,
@@ -114,7 +119,7 @@ export function createWarmRecallPath(ctx) {
               prelude,
               // 7.20.10: same embedding text and lane rules as the per-turn
               // recall, so the warm run fills the cache entries it will read.
-              embeddingQuery: cleanQueryForEmbedding(prompt, embeddingCleanTextCfg),
+              embeddingQuery: shortenAutoRecallQuery(cleanQueryForEmbedding(prompt, embeddingCleanTextCfg)),
               sessionEcho: {
                 sessionKey: normalizeMemorySessionKey(hookCtx?.sessionKey || event?.sessionKey),
                 since: resolveSessionEchoCutoff(event?.messages, { now: Date.now() }).since,

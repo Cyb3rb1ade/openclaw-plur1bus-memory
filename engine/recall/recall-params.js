@@ -6,7 +6,7 @@
  * warm-only path hand `runMergedNamespaceRecall` the same object.
  */
 
-import { cleanQueryForEmbedding } from "../../lib/embedding-text.js";
+import { cleanQueryForEmbedding, shortenAutoRecallQuery } from "../../lib/embedding-text.js";
 import { normalizeMemorySessionKey, resolveSessionEchoCutoff } from "../../lib/recall-pipeline.js";
 
 /**
@@ -116,7 +116,7 @@ export function autoRecallParams(ctx, {
     autoRecallPolicy,
     // 7.20.10: Anfragevektor ohne Hüllen (Transkript-Umschlag,
     // Zeitstempel, Metadaten); Rerank und Echo-Prüfung lesen weiter query.
-    embeddingQuery: cleanQueryForEmbedding(query, embeddingCleanTextCfg),
+    embeddingQuery: shortenAutoRecallQuery(cleanQueryForEmbedding(query, embeddingCleanTextCfg)),
     phaseTimer: timer,
     softBudgetFallback,
     embeddings,

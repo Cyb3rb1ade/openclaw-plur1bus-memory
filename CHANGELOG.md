@@ -7,6 +7,19 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.21.3] — 2026-11-25
+
+**Hintergrund-Turns im DM mit dem Besitzer sehen dessen Erinnerungen, lange Prompts sprengen den Recall nicht mehr.** Drei Fehler aus dem ersten Live-Tag von 7.21.1/7.21.2.
+
+Upgrade-Hinweise: keine neuen Schlüssel, keine Datenänderung.
+
+### Fixed
+
+- **Besitzer-DM bei Hintergrund-Turns.** Heartbeat, Cron und Subagent-Fertigmeldungen (`inputProvenance` `inter_session` aus `subagent_announce`/`subagent_settle`) haben keinen bewiesenen Absender; in der DM-Sitzung mit dem eingetragenen Besitzer galt der Altbestand deshalb als fremd (25.11. 13:31 bernhardine: `same=0 foreign=5 capped=11`). Solche Turns zählen jetzt als Besitzer-DM; ihre Antwort geht in diese DM (Vorbehalt: ein Cron, der in dieser Sitzung läuft, aber woandershin zustellt, sieht dieselben Erinnerungen). Normale Nachrichten brauchen weiter einen bewiesenen Absender; `sessions_send` bleibt ausgenommen (Antworten können in die sendende Sitzung gehen). Log: `owner=yes(background)`.
+- **Lange Prompts im Auto-Recall.** Eine Subagent-Fertigmeldung mit 36 693 Zeichen verbrauchte 3 s im Neo-Embedding und 6 s für die LLM-Zusammenfassung der Anfrage; danach kam der Vektor nicht mehr rechtzeitig, der Recall lief in die 12-s-Grenze (25.11. 13:32:12). Der Auto-Recall bettet jetzt höchstens 6 000 Zeichen ein (Anfang ein Drittel, Ende zwei Drittel, `shortenAutoRecallQuery`), Neo-Vorlauf und LanceDB-Recall denselben Text; die LLM-Zusammenfassung bleibt `memory_recall` vorbehalten.
+- **Warm-Pfad mit Neo-Frist.** Der Start-Prewarm wartete ohne Frist auf das Neo-Embedding und lief kalt in die 12-s-Grenze. Er nutzt jetzt dasselbe Vorlauf-Budget wie der normale Recall (`neoPreludeBudgetMs`, jetzt in `engine/recall/neo-prelude.js`).
+- **Package-Version 7.21.3.**
+
 ## [7.21.2] — 2026-11-25
 
 **Erinnerungen bleiben in ihrem Chat, Vertrauliches verlässt ihn nie.** Dazu zwei ACL-Fehler aus 7.21.1: Neo-Einträge mit Bereich `workspace_shared` waren für niemanden sichtbar, und in Christians Telegram-DM mit Themen lief der Recall fast immer ohne erkannten Absender.
