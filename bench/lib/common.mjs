@@ -1,49 +1,139 @@
 /**
  * Gemeinsame Bausteine für die PLUR1BUS-Benchmarkläufe (LOCOMO / LongMemEval).
  *
- * Alles läuft gegen eine separate LanceDB unter /root/plur1bus-bench/db —
+ * Alles läuft gegen eigene LanceDB-Stores unter BENCH (db/, db-capture-<name>/) —
  * niemals gegen ~/.openclaw/memory/lancedb-namespaced und niemals über den
  * Gateway, damit weder Produktivgedächtnis noch laufende Chats betroffen sind.
  */
 import { createRequire } from "node:module";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, dirname, join, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+
+/**
+ * Zustandsverzeichnis des Gateways, in derselben Reihenfolge wie das Plugin
+ * (lib/dashboard-settings.js, lib/host-services.js): OPENCLAW_STATE_DIR, dann
+ * OPENCLAW_HOME, sonst ~/.openclaw. Bewusst hier nachgebaut und nicht aus dem
+ * Release importiert, damit der Messstand auch gegen aeltere Checkouts laeuft.
+ * @param {object} [env]
+ * @returns {string} Pfad des Zustandsverzeichnisses
+ */
+export function openclawStateDir(env = process.env) {
+  const stateDir = typeof env.OPENCLAW_STATE_DIR === "string" ? env.OPENCLAW_STATE_DIR.trim() : "";
+  if (stateDir) return stateDir;
+  const home = typeof env.OPENCLAW_HOME === "string" ? env.OPENCLAW_HOME.trim() : "";
+  return home || join(homedir(), ".openclaw");
+}
+
+/**
+ * Konfigurationsdatei des Gateways (nur fuer --render prod, gelesen werden
+ * nur die Render-Einstellungen des Plugins): OPENCLAW_CONFIG_PATH, sonst
+ * openclaw.json im Zustandsverzeichnis.
+ * @param {object} [env]
+ * @returns {string} Pfad von openclaw.json
+ */
+export function openclawConfigPath(env = process.env) {
+  const explicit = typeof env.OPENCLAW_CONFIG_PATH === "string" ? env.OPENCLAW_CONFIG_PATH.trim() : "";
+  return explicit || join(openclawStateDir(env), "openclaw.json");
+}
 
 /**
  * Wo die zu vermessende Bibliothek liegt und wo Daten und Stores stehen.
  *
  * Beides ist ueber die Umgebung ueberschreibbar, damit der Messstand nicht an
  * einen Pfad gebunden ist: PLUR1BUS_RELEASE zeigt auf den Checkout, dessen
- * lib/ gemessen wird (Vorgabe: der Live-Deploy-Worktree, also genau der Code,
- * der laeuft), BENCH_HOME auf das Arbeitsverzeichnis mit data/ und den
- * LanceDB-Stores.
+ * lib/ gemessen wird (Vorgabe: der Release-Checkout plur1bus-release im
+ * Zustandsverzeichnis des Gateways, also genau der Code, der laeuft),
+ * BENCH_HOME auf das Arbeitsverzeichnis mit data/ und den LanceDB-Stores.
  */
-export const RELEASE = process.env.PLUR1BUS_RELEASE || "/root/.openclaw/plur1bus-release";
-export const BENCH = process.env.BENCH_HOME || "/root/plur1bus-bench";
+export const RELEASE = process.env.PLUR1BUS_RELEASE || join(openclawStateDir(), "plur1bus-release");
+// 25.11.2026: Ohne BENCH_HOME ist BENCH das Verzeichnis dieses Messstands
+// (eine Ebene ueber lib/); dort liegt auch .env.bench.
+export const BENCH = process.env.BENCH_HOME || dirname(dirname(fileURLToPath(import.meta.url)));
 const require_ = createRequire(`${RELEASE}/package.json`);
 
 export const lancedb = require_("@lancedb/lancedb");
 const OpenAI = require_("openai").default ?? require_("openai");
 
-export function loadEnv(path = "/root/.openclaw/gateway.systemd.env") {
-  for (const line of readFileSync(path, "utf8").split("\n")) {
+/**
+ * Absoluter Pfad mit aufgeloesten Symlinks. Existiert das Ziel nicht, wird
+ * der naechste vorhandene Vorfahre aufgeloest und der Rest angehaengt; so
+ * faellt auch ein noch nicht vorhandenes Ziel hinter einem Symlink auf.
+ * @param {string} path
+ * @returns {string}
+ */
+function canonicalPath(path) {
+  let head = resolve(String(path));
+  const rest = [];
+  while (!existsSync(head)) {
+    const parent = dirname(head);
+    if (parent === head) break;
+    rest.unshift(basename(head));
+    head = parent;
+  }
+  return join(existsSync(head) ? realpathSync(head) : head, ...rest);
+}
+
+/**
+ * Verzeichnisse des Gateways, aus denen der Messstand nie Schluessel liest:
+ * ~/.openclaw sowie OPENCLAW_HOME und OPENCLAW_STATE_DIR, wenn gesetzt.
+ * @param {object} [env]
+ * @returns {string[]} kanonische Pfade
+ */
+function forbiddenEnvRoots(env = process.env) {
+  const roots = [join(homedir(), ".openclaw")];
+  for (const name of ["OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]) {
+    const value = typeof env[name] === "string" ? env[name].trim() : "";
+    if (value) roots.push(value);
+  }
+  return [...new Set(roots.map(canonicalPath))];
+}
+
+/**
+ * Laedt KEY=VALUE-Zeilen in process.env; schon gesetzte Variablen bleiben.
+ *
+ * 25.11.2026: Der Messstand liest nie Schluessel des Gateways. Jeder Pfad,
+ * der nach resolve() und Aufloesen der Symlinks in ~/.openclaw,
+ * $OPENCLAW_HOME oder $OPENCLAW_STATE_DIR liegt (gateway.systemd.env,
+ * credentials/*.env), wird abgelehnt, bevor die Datei gelesen wird. Standard
+ * ist BENCH/.env.bench.
+ * @param {string} [path] Datei, Vorgabe BENCH/.env.bench
+ * @param {object} [opts]
+ * @param {boolean} [opts.optional=false] fehlende Datei ist kein Fehler
+ *   (Schluessel koennen auch aus der Shell kommen); jeder andere Fehler
+ *   und die Ablehnung eines Gateway-Pfads werfen trotzdem
+ * @returns {boolean} true, wenn die Datei gelesen wurde
+ */
+export function loadEnv(path = join(BENCH, ".env.bench"), { optional = false } = {}) {
+  const target = canonicalPath(path);
+  const root = forbiddenEnvRoots().find((r) => target === r || target.startsWith(`${r}${sep}`));
+  if (root) {
+    throw new Error(`loadEnv(${path}): liegt in ${root} — Schluessel des Gateways sind im Messstand verboten, eigene BENCH_*-Schluessel in .env.bench eintragen.`);
+  }
+  if (optional && !existsSync(target)) return false;
+  for (const line of readFileSync(target, "utf8").split("\n")) {
     const m = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim());
     if (!m) continue;
     let value = m[2];
     if (/^".*"$/.test(value)) value = value.slice(1, -1);
     if (!process.env[m[1]]) process.env[m[1]] = value;
   }
+  return true;
 }
 
 export const EMBED_MODEL = "text-embedding-3-large";
 export const EMBED_DIM = 3072;
 
-/** Eigener Schluessel des Messstands aus der Umgebung oder .env.bench; nie
- *  der des Gateways (23.11.2026: Messlaeufe haben das Cohere-Limit der
- *  Produktion aufgebraucht). */
-function requireBenchKey(name) {
-  if (!process.env[name]) {
-    try { loadEnv(`${BENCH}/.env.bench`); } catch { /* Datei fehlt: Fehler unten */ }
-  }
+/**
+ * Eigener Schluessel des Messstands aus der Umgebung oder BENCH/.env.bench;
+ * nie der des Gateways (23.11.2026: Messlaeufe haben das Cohere-Limit der
+ * Produktion aufgebraucht). Fehlt er, bricht der Aufruf ab.
+ * @param {string} name Variablenname, immer mit Praefix BENCH_
+ * @returns {void}
+ */
+export function requireBenchKey(name) {
+  if (!process.env[name]) loadEnv(join(BENCH, ".env.bench"), { optional: true });
   if (!process.env[name]) {
     throw new Error(`${name} fehlt — der Messstand nutzt keine Schluessel des Gateways (.env.bench).`);
   }
@@ -61,10 +151,58 @@ export async function makeEmbeddings() {
   });
 }
 
-export async function makeReranker({ timeoutMs = 2500 } = {}) {
+/**
+ * Reranker-Modell des Messstands (25.11.2026). rerank-v5.0-fast ist ab
+ * PLUR1BUS 7.21.1 der Plugin-Default (die Live-Config setzt kein
+ * reranker.model). Der Messstand nennt das Modell ausdruecklich, damit auch
+ * Laeufe gegen aeltere Releases (Default rerank-v3.5) dasselbe Modell nutzen;
+ * fuer v3.5: --rerank-model rerank-v3.5. Das Modell steht im
+ * Recall-Cache-Schluessel, v3.5-Eintraege bleiben ueber den Schalter erreichbar.
+ * @type {string}
+ */
+export const BENCH_DEFAULT_RERANK_MODEL = "rerank-v5.0-fast";
+
+/**
+ * Cohere-Reranker des Plugins mit dem Bench-Schluessel.
+ * @param {object} [opts]
+ * @param {number} [opts.timeoutMs=2500]
+ * @param {string} [opts.model] Cohere-Modell; ohne Angabe BENCH_DEFAULT_RERANK_MODEL.
+ * @returns {Promise<object>} CohereRerankerProvider
+ */
+export async function makeReranker({ timeoutMs = 2500, model } = {}) {
   requireBenchKey("BENCH_COHERE_API_KEY");
   const { CohereRerankerProvider } = await import(`${RELEASE}/lib/providers/reranker-cohere.js`);
-  return new CohereRerankerProvider({ apiKeyEnv: "BENCH_COHERE_API_KEY", timeoutMs });
+  return new CohereRerankerProvider({ apiKeyEnv: "BENCH_COHERE_API_KEY", timeoutMs, model: model || BENCH_DEFAULT_RERANK_MODEL });
+}
+
+/**
+ * Reranker-Schalter (24.11.2026), fuer makeReranker:
+ *   --rerank-model NAME   Cohere-Modell, z. B. rerank-v3.5. Ohne Schalter
+ *                         BENCH_DEFAULT_RERANK_MODEL (rerank-v5.0-fast).
+ *   --rerank-max-doc-chars N  gibt es bewusst NICHT. Der Messstand uebergibt
+ *                         kein maxDocChars, es gilt also der Default des
+ *                         Plugins, wie in der Produktion (die Live-Config setzt
+ *                         kein reranker.maxDocChars): bis 7.20.9 keine Grenze,
+ *                         ab 7.20.10 kuerzt CohereRerankerProvider jedes
+ *                         Dokument auf reranker.maxDocChars (Vorgabe 1400
+ *                         Zeichen). Rerank-Dokument ist je Kandidat `summary`
+ *                         bzw. generateSummary(text, summaryMaxWords). Ein
+ *                         eigener Wert nur im Messstand mass etwas, das
+ *                         Produktion nicht tut; deshalb bricht der Schalter ab,
+ *                         statt still ignoriert zu werden. Der wirksame Wert
+ *                         steht im Recall-Cache-Schluessel (reranker.maxDocChars).
+ * @param {string[]} [argv]
+ * @returns {{model?: string}}
+ */
+export function rerankOpts(argv = process.argv) {
+  if (argv.includes("--rerank-max-doc-chars")) {
+    throw new Error("--rerank-max-doc-chars: gibt es im Messstand nicht; es gilt der Default des Plugins wie in der Produktion (ab 7.20.10 reranker.maxDocChars = 1400 Zeichen, davor keine Grenze); siehe README.md");
+  }
+  const i = argv.indexOf("--rerank-model");
+  if (i < 0) return {};
+  const model = argv[i + 1];
+  if (!model || model.startsWith("--")) throw new Error("--rerank-model NAME");
+  return { model };
 }
 
 /**
@@ -81,13 +219,13 @@ export async function makeReranker({ timeoutMs = 2500 } = {}) {
 export const PROVIDERS = {
   openai: {
     baseURL: undefined,
-    keyEnv: "OPENAI_API_KEY",
+    keyEnv: "BENCH_OPENAI_API_KEY",
     answerModel: "gpt-5.6-luna",
     judgeModel: "gpt-5.6-terra",
   },
   deepseek: {
     baseURL: "https://api.deepseek.com",
-    keyEnv: "DEEPSEEK_API_KEY",
+    keyEnv: "BENCH_DEEPSEEK_API_KEY",
     answerModel: "deepseek-flash",
     judgeModel: "deepseek-v4-pro",
   },
@@ -109,7 +247,7 @@ export const PROVIDERS = {
   codex: {
     baseURL: "https://chatgpt.com/backend-api/codex",
     api: "responses",
-    authFile: "/root/.codex/auth.json",
+    authFile: join(process.env.CODEX_HOME || join(homedir(), ".codex"), "auth.json"),
     answerModel: "gpt-5.6-terra",
     judgeModel: "gpt-5.6-sol",
   },
@@ -142,8 +280,10 @@ export function chatClient(provider = "openai") {
       maxRetries: 5,
     });
   }
+  // 25.11.2026: nur eigene Schluessel des Messstands (BENCH_*), wie bei
+  // Cohere und den Embeddings; fehlt er, bricht der Lauf ab.
+  requireBenchKey(cfg.keyEnv);
   const apiKey = process.env[cfg.keyEnv];
-  if (!apiKey) throw new Error(`${cfg.keyEnv} ist nicht gesetzt.`);
   return new OpenAI({ apiKey, ...(cfg.baseURL ? { baseURL: cfg.baseURL } : {}), timeout: 120000, maxRetries: 5 });
 }
 
@@ -219,3 +359,27 @@ export function parseLmeDate(raw) {
 }
 
 export const silentLogger = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
+
+/**
+ * Zeitfilter der Recall-Pipeline (PLUR1BUS >= 7.20.8): `--temporal-mode
+ * intent|legacy|off` setzt `temporalFilterMode` von runRecallPipeline.
+ * Ohne Schalter gilt der Default des Plugins (7.20.8: "intent"). "legacy" ist
+ * das Verhalten von 7.20.7 (harter createdAt-Filter, Anker), "off" parst keine
+ * Zeitangaben. Anders als der alte Umweg ueber `validAt` bleibt fetchLimit
+ * dabei unveraendert (validAt setzt es auf candidateHardLimit).
+ * Gegen ein Plugin < 7.20.8 ist der Schalter wirkungslos — dann bricht er ab.
+ * @param {string[]} [argv]
+ * @returns {{temporalFilterMode?: "intent"|"legacy"|"off"}}
+ */
+export function temporalModeOpts(argv = process.argv) {
+  const i = argv.indexOf("--temporal-mode");
+  if (i < 0) return {};
+  const mode = argv[i + 1];
+  if (!["intent", "legacy", "off"].includes(mode)) throw new Error("--temporal-mode intent|legacy|off");
+  const version = JSON.parse(readFileSync(`${RELEASE}/package.json`, "utf8")).version;
+  const [a, b, c] = version.split(".").map(Number);
+  if (a < 7 || (a === 7 && (b < 20 || (b === 20 && c < 8)))) {
+    throw new Error(`--temporal-mode braucht PLUR1BUS >= 7.20.8 (PLUR1BUS_RELEASE ist ${version})`);
+  }
+  return { temporalFilterMode: mode };
+}

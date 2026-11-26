@@ -5,6 +5,56 @@
  *          [--db DIR] [--top-n N] [--candidate-top-k K] [--category locomo-catX[,locomo-catY...]]
  *          [--render full|prod|prod2 (Komma-Liste)] [--prod2-release PFAD] [--repeat N] [--keep-date-prefix]
  *          [--every K] [--ids ID,ID,...] [--concurrency <=4] [--prod-config PFAD] [--save-blocks] [--overwrite]
+ *          [--rerank-model NAME] [--recall-only] [--no-recall-cache | --recall-cache-only] [--recall-cache-dir PFAD]
+ *          [--auto-policy off|base|full] [--cohere-billing] [--temporal-mode intent|legacy|off]
+ *          [--provider P] [--judge-provider P] [--answer-model M] [--judge-model M]
+ *
+ * Schluessel: nur eigene des Messstands (BENCH_OPENAI_API_KEY,
+ * BENCH_COHERE_API_KEY, BENCH_DEEPSEEK_API_KEY) aus der Umgebung oder
+ * BENCH/.env.bench. loadEnv lehnt jede Datei im Zustandsverzeichnis des
+ * Gateways ab (~/.openclaw, $OPENCLAW_HOME, $OPENCLAW_STATE_DIR).
+ *
+ * Seit 25.11.2026 (PLUR1BUS 7.21.1):
+ *  --auto-policy M     Regeln des Auto-Recalls nachtraeglich auf das (gecachte)
+ *                      Pipeline-Ergebnis: off (Vorgabe, keine Regeln), base
+ *                      (7.20.10: Echo-Ausschluss und Qualitaetsgewicht), full
+ *                      (7.21.1: zusaetzlich staleAssistant und mergeTurnParts).
+ *                      Alle drei Stufen teilen sich einen Recall-Cache-Eintrag.
+ *                      base braucht PLUR1BUS >= 7.20.10, full >= 7.21.1.
+ *  --cohere-billing    Zaehlt meta.billed_units aller Cohere-Antworten und
+ *                      schreibt die Summe als cohereBilling in die Meta-Datei
+ *                      (rerank-v5.0-fast rechnet nach input_tokens ab).
+ *
+ * Seit 24.11.2026:
+ *  --temporal-mode M   temporalFilterMode der Pipeline: intent, legacy oder
+ *                      off (PLUR1BUS >= 7.20.8, sonst Abbruch). Ohne Schalter
+ *                      gilt der Default des Plugins. Meta: temporalFilterMode.
+ *  --judge-provider P  Jury bei einem anderen Anbieter als die Antwort, z. B.
+ *                      --provider codex --judge-provider deepseek. Vorgabe ist
+ *                      --provider (deepseek). Meta: judgeProvider.
+ *
+ * Seit 24.11.2026 (Recall-Cache, lib/recall-cache.mjs):
+ *  Recall-Cache        Der Recall je Frage kommt aus results/recall-cache/, wenn
+ *                      Store, Plugin-Code, Recall-Einstellungen, Modelle, Frage
+ *                      und Zeitpunkt gleich sind; ein Treffer ruft weder
+ *                      Embedding noch Cohere auf. Rerank-Ausfaelle werden nie
+ *                      gespeichert. Treffer/Fehlgriffe und gezaehlte
+ *                      API-Aufrufe stehen am Ende in der Meta-Datei
+ *                      (recallCache), je Ergebniszeile `recallCache`.
+ *  --no-recall-cache   Cache weder lesen noch schreiben.
+ *  --recall-cache-only Nur Treffer; ein Fehlgriff ist ein Recall-Fehler statt
+ *                      eines API-Aufrufs.
+ *  --recall-cache-dir P  Andere Ablage (Tests).
+ *  --rerank-model NAME Cohere-Modell. Vorgabe BENCH_DEFAULT_RERANK_MODEL
+ *                      (rerank-v5.0-fast, Plugin-Default ab 7.21.1), auch
+ *                      gegen aeltere Releases; v3.5 mit --rerank-model
+ *                      rerank-v3.5. --rerank-max-doc-chars gibt es nicht, es
+ *                      gilt der Default des Plugins wie in der Produktion
+ *                      (lib/common.mjs, rerankOpts).
+ *  --recall-only       Nur Recall (und Rendern) je Frage, kein Antwortmodell,
+ *                      keine Jury. Ausgabe results/<which>-<tag>-recall.jsonl
+ *                      mit Treffer-IDs, Belegtreffer und Blockgroesse je
+ *                      Darstellung. Fuellt bzw. prueft den Cache.
  *
  * Seit 23.11.2026 abends (Hebel a2):
  *  --render prod2      Wie prod, aber alle Render-Funktionen (resolveEffectiveConfig,
@@ -47,13 +97,47 @@
  */
 import { readFileSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { BENCH, RELEASE, PROVIDERS, chatClient, lancedb, loadEnv, makeEmbeddings, makeReranker, pMap, withRetry, silentLogger, parseLocomoDate } from "./lib/common.mjs";
+import { BENCH, RELEASE, PROVIDERS, chatClient, lancedb, loadEnv, makeEmbeddings, makeReranker, openclawConfigPath, pMap, withRetry, silentLogger, parseLocomoDate, rerankOpts, temporalModeOpts } from "./lib/common.mjs";
+import { recallCacheFromArgv } from "./lib/recall-cache.mjs";
 
-// DeepSeek-Schluessel aus der eigenen Datei, VOR der Gateway-Umgebung
-// (loadEnv ueberschreibt nichts, was schon gesetzt ist).
-loadEnv("/root/.openclaw/credentials/deepseek.env");
-loadEnv();
-const { runRecallPipeline, mergeNamespaceRecallResults } = await import(`${RELEASE}/lib/recall-pipeline.js`);
+// 25.11.2026: nur .env.bench (BENCH_OPENAI_API_KEY, BENCH_COHERE_API_KEY,
+// BENCH_DEEPSEEK_API_KEY). Bis dahin las run.mjs credentials/deepseek.env und
+// gateway.systemd.env — der DeepSeek-Schluessel dort ist der des Gateways.
+// Fehlt .env.bench, gelten die Schluessel aus der Shell; fehlen auch die,
+// brechen die Schluessel-Pruefungen in lib/common.mjs ab.
+loadEnv(undefined, { optional: true });
+const { runRecallPipeline, mergeNamespaceRecallResults, createAutoRecallPolicy, applyAutoRecallPolicy } = await import(`${RELEASE}/lib/recall-pipeline.js`);
+// --auto-policy off|base|full (24.11.2026, PLUR1BUS 7.21.1): die Regeln des
+// Auto-Recalls nachträglich auf das (gecachte) Pipeline-Ergebnis anwenden.
+// Mit deferFinalCap liefert die Pipeline die volle gerankte Liste (bis 100);
+// die Regeln laufen in der Produktion genau dort (nach Rerank und
+// Small-to-Big, vor der Endkappung). So teilen sich alle drei Stufen denselben
+// Recall-Cache-Eintrag und kosten keinen weiteren Cohere-Aufruf.
+//   off   wie bisher (keine Regeln)
+//   base  7.20.10: Echo-Ausschluss + Qualitätsgewicht, ohne 7.21.1-Regeln
+//   full  7.21.1: zusätzlich qualityWeighting.staleAssistant und mergeTurnParts
+const AUTO_POLICY = (() => {
+  const i = process.argv.indexOf("--auto-policy");
+  const v = i > -1 ? process.argv[i + 1] : "off";
+  if (!["off", "base", "full"].includes(v)) throw new Error(`--auto-policy ${v}: erlaubt sind off, base, full`);
+  return v;
+})();
+if (AUTO_POLICY !== "off" && typeof createAutoRecallPolicy !== "function") throw new Error("--auto-policy braucht PLUR1BUS >= 7.20.10");
+const turnMerge = AUTO_POLICY === "full"
+  ? await import(`${RELEASE}/lib/recall-turn-merge.js`).catch((error) => { throw new Error(`--auto-policy full braucht PLUR1BUS >= 7.21.1 (lib/recall-turn-merge.js): ${error?.message || error}`, { cause: error }); })
+  : null;
+function applyBenchAutoPolicy(memories, query, now) {
+  if (AUTO_POLICY === "off") return memories;
+  const policy = createAutoRecallPolicy({
+    query,
+    qualityWeighting: { enabled: true, staleAssistant: AUTO_POLICY === "full" },
+    mergeTurnParts: AUTO_POLICY === "full",
+    now,
+  });
+  let out = applyAutoRecallPolicy(memories, policy);
+  if (AUTO_POLICY === "full") out = turnMerge.mergeTurnParts(out).results;
+  return out;
+}
 
 const which = process.argv[2];
 const arg = (flag, fallback = null) => {
@@ -81,15 +165,25 @@ const ID_SET = IDS ? new Set(IDS.split(",").map((s) => s.trim()).filter(Boolean)
 const REPEAT = Math.max(1, Math.floor(Number(arg("--repeat", 1))));
 const KEEP_DATE_PREFIX = process.argv.includes("--keep-date-prefix");
 const EVERY = Math.max(1, Math.floor(Number(arg("--every", 1))));
-const PROD_CONFIG_PATH = arg("--prod-config", "/root/.openclaw/openclaw.json");
+// Nur --render prod/prod2 liest diese Datei, und nur die Render-Einstellungen
+// des Plugins. Vorgabe wie beim Gateway: OPENCLAW_CONFIG_PATH, sonst
+// openclaw.json im Zustandsverzeichnis (lib/common.mjs).
+const PROD_CONFIG_PATH = arg("--prod-config", openclawConfigPath());
 // --save-blocks: den gerenderten Erinnerungsblock je Zeile mitschreiben (Pruefung, Nachanalyse).
 const SAVE_BLOCKS = process.argv.includes("--save-blocks");
+// --recall-only (24.11.2026): kein Antwortmodell, keine Jury (siehe Kopf).
+const RECALL_ONLY = process.argv.includes("--recall-only");
 
 const PROVIDER = arg("--provider", "deepseek");
 const PROVIDER_CFG = PROVIDERS[PROVIDER];
 if (!PROVIDER_CFG) throw new Error(`Unbekannter Anbieter "${PROVIDER}" — bekannt sind ${Object.keys(PROVIDERS).join(", ")}.`);
 const ANSWER_MODEL = arg("--answer-model", PROVIDER_CFG.answerModel);
-const JUDGE_MODEL = arg("--judge-model", PROVIDER_CFG.judgeModel);
+// --judge-provider (24.11.2026): Jury bei einem anderen Anbieter als die
+// Antwort, z. B. Antwort ueber codex (GPT-5.6), Jury weiter deepseek-v4-pro.
+const JUDGE_PROVIDER = arg("--judge-provider", PROVIDER);
+const JUDGE_CFG = PROVIDERS[JUDGE_PROVIDER];
+if (!JUDGE_CFG) throw new Error(`Unbekannter Jury-Anbieter "${JUDGE_PROVIDER}" — bekannt sind ${Object.keys(PROVIDERS).join(", ")}.`);
+const JUDGE_MODEL = arg("--judge-model", JUDGE_CFG.judgeModel);
 const DB_ROOT = arg("--db", "db");   // "db" = Rohturns, "db-capture" = Capture-Pfad
 
 // Produktionswerte aus openclaw.json → plugins.memory-lancedb-namespaced.config.
@@ -97,6 +191,8 @@ const DB_ROOT = arg("--db", "db");   // "db" = Rohturns, "db-capture" = Capture-
 // der Engpass die Anzahl der ausgelieferten Erinnerungen ist oder die
 // Rangfolge: findet ein groesseres Fenster deutlich mehr Belege, hat PLUR1BUS
 // die richtigen Zeilen und liefert sie nur nicht alle aus.
+// --temporal-mode intent|legacy|off (PLUR1BUS >= 7.20.8), siehe lib/common.mjs.
+const TEMPORAL = temporalModeOpts();
 const TOP_N = Number(arg("--top-n", 12));
 const CANDIDATE_TOP_K = Number(arg("--candidate-top-k", 40));
 const RECALL = {
@@ -117,9 +213,43 @@ const RECALL = {
   candidateHardLimit: 100,
 };
 
-const client = chatClient(PROVIDER);
+// Bei --recall-only kein Chat-Client (keine Anmeldung, kein Schluessel noetig).
+const client = RECALL_ONLY ? null : chatClient(PROVIDER);
+const judgeClient = RECALL_ONLY ? null : JUDGE_PROVIDER === PROVIDER ? client : chatClient(JUDGE_PROVIDER);
+const RERANK = rerankOpts();
+if (RERANK.model && !USE_RERANK) throw new Error("--rerank-model zusammen mit --no-rerank ergibt keinen Sinn");
 const embeddings = await makeEmbeddings();
-const reranker = USE_RERANK ? await makeReranker({ timeoutMs: RECALL.rerankerTimeoutMs }) : null;
+// --cohere-billing (25.11.2026): zaehlt meta.billed_units aller Cohere-
+// Antworten (globales fetch, das Plugin ruft es zur Laufzeit auf) und schreibt
+// die Summe in die Meta-Datei. Fuer die Kostenhochrechnung von rerank-v5.0-fast.
+const COHERE_BILLING = process.argv.includes("--cohere-billing");
+const cohereBilling = { calls: 0, withMeta: 0, parseErrors: 0, units: {} };
+if (COHERE_BILLING) {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const response = await realFetch(input, init);
+    try {
+      const url = String(input?.url ?? input);
+      if (/api\.cohere\.(com|ai)\//.test(url) && response.ok) {
+        cohereBilling.calls++;
+        const meta = (await response.clone().json())?.meta;
+        if (meta?.billed_units) {
+          cohereBilling.withMeta++;
+          for (const [k, v] of Object.entries(meta.billed_units)) if (Number.isFinite(v)) cohereBilling.units[k] = (cohereBilling.units[k] || 0) + v;
+        }
+      }
+    } catch (error) {
+      // Zaehlung ist best-effort und darf den Recall nicht stoeren; Fehler
+      // werden gezaehlt (Meta und Schlusszeile), der erste wird gemeldet.
+      cohereBilling.parseErrors++;
+      if (cohereBilling.parseErrors === 1) console.warn(`cohere-billing: Antwort nicht auswertbar, weitere Fehler werden nur gezaehlt: ${error?.message || error}`);
+    }
+    return response;
+  };
+}
+const reranker = USE_RERANK ? await makeReranker({ timeoutMs: RECALL.rerankerTimeoutMs, ...RERANK }) : null;
+const recallCache = recallCacheFromArgv(process.argv, { script: "run.mjs" });
+recallCache.instrument(embeddings, reranker);
 
 // ─── Produktionsdarstellung (--render prod) ──────────────────────────────────
 //
@@ -341,9 +471,9 @@ let truncationRetries = 0;
  * trotzdem scharf — eine leere Antwort zaehlt dann als Fehler, nicht als
  * falsche Antwort.
  */
-async function responsesCall(model, messages) {
+async function responsesCall(model, messages, cl = client) {
   return withRetry(async () => {
-    const stream = await client.responses.create({
+    const stream = await cl.responses.create({
       model,
       input: messages.map((m) => ({ role: m.role, content: m.content })),
       store: false,
@@ -361,15 +491,17 @@ async function responsesCall(model, messages) {
   }, { label: model });
 }
 
-async function chatRaw(model, messages, maxTokens, attempt = 0) {
+async function chatRaw(model, messages, maxTokens, attempt = 0, role = "answer") {
+  const cfg = role === "judge" ? JUDGE_CFG : PROVIDER_CFG;
+  const cl = role === "judge" ? judgeClient : client;
   const budget = Math.max(maxTokens, THINK_FLOOR) * (attempt + 1);
   let content;
   let truncated;
-  if (PROVIDER_CFG.api === "responses") {
-    ({ content, truncated } = await responsesCall(model, messages));
+  if (cfg.api === "responses") {
+    ({ content, truncated } = await responsesCall(model, messages, cl));
   } else {
     const r = await withRetry(
-      () => client.chat.completions.create({
+      () => cl.chat.completions.create({
         model,
         messages,
         ...(isGpt5(model)
@@ -386,11 +518,11 @@ async function chatRaw(model, messages, maxTokens, attempt = 0) {
   }
   if (!content && truncated && attempt === 0) {
     truncationRetries += 1;
-    return chatRaw(model, messages, maxTokens, 1);
+    return chatRaw(model, messages, maxTokens, 1, role);
   }
   return content;
 }
-const chat = (model, messages, maxTokens = 300) => chatRaw(model, messages, maxTokens);
+const chat = (model, messages, maxTokens = 300, role = "answer") => chatRaw(model, messages, maxTokens, 0, role);
 
 // ─── Judge-Prompts: wörtlich aus LongMemEval src/evaluation/evaluate_qa.py ───
 function judgePrompt(task, question, answer, response, abstention) {
@@ -457,9 +589,15 @@ async function recall(storeDir, query, now, agentId) {
     ...silentLogger,
     warn: (message) => { if (/rerank/i.test(String(message))) rerankFallback = true; },
   };
-  const result = await runRecallPipeline({
-    ...RECALL, query, dbTable: table, embeddings, reranker,
-    rerankCandidates: RECALL.candidateTopK, agentId, logger, now,
+  // Recall-Cache: ein Treffer liefert dasselbe Ergebnis ohne Embedding und
+  // Cohere; die Logzeilen der Pipeline kommen mit, rerankFallback bleibt also
+  // richtig. Rerank-Ausfaelle speichert der Cache nie.
+  const { result, cache } = await recallCache.run({
+    runRecallPipeline, storeDir,
+    params: {
+      ...RECALL, query, dbTable: table, embeddings, reranker,
+      rerankCandidates: RECALL.candidateTopK, agentId, logger, now, ...TEMPORAL,
+    },
   });
   // Mit deferFinalCap liefert die Pipeline bis zu candidateHardLimit Zeilen
   // zurueck — die endgueltige Kappung macht der AUFRUFER. index.js tut das
@@ -469,10 +607,10 @@ async function recall(storeDir, query, now, agentId) {
   // Wie in der Produktion (index.js: runMergedNamespaceRecall): die Kappung
   // auf topN macht mergeNamespaceRecallResults, mit Entdopplung und
   // Gruppendeckel. Bis 23.11.2026 kappte der Messstand hier nur per slice.
-  const memories = mergeNamespaceRecallResults([{ namespace: "default", canonical: [], memories: result.memories || [] }], {
+  const memories = mergeNamespaceRecallResults([{ namespace: "default", canonical: [], memories: applyBenchAutoPolicy(result.memories || [], query, now) }], {
     maxOut: RECALL.topN, canonicalMaxItems: RECALL.canonicalMaxItems, dedupEnabled: RECALL.dedupEnabled, dedupJaccard: RECALL.dedupJaccard,
   }).memories;
-  return { memories, ms: Date.now() - started, rerankApplied: reranker ? !rerankFallback : false };
+  return { memories, ms: Date.now() - started, rerankApplied: reranker ? !rerankFallback : false, recallCache: cache.status, recallCacheKey: cache.key };
 }
 
 /**
@@ -590,15 +728,19 @@ if (!FILTERED && tasks.length !== EXPECTED) {
   console.error(`abort: ${tasks.length} questions with an existing store, expected ${EXPECTED} — ingest incomplete`);
   process.exit(1);
 }
-console.log(`${which}: ${tasks.length} questions, db=${DB_ROOT}, rerank=${USE_RERANK}, topN=${TOP_N}, candidateTopK=${CANDIDATE_TOP_K}, provider=${PROVIDER}, answer=${ANSWER_MODEL}, judge=${JUDGE_MODEL}, render=${RENDERS.join("+")}, repeat=${REPEAT}, concurrency=${CONCURRENCY}`);
+console.log(`${which}: ${tasks.length} questions, db=${DB_ROOT}, rerank=${USE_RERANK}${reranker ? ` (${reranker.model})` : ""}, topN=${TOP_N}, candidateTopK=${CANDIDATE_TOP_K}, provider=${PROVIDER}, answer=${ANSWER_MODEL}, judge=${JUDGE_MODEL}, render=${RENDERS.join("+")}, autoPolicy=${AUTO_POLICY}, repeat=${REPEAT}, concurrency=${CONCURRENCY}${RECALL_ONLY ? ", NUR RECALL" : ""}`);
+console.log(`recall-cache: ${recallCache.enabled ? `an${recallCache.requireHit ? " (nur Treffer)" : ""}, ${recallCache.dir}` : "aus (--no-recall-cache)"}`);
 if (PROD) console.log(`prod-render (resolveEffectiveConfig, Plugin ${PROD.settings.pluginVersion}): ${JSON.stringify(PROD.settings)}`);
 if (PROD2) console.log(`prod2-render (Render-Funktionen aus ${PROD2.settings.release}, Plugin ${PROD2.settings.pluginVersion}; Einstellungen gleich prod)`);
 
 // Je Darstellung und Wiederholung eine eigene Datei. Vorhandene Ergebnisse
 // werden nicht ueberschrieben.
 const outPaths = new Map();
-for (let rep = 1; rep <= REPEAT; rep++) {
-  for (const render of RENDERS) outPaths.set(`${render}#${rep}`, join(BENCH, `results/${which}-${TAG}-${render}-r${rep}.jsonl`));
+if (RECALL_ONLY) outPaths.set("recall", join(BENCH, `results/${which}-${TAG}-recall.jsonl`));
+else {
+  for (let rep = 1; rep <= REPEAT; rep++) {
+    for (const render of RENDERS) outPaths.set(`${render}#${rep}`, join(BENCH, `results/${which}-${TAG}-${render}-r${rep}.jsonl`));
+  }
 }
 const metaPath = join(BENCH, `results/${which}-${TAG}.meta.json`);
 const clash = [...outPaths.values(), metaPath].filter((p) => existsSync(p));
@@ -607,12 +749,16 @@ if (clash.length && !process.argv.includes("--overwrite")) {
   process.exit(1);
 }
 for (const p of outPaths.values()) writeFileSync(p, "");
-writeFileSync(metaPath, JSON.stringify({
+// Die Meta-Datei wird am Ende mit den Cache-Zahlen neu geschrieben.
+const meta = {
   when: new Date().toISOString(), which, tag: TAG, argv: process.argv.slice(2), questions: tasks.length,
-  db: DB_ROOT, rerank: USE_RERANK, recall: RECALL, renders: RENDERS, repeat: REPEAT, keepDatePrefix: KEEP_DATE_PREFIX,
-  every: EVERY, category: CATEGORY, provider: PROVIDER, answerModel: ANSWER_MODEL, judgeModel: JUDGE_MODEL,
+  db: DB_ROOT, rerank: USE_RERANK, rerankModel: reranker?.model ?? null, recall: RECALL, autoPolicy: AUTO_POLICY,
+  ...(COHERE_BILLING ? { get cohereBilling() { return cohereBilling; } } : {}), temporalFilterMode: TEMPORAL.temporalFilterMode ?? "plugin-default", renders: RENDERS, repeat: REPEAT, keepDatePrefix: KEEP_DATE_PREFIX,
+  every: EVERY, category: CATEGORY, provider: PROVIDER, judgeProvider: JUDGE_PROVIDER, answerModel: ANSWER_MODEL, judgeModel: JUDGE_MODEL,
   ids: IDS, release: RELEASE, prodRender: PROD?.settings ?? null, prod2Render: PROD2?.settings ?? null, files: Object.fromEntries(outPaths),
-}, null, 1));
+  recallOnly: RECALL_ONLY, recallCache: recallCache.summary(),
+};
+writeFileSync(metaPath, JSON.stringify(meta, null, 1));
 
 // Ein aufgeteilter Store fuehrt Teilstuecke als "<original>#0", "#1" usw.
 // Der Beleg gilt als gefunden, sobald IRGENDEIN Teilstueck der
@@ -632,20 +778,36 @@ const results = await pMap(tasks, CONCURRENCY, async (task) => {
     // Dateien deckungsgleich bleiben.
     for (const [key, path] of outPaths) {
       const [render, rep] = key.split("#");
-      const record = { ...base, render, rep: Number(rep), error: `recall: ${String(error?.message || error)}`, correct: false, evidenceHit: null };
+      const record = RECALL_ONLY
+        ? { ...base, error: `recall: ${String(error?.message || error)}`, evidenceHit: null }
+        : { ...base, render, rep: Number(rep), error: `recall: ${String(error?.message || error)}`, correct: false, evidenceHit: null };
       appendFileSync(path, `${JSON.stringify(record)}\n`);
       out.push(record);
     }
     if (++done % 50 === 0) console.log(`${done}/${tasks.length}`);
     return out;
   }
-  const { memories, ms, rerankApplied, attempts } = rec;
+  const { memories, ms, rerankApplied, attempts, recallCache: recallCacheStatus } = rec;
   const ids = memories.map((m) => m.entry.id);
   const evidenceHit = task.evidence.length
     ? task.evidence.some((e) => ids.some((id) => trifft(e, id)))
     : null;
   const nowIso = new Date(task.now).toISOString().slice(0, 16).replace("T", " ");
   const blocks = new Map(RENDERS.map((render) => [render, renderBlock(render, memories, task.now)]));
+  if (RECALL_ONLY) {
+    const record = {
+      ...base, question: task.question, recalled: ids.length, recalledIds: ids,
+      evidenceHit, evidence: task.evidence, ...(task.evidenceDropped?.length ? { evidenceDropped: task.evidenceDropped } : {}),
+      blocks: Object.fromEntries([...blocks].map(([render, b]) => [render, {
+        promptMemories: b.promptMemories, droppedFromPrompt: b.dropped, blockChars: b.block.length, ...(SAVE_BLOCKS ? { block: b.block } : {}),
+      }])),
+      recallMs: ms, recallAttempts: attempts, rerankApplied, recallCache: recallCacheStatus, recallCacheKey: rec.recallCacheKey, topN: TOP_N, db: DB_ROOT,
+    };
+    appendFileSync(outPaths.get("recall"), `${JSON.stringify(record)}\n`);
+    out.push(record);
+    if (++done % 50 === 0) console.log(`${done}/${tasks.length}`);
+    return out;
+  }
   // Wiederholungen aussen, Darstellungen innen: beide Darstellungen einer
   // Wiederholung laufen zeitlich direkt nacheinander.
   for (let rep = 1; rep <= REPEAT; rep++) {
@@ -654,7 +816,7 @@ const results = await pMap(tasks, CONCURRENCY, async (task) => {
       let record;
       try {
         const response = await chat(ANSWER_MODEL, answerMessages(task.question, memories.length ? block : "", nowIso, task.judgeTask));
-        const verdict = await chat(JUDGE_MODEL, [{ role: "user", content: judgePrompt(task.judgeTask, task.question, task.gold, response, task.abstention) }], 5);
+        const verdict = await chat(JUDGE_MODEL, [{ role: "user", content: judgePrompt(task.judgeTask, task.question, task.gold, response, task.abstention) }], 5, "judge");
         // Ein leeres Urteil ist KEIN "nein". Es bedeutet, dass die Jury nicht
         // geantwortet hat, und gehoert damit unter die Fehler — sonst sinkt die
         // Quote, ohne dass jemand eine Frage falsch beantwortet haette.
@@ -667,7 +829,7 @@ const results = await pMap(tasks, CONCURRENCY, async (task) => {
           evidenceHit, evidence: task.evidence, ...(task.evidenceDropped?.length ? { evidenceDropped: task.evidenceDropped } : {}),
           recalledIds: ids, promptMemories, droppedFromPrompt: dropped, blockChars: block.length,
           ...(SAVE_BLOCKS ? { block } : {}),
-          recallMs: ms, recallAttempts: attempts, rerankApplied, topN: TOP_N, provider: PROVIDER, answerModel: ANSWER_MODEL, judgeModel: JUDGE_MODEL, db: DB_ROOT,
+          recallMs: ms, recallAttempts: attempts, rerankApplied, recallCache: recallCacheStatus, topN: TOP_N, provider: PROVIDER, answerModel: ANSWER_MODEL, judgeModel: JUDGE_MODEL, db: DB_ROOT,
         };
       } catch (error) {
         record = { ...base, render, rep, error: String(error?.message || error), correct: false, evidenceHit };
@@ -684,6 +846,20 @@ const results = await pMap(tasks, CONCURRENCY, async (task) => {
 // ein stiller Ausfall nicht als schlechtes Ergebnis durchgeht.
 const flat = results.flat();
 console.log("");
+const rcSummary = recallCache.summary();
+meta.finished = new Date().toISOString();
+meta.recallCache = rcSummary;
+writeFileSync(metaPath, JSON.stringify(meta, null, 1));
+console.log(`recall-cache: ${rcSummary.hit} Treffer, ${rcSummary.miss} Fehlgriffe, ${rcSummary.written} geschrieben, ${rcSummary.skippedRerankFallback} Rerank-Ausfaelle nicht gespeichert; API-Aufrufe embed ${rcSummary.apiCalls.embed} / rerank ${rcSummary.apiCalls.rerank}`);
+if (COHERE_BILLING) console.log(`cohere-billing: ${cohereBilling.calls} Antworten, ${cohereBilling.withMeta} mit billed_units, ${cohereBilling.parseErrors} nicht auswertbar: ${JSON.stringify(cohereBilling.units)}`);
+if (RECALL_ONLY) {
+  const rows = flat.filter((r) => !r.error);
+  const withEv = rows.filter((r) => r.evidenceHit !== null);
+  console.log(`${which} recall-only: ${rows.length}/${flat.length} Fragen ohne Fehler, Belegtreffer ${withEv.filter((r) => r.evidenceHit).length}/${withEv.length} → ${outPaths.get("recall")}`);
+  console.log(`→ meta ${metaPath}`);
+  await embeddings.shutdown?.();
+  process.exit(0);
+}
 for (const [key, path] of outPaths) {
   const [render, rep] = key.split("#");
   const rows = flat.filter((r) => r.render === render && r.rep === Number(rep));

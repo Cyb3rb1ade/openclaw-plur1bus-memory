@@ -11,6 +11,7 @@ This document supplements `README.md` with build steps, conventions, and agent-f
 - The separate release line (`release/*` branches, tags up to `v7.20.10`,
   old single-file `index.js` layout) is retired. Do not cut releases there and
   do not write `port(<version>)` commits any more.
+- GitHub Packages is published by the `github-packages` job of `plugin-release.yml` on the tag push (automatic token, the GitHub Release's tarball, integrity read back). The manual `npm publish` to npm.pkg.github.com is only the fallback in `docs/release-checklist.md`. If the job fails, use "Re-run failed jobs", never "Re-run all jobs". Prereleases and versions below the highest x.y.z never become `latest`: the job fails, and they are published by hand under their own dist-tag.
 - New runtime files must be listed in `DEPLOY_FILES`
   (`scripts/lib/deploy-integrity.mjs`); the deploy verifier copies and checks
   exactly that list.
@@ -71,6 +72,12 @@ These features sit **after** normal recall and only append results. They must ne
 - Hard caps: `maxReactivationMemories: 3`, `maxFadedReactivationMemories: 1`, `maxOpenThreads: 3`, `maxCommunities: 2`.
 - Hard timeout 250 ms since 7.21.1 (`timeoutMs`, was 50 ms); silent fallback on error.
 - Module-level in-memory state only; no persistence, no writes to cards/tags/graph/records/quarantine.
+
+### Neo origin backfill (7.21.5)
+
+- `scripts/neo-origin-backfill.mjs` adds `origin.sessionKey` and the rules sensitivity to pre-7.20.10 candidates as appended revisions (`store.appendCandidateRevisions`: no content dedupe, journal and index in one lock, byte sizes checked inside it). Sources: run id → host DBs (read-only), and the turn-id hash. A disagreement counts as ambiguous and is never written. Chat keys only. Index-only entries are written only with `--include-index-only`; their index line has no `sessionKeySource`, and `archive/origin-backfill.*.jsonl` is the audit trail.
+- Never rebuild the candidate index from the journal (`rebuildCandidateIndex`) to undo anything: many index entries no longer have journal lines (main ~2.8k, bernhardine ~6k), and the next vector compaction would delete their vectors.
+- The candidate index projects `sensitivity` and `sensitivitySource` (since 7.21.5); global hits carry them into the context weighting.
 
 ### Main-thread work in agent_end (7.21.4)
 

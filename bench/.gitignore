@@ -26,5 +26,17 @@ analysis/**/results.jsonl
 analysis/**/snapshots/
 review-twins/
 
-# Eigener Reranker-Schluessel des Messstands — NIEMALS einchecken.
-.env.bench
+# Eigene Schluessel des Messstands — NIEMALS einchecken. Das Muster deckt
+# auch Sicherungskopien wie .env.bench.bak-<datum> ab, die ebenfalls
+# Schluessel tragen.
+.env.bench*
+
+# Sicherungskopien aus der Arbeit am Messstand (run.mjs.bak-<datum> usw.)
+*.bak-*
+
+# Recall-Cache (lib/recall-cache.mjs): Anfragetexte, Treffer und
+# Anfragevektoren, rund 75 MB je Konfiguration. Wird bei Bedarf neu gefuellt.
+results/recall-cache/
+
+# Logdateien der Laeufe
+results/*.log

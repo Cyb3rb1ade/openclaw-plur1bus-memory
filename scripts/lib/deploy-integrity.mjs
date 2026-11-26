@@ -513,6 +513,8 @@ export const DEPLOY_FILES = [
   // 7.20.10: Bestand bereinigt neu einbetten (embeddingTextMode raw → clean-v1).
   "scripts/reembed-clean.mjs",
   "scripts/sensitivity-backfill.mjs",
+  // 7.21.5: origin.sessionKey fuer alte Neo-Kandidaten (Host-DBs nur lesend).
+  "scripts/neo-origin-backfill.mjs",
   "scripts/repair-dreaming-cron.mjs",
   "scripts/repair-installed-plugin.mjs",
   "scripts/backfill-manual-core-markers.mjs",
