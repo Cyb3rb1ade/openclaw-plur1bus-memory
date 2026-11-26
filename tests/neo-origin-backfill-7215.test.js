@@ -6,7 +6,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, statSync, truncateSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { zstdCompressSync } from "node:zlib";
@@ -348,6 +348,11 @@ describe("neo-origin-backfill (7.21.5)", () => {
     const live = join(home, ".openclaw", "memory", "lancedb-namespaced");
     assert.throws(() => checkApplyPreconditions({ base: live, snapshot: root, allowRunningGateway: true }, running), /only allowed for a copy/);
     assert.throws(() => checkApplyPreconditions({ base: live, snapshot: root, allowRunningGateway: true }, stopped), /only allowed for a copy/);
+    // A symlinked home (macOS /var -> /private/var) with a base that does not exist yet.
+    const linkedHome = join(root, "linked-home");
+    symlinkSync(home, linkedHome);
+    assert.throws(() => checkApplyPreconditions({ base: join(linkedHome, ".openclaw", "memory", "lancedb-namespaced"), snapshot: root, allowRunningGateway: true }, { ...running, home }), /only allowed for a copy/);
+    assert.throws(() => checkApplyPreconditions({ base: live, snapshot: root, allowRunningGateway: true }, { ...running, home: linkedHome }), /only allowed for a copy/);
   });
 
   it("10. apply logs started and committed entries in destructive-ops.jsonl", async () => {

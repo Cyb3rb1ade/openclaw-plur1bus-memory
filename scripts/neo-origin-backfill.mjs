@@ -78,7 +78,7 @@ import { execFileSync } from "node:child_process";
 import { hash as cryptoHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { zstdDecompressSync } from "node:zlib";
@@ -211,13 +211,23 @@ export function parseArgs(argv, home = homedir()) {
   return opts;
 }
 
+// A path that does not exist yet resolves through its nearest existing
+// ancestor, so both sides of isInsideDir see the same symlinks (macOS:
+// /var -> /private/var).
 function realOrResolved(path) {
   const abs = resolve(path);
-  try {
-    return realpathSync(abs);
-  } catch (error) {
-    if (error?.code === "ENOENT") return abs;
-    throw error;
+  const rest = [];
+  let current = abs;
+  for (;;) {
+    try {
+      return join(realpathSync(current), ...rest.reverse());
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+      const parent = dirname(current);
+      if (parent === current) return abs;
+      rest.push(basename(current));
+      current = parent;
+    }
   }
 }
 
