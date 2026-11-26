@@ -72,6 +72,12 @@ These features sit **after** normal recall and only append results. They must ne
 - Hard timeout 250 ms since 7.21.1 (`timeoutMs`, was 50 ms); silent fallback on error.
 - Module-level in-memory state only; no persistence, no writes to cards/tags/graph/records/quarantine.
 
+### Main-thread work in agent_end (7.21.4)
+
+- **Embedding drain:** in-process checkpoint per queue file (`journalIdentity`: dev, inode, size, first bytes). Unchanged → no work; grown → only the appended range (`readJsonlRange`) plus the open entries. Anything that rewrites `embedding-queue.jsonl` must change inode or size/head (atomic rename does). Target journals are read lazily. Embedder failures (`deferred`) are retried at most every 10 min without new lines.
+- **Graph dedupe:** `lib/graph-edge-index.js` mirrors `readBoundGraph`'s adjacency existence over the last 10,000 lines and reads only appended lines; keep `graphEdgeDedupeKeys` in step with `isBoundGraphEdge`/`readGraph`.
+- The `agent_end` hook counter uses `recordHookAsync`; the post-processing watermark stays synchronous (the next capture reads it).
+
 ### Recall budget, fallback and warm start (7.21.1)
 
 - The Neo prelude has a hard budget from the recall's start:

@@ -7,6 +7,19 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.21.4] — 2026-11-25
+
+**Weniger synchrone Arbeit im Main-Thread nach jedem Zug.** Die Analyse der Main-Thread-Stalls vom 24./25.11. (884 Stalls ≥ 1 s im Betrieb, 2 100 s) fand im `agent_end`-Pfad von PLUR1BUS zwei feste Kosten je Capture, gemessen auf einer Kopie der bernhardine-Daten: der Neo-Embedding-Drain mit 0,8–1,0 s auch ohne offene Einträge und die Graph-Dedupe mit 0,3–0,5 s.
+
+Upgrade-Hinweise: keine neuen Schlüssel, keine Datenänderung.
+
+### Fixed
+
+- **Embedding-Drain ohne Leerlaufkosten.** Der Drain las bei jedem Capture die ganze `embedding-queue.jsonl` (bernhardine 18 242 Zeilen, fast nur Erledigtes) und vorab die vollständigen Kandidaten-, Verhaltens- und Turn-Journale (je 17–22 MB). Er merkt sich jetzt den Stand der Queue nach einem vollständigen Lauf (nur im Prozess): unveränderte Datei = nichts zu tun, angehängte Zeilen = nur diese plus die noch offenen Einträge; eine umgeschriebene Datei (Aufbewahrung, Umbenennung) wird wieder ganz gelesen. Die Zieljournale werden erst gelesen, wenn ein Eintrag sie braucht. Einträge, an denen der Embedder gescheitert ist (`deferred`), werden ohne neue Zeilen höchstens alle 10 Minuten erneut versucht; fehlte nur der Embedder, sofort beim nächsten Lauf mit Embedder. Gemessen: 69 ms beim ersten Lauf, danach 1 ms.
+- **Graph-Dedupe über einen Existenz-Index** (`lib/graph-edge-index.js`). Statt je Capture die letzten 10 000 Zeilen von `memory-graph.jsonl` zu lesen und die Adjazenz aufzubauen, hält ein Index dieselben 10 000 Zeilen und liest nur Angehängtes nach (gleiche Regeln wie `readBoundGraph`: nur gebundene Kanten, ungerichtete in beide Richtungen). Erster Aufbau 574 ms je Prozess und Workspace, danach unter 1 ms. Mit Legacy-Graphdatei bleibt der alte Weg.
+- **Hook-Zähler in `agent_end` asynchron** (`recordHookAsync`, wie `before_prompt_build` seit 7.12.30). Das Watermark der Nachverarbeitung bleibt synchron.
+- **Package-Version 7.21.4.**
+
 ## [7.21.3] — 2026-11-25
 
 **Hintergrund-Turns im DM mit dem Besitzer sehen dessen Erinnerungen, lange Prompts sprengen den Recall nicht mehr.** Drei Fehler aus dem ersten Live-Tag von 7.21.1/7.21.2.
