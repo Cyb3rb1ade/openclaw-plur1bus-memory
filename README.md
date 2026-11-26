@@ -35,6 +35,15 @@ separate login); reach it through however you already reach your Gateway
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
 
+### New in v7.21.5 — origin backfill, GitHub Packages from the workflow
+
+- `scripts/neo-origin-backfill.mjs` adds the chat session key (and the rules
+  sensitivity) to Neo candidates captured before 7.20.10, as appended
+  revisions; run it with the gateway stopped and a snapshot.
+- Global Neo hits now carry their sensitivity (candidate index fields).
+- The release workflow publishes the release tarball to GitHub Packages
+  itself (`github-packages` job).
+
 ### New in v7.21.4 — less main-thread work after each turn
 
 - The Neo embedding drain skips an unchanged queue and reads only appended

@@ -9,7 +9,9 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { BENCH, lancedb, loadEnv, makeEmbeddings, memoryRow, pMap } from "./lib/common.mjs";
 
-loadEnv();
+// Nur BENCH/.env.bench; fehlt die Datei, gelten Schluessel aus der Shell
+// (makeEmbeddings bricht ohne BENCH_OPENAI_API_KEY ab).
+loadEnv(undefined, { optional: true });
 const which = process.argv[2];
 const limitArg = process.argv.indexOf("--limit");
 const LIMIT = limitArg > -1 ? Number(process.argv[limitArg + 1]) : Infinity;

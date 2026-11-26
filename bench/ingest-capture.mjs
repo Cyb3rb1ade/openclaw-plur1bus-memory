@@ -33,7 +33,8 @@ const { planChunks, expandForCaptureDecided } = await import(`${RELEASE}/lib/mem
 const { createJevChunkDecider, resolveJevApiKey } = await import(`${RELEASE}/lib/jev-chunk-decider.js`);
 const { randomUUID } = await import("node:crypto");
 
-loadEnv();
+// Nur BENCH/.env.bench; fehlt die Datei, gelten Schluessel aus der Shell.
+loadEnv(undefined, { optional: true });
 const { categorizeMemoryWithReason } = await import(`${RELEASE}/lib/categorize.js`);
 const { computeMemoryImportance } = await import(`${RELEASE}/lib/memory-fact-quality.js`);
 const { applyDynamicsDefaults } = await import(`${RELEASE}/lib/memory-dynamics.js`);
@@ -85,8 +86,10 @@ const OVERWRITE = process.argv.includes("--overwrite");
  *  von -0,15. Bei LOCOMO sprechen zwei Menschen; produktiv kommt eine
  *  Menschen-Nachricht als role "user" an. */
 const LEGACY_ROLES = process.argv.includes("--legacy-roles");
-const jevDecider = JEV ? createJevChunkDecider({ apiKey: resolveJevApiKey({}, process.env) }) : null;
-if (JEV && !jevDecider) throw new Error("--jev ohne TYPESAFE_API_KEY");
+// Jev nur mit dem eigenen Schluessel des Messstands, nie mit dem des Plugins
+// (resolveJevApiKey faellt ohne apiKeyEnv auf die Gateway-Variable zurueck).
+const jevDecider = JEV ? createJevChunkDecider({ apiKey: resolveJevApiKey({ apiKeyEnv: "BENCH_TYPESAFE_API_KEY" }, process.env) }) : null;
+if (JEV && !jevDecider) throw new Error("--jev ohne BENCH_TYPESAFE_API_KEY (Umgebung oder .env.bench)");
 const jevStats = { whole: 0, parts: 0, both: 0, split: 0 };
 
 /** Eine Zeile so bauen, wie der Capture-Hook sie baut (index.js:10560 ff.). */

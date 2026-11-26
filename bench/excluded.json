@@ -1,5 +1,5 @@
 {
-  "stand": "2026-11-23",
+  "stand": "2026-11-24",
   "beschreibung": "LOCOMO-Fragen (conv-44/47/50, data/locomo10.json mit Jahresverschiebung), die report-reps.mjs zusaetzlich OHNE ausweist. Quelle: Diagnose-Workflow (results/lv-*). Die Fragen bleiben im Lauf; ausgeschlossen wird nur in der Auswertung. Kennungen wie run.mjs sie schreibt: <sample_id>#<Index in qa>.",
   "gruppen": {
     "gold-falsch": "Musterantwort oder Frage widerspricht dem Gespraech.",
@@ -30,7 +30,10 @@
     { "id": "conv-44#44", "gruppe": "gold-fragwuerdig", "notiz": "Kat. 3, Gold \"Voyageurs National Park\" laesst sich aus dem Gespraech nicht ableiten." },
     { "id": "conv-44#52", "gruppe": "gold-fragwuerdig", "notiz": "Kat. 3, Gold (Vogelhaus) ist eine von vielen moeglichen Antworten." },
     { "id": "conv-44#53", "gruppe": "gold-fragwuerdig", "notiz": "Kat. 3, Gold (Park Ranger) ist eine von vielen moeglichen Antworten." },
-    { "id": "conv-47#38", "gruppe": "beleg-fehlt", "notiz": "Kat. 1, Beleg D4:36 existiert nicht (Session 4 hat 25 Turns); run.mjs fuehrt ihn als evidenceDropped." }
+    { "id": "conv-47#38", "gruppe": "beleg-fehlt", "notiz": "Kat. 1, Beleg D4:36 existiert nicht (Session 4 hat 25 Turns); run.mjs fuehrt ihn als evidenceDropped." },
+    { "id": "conv-44#33", "gruppe": "gold-fragwuerdig", "notiz": "Kat. 3: Die Belege D12:3 (11. Juli), D18:1 (6. Sept.) und D21:5/D21:7 (4. Okt.) belegen nur Arbeitsstress und die Klage, in der Stadt gebe es zu wenig offene Flächen. Hybrid- oder Fernarbeit, ein Jobwechsel und ein Umzug in die Vororte kommen im ganzen Gespräch nicht vor (Textsuche ergab null Treffer). Im Gespräch selbst stehen andere Wege: D5:7 eine Wohnung nahe Park oder Wald, D21:8-9 Pflanzen und Parkbesuche am Wochenende, D27:9 „managed to make it work with dogs while still living in the city“. Die Musterantwort ist also nur eine von vielen möglichen Antworten, wie bei conv-44#52 und #53. (Gold-Prüfung 24.11.2026, 3 von 3 Prüfern)" },
+    { "id": "conv-47#11", "gruppe": "gold-falsch", "notiz": "D6:7 (Session 6, 20. April) sagt \"two days ago I wanted to be alone with nature\" -> 18. April; die Frage fragt nach dem 10. April, dazu steht nichts im Gespraech (D5 am 12. April: nur Spielfehler \"yesterday\"). Inhalt von Gold (\"seeking solitude\") passt zu D6:7, das Datum in der Frage nicht. Der Fehler steht schon im Original (April 10, 2022 vs. Session 20. April 2022), ist also kein Artefakt der Verschiebung; gleiches Muster wie conv-47#61. (Gold-Prüfung 24.11.2026, 3 von 3 Prüfern)" },
+    { "id": "conv-50#7", "gruppe": "gold-fragwuerdig", "notiz": "Kat. 3, D4:17 (1. Mai) zeigt nur ein Foto \"a group of people standing in front of a car\" (Bildsuche \"car maintenance shop grand opening\"); Dave nennt im ganzen Gespraech keine Angestellten, D6:8 sagt er habe zur Eroeffnung Freunde eingeladen (die Gruppe sind also eher Gaeste), D5:3 \"awesome mechanics\" betrifft die Partnerwerkstatt, D23:1 nur \"we\"; Gold \"Yes\" ist Spekulation aus dem Bild. (Gold-Prüfung 24.11.2026, 3 von 3 Prüfern)" }
   ],
   "belegnormalisierung": "run.mjs und lv-prod-lib.mjs normalisieren Belege einheitlich: D30:05 -> D30:5 (conv-50#69); nicht existierende Belege (conv-47 D4:36) fallen aus der Trefferpruefung und stehen als evidenceDropped in der Ergebniszeile."
 }

@@ -1,13 +1,14 @@
 name: plugin-release
 
 # Release of the PLUR1BUS OpenClaw plugin itself (`openclaw-plur1bus-memory`): tarball, SHA256SUMS of the tarball,
-# GitHub Release, npm publish and the tarball's build attestation. Installers, bootstraps and the install feed are
-# released from Cyb3rb1ade/PLUR1BUS-Host-Addons, which consumes this release's tarball and SHA256SUMS.
+# GitHub Release, GitHub Packages, npm publish and the tarball's build attestation. Installers, bootstraps and the
+# install feed are released from Cyb3rb1ade/PLUR1BUS-Host-Addons, which consumes this release's tarball and SHA256SUMS.
 #
 #   check           tag == v<package.json version> == manifest version == lockfile version
 #   pack            npm ci, the full suite, npm pack, SHA256SUMS (tarball only), workflow artefact
 #   attest          build provenance of the tarball (skipped in a dry run)
 #   github-release  GitHub Release with the tarball and SHA256SUMS (skipped in a dry run)
+#   github-packages npm.pkg.github.com with the automatic token, same tarball (skipped in a dry run)
 #   npm-publish     npmjs.org with provenance (skipped in a dry run and unless the owner enabled it)
 #
 # The file name stays plugin-release.yml: the npm trusted publisher is bound to repository, this workflow file and
@@ -17,12 +18,20 @@ name: plugin-release
 #   Repository variable PLUR1BUS_NPM_PUBLISH = yes to publish to npmjs.org. It needs the GitHub Environment
 #   `npm-publish` and a trusted publisher configured on npmjs.org for this repository, workflow plugin-release.yml,
 #   environment npm-publish.
+#   GitHub Packages needs no setup: the package is linked to this repository and inherits its Actions access. If
+#   github-packages cannot read the package or the publish fails with E403, give this repository role Write under the
+#   package's "Manage Actions access", then use "Re-run failed jobs".
 #
-# Secrets used: none. The GitHub token is the automatic one (github-release only); npm authenticates by OIDC.
+# Secrets used: none. The GitHub token is the automatic one (github-release and github-packages); npm authenticates
+# by OIDC.
 #
 # Dry run (workflow_dispatch, dry-run true, the default): everything up to and including the uploaded workflow
-# artefact, no release, no npm, no attestation. A tag push (v*) is always a real run, on the stable channel; a beta
-# release is dispatched on the tag with channel beta and dry-run false.
+# artefact, no release, no npm, no GitHub Packages, no attestation. A tag push (v*) is always a real run, on the
+# stable channel; a beta release is dispatched on the tag with channel beta and dry-run false.
+#
+# github-packages moves `latest` only up to a plain x.y.z: a prerelease on the stable channel (a tag push of
+# v1.2.3-beta.1 runs as stable) or a version below the highest published x.y.z fails the job instead; publish those
+# by hand under their own dist-tag (docs/release-checklist.md).
 
 permissions:
   contents: read
@@ -33,7 +42,7 @@ on:
   workflow_dispatch:
     inputs:
       dry-run:
-        description: Build and check everything; publish nothing (no release, no npm, no attestations).
+        description: Build and check everything; publish nothing (no release, no npm, no GitHub Packages, no attestations).
         type: boolean
         default: true
       channel:
@@ -179,7 +188,7 @@ jobs:
           {
             echo "### plugin-release $VERSION ($CHANNEL)"
             echo ""
-            echo "dry-run: \`$DRY_RUN\`, npm publish: \`$NPM\`, attested: \`$([ "$DRY_RUN" = true ] && echo no || echo yes)\`"
+            echo "dry-run: \`$DRY_RUN\`, npm publish: \`$NPM\`, github packages: \`$([ "$DRY_RUN" = true ] && echo no || echo yes)\`, attested: \`$([ "$DRY_RUN" = true ] && echo no || echo yes)\`"
             echo ""
             echo "#### SHA256SUMS"
             echo '```'
@@ -294,3 +303,118 @@ jobs:
           npm --version
           case "$CHANNEL" in stable) dist_tag=latest ;; beta) dist_tag=beta ;; *) echo "::error::unknown channel $CHANNEL"; exit 1 ;; esac
           npm publish "./$TGZ" --provenance --access public --tag "$dist_tag"
+
+  # GitHub Packages (npm.pkg.github.com): the same tarball as the GitHub Release, published with the automatic token.
+  # @cyb3rb1ade/plur1bus-memory is linked to this repository (package.json `repository` since its first version), so
+  # workflows here inherit access to it. A version that is already there is skipped if it holds this exact tarball
+  # (same sha512 integrity) and fails the job otherwise; published versions are immutable. `latest` only moves up to
+  # a plain x.y.z (see the publish step).
+  github-packages:
+    name: github-packages
+    needs: [check, pack, github-release]
+    if: needs.check.outputs.dry-run != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      CHANNEL: ${{ needs.check.outputs.channel }}
+      TGZ: ${{ needs.pack.outputs.tgz }}
+      PKG: '@cyb3rb1ade/plur1bus-memory'
+    steps:
+      - name: Use Node.js 24.21.0
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.21.0'
+      - name: Download the release artefact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.pack.outputs.artifact }}
+          path: ${{ runner.temp }}/release
+      - name: Check the tarball against the GitHub Release
+        working-directory: ${{ runner.temp }}/release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha256sum -c SHA256SUMS
+          gh release download "v$VERSION" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS --output "$RUNNER_TEMP/release-SHA256SUMS"
+          cmp SHA256SUMS "$RUNNER_TEMP/release-SHA256SUMS"
+      - name: Publish to GitHub Packages
+        working-directory: ${{ runner.temp }}/release
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          case "$CHANNEL" in stable) dist_tag=latest ;; beta) dist_tag=beta ;; *) echo "::error::unknown channel $CHANNEL"; exit 1 ;; esac
+          # The explicit --tag switches off npm's own guards (no prerelease and nothing below the highest x.y.z under
+          # the default tag), so the job keeps them itself: `latest` only ever moves up to a plain x.y.z. A tag push
+          # always runs on the stable channel, also for v1.2.3-beta.1 or a side-line tag.
+          if [ "$dist_tag" = latest ] && ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::$VERSION is a prerelease on the stable channel; latest on GitHub Packages stays on x.y.z. Publish it by hand under its own dist-tag (docs/release-checklist.md)"
+            exit 1
+          fi
+          # Absolute path, as in the manual publishes (a relative one was misread as a GitHub shorthand).
+          tgz="$RUNNER_TEMP/release/$TGZ"
+          npmrc="$RUNNER_TEMP/github-packages.npmrc"
+          # The file names the variable; the token itself never touches the disk.
+          umask 077
+          printf '%s\n' '@cyb3rb1ade:registry=https://npm.pkg.github.com' '//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}' > "$npmrc"
+          gpr() { npm --userconfig "$npmrc" --@cyb3rb1ade:registry=https://npm.pkg.github.com "$@"; }
+          npm --version
+          [ "$(gpr config get @cyb3rb1ade:registry)" = https://npm.pkg.github.com ] || { echo "::error::@cyb3rb1ade is not routed to npm.pkg.github.com"; exit 1; }
+          local_integrity=$(node -e 'const c=require("crypto"); process.stdout.write("sha512-"+c.createHash("sha512").update(require("fs").readFileSync(process.argv[1])).digest("base64"))' "$tgz")
+          # `npm view pkg@x.y.z` exits 1 (E404) for a missing version, so read the version list and test membership.
+          if ! gpr view "$PKG" versions --json > "$RUNNER_TEMP/gpr-versions.json"; then
+            echo "::error::cannot read $PKG on GitHub Packages; give this repository access under the package's Manage Actions access"
+            exit 1
+          fi
+          # yes/no on stdout: a list that does not parse fails the step instead of counting as "absent".
+          present=$(node -e 'const v=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); process.stdout.write((Array.isArray(v)?v:[v]).includes(process.argv[2])?"yes":"no")' "$RUNNER_TEMP/gpr-versions.json" "$VERSION")
+          if [ "$present" = yes ]; then
+            remote=$(gpr view "$PKG@$VERSION" dist.integrity)
+            if [ "$remote" = "$local_integrity" ]; then
+              echo "$PKG@$VERSION is already on GitHub Packages with this tarball; nothing to publish"
+              exit 0
+            fi
+            echo "::error::$PKG@$VERSION is already on GitHub Packages with another tarball ($remote, expected $local_integrity)"
+            exit 1
+          fi
+          if [ "$dist_tag" = latest ]; then
+            # A backport below the highest published x.y.z would move latest backwards. Prereleases do not count.
+            above=$(node -e 'const v=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); const n=(s)=>s.split(".").map(Number); const cmp=(a,b)=>{const x=n(a),y=n(b); for(let i=0;i<3;i++) if(x[i]!==y[i]) return x[i]-y[i]; return 0}; process.stdout.write((Array.isArray(v)?v:[v]).filter((s)=>/^\d+\.\d+\.\d+$/.test(s)&&cmp(s,process.argv[2])>0).sort(cmp).pop()||"")' "$RUNNER_TEMP/gpr-versions.json" "$VERSION")
+            if [ -n "$above" ]; then
+              echo "::error::$PKG@$above is already on GitHub Packages; publishing $VERSION as latest would move latest backwards. Publish it by hand under its own dist-tag (docs/release-checklist.md)"
+              exit 1
+            fi
+          fi
+          # The registry can lag a few seconds behind a publish.
+          read_back() {
+            local r=
+            for _ in 1 2 3; do
+              r=$(gpr view "$PKG@$VERSION" dist.integrity 2>/dev/null || true)
+              [ -n "$r" ] && break
+              sleep 5
+            done
+            printf '%s' "$r"
+          }
+          if ! gpr publish "$tgz" --tag "$dist_tag" --ignore-scripts; then
+            # 409 / EPUBLISHCONFLICT: someone published the version meanwhile, or npm failed after the upload landed.
+            # Fine only if it is this tarball.
+            remote=$(read_back)
+            if [ "$remote" = "$local_integrity" ]; then
+              echo "$PKG@$VERSION is on GitHub Packages with this tarball although npm reported an error"
+              exit 0
+            fi
+            if [ -n "$remote" ]; then
+              echo "::error::$PKG@$VERSION is already on GitHub Packages with another tarball ($remote, expected $local_integrity)"
+              exit 1
+            fi
+            echo "::error::publishing $PKG@$VERSION failed; on E403 give this repository role Write under the package's Manage Actions access, then use Re-run failed jobs"
+            exit 1
+          fi
+          remote=$(read_back)
+          [ "$remote" = "$local_integrity" ] || { echo "::error::published integrity '$remote' is not $local_integrity"; exit 1; }
+          echo "published $PKG@$VERSION to GitHub Packages (dist-tag $dist_tag)"

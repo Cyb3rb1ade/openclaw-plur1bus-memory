@@ -7,6 +7,24 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.21.5] — 2026-11-26
+
+**Neo-Erinnerungen bekommen ihre Herkunft nachgetragen, GitHub Packages veröffentlicht der Release-Workflow selbst, der Messstand ist auf dem Stand vom 25.11.**
+
+Upgrade-Hinweise: keine neuen Konfigurationsschlüssel. Der Kandidatenindex des Neo-Stores führt neu `sensitivity` und `sensitivitySource`. Das Nachtragen der Herkunft ist ein eigener Schritt mit gestopptem Gateway und Snapshot (siehe unten), kein Teil des Starts.
+
+### Fixed
+
+- **Herkunft alter Neo-Kandidaten** (`scripts/neo-origin-backfill.mjs`). Kandidaten aus der Zeit vor 7.20.10 tragen nur die Lauf-ID (`origin.sessionId`), keinen Sitzungsschlüssel. Die Herkunftsgewichtung aus 7.21.2 wertete sie deshalb als „dm“, und eine Gruppenerinnerung zählte im DM des Besitzers als derselbe Chat. Das Skript sucht die Lauf-IDs in den Host-Datenbanken (nur lesend) und rechnet als zweite Quelle den Sitzungsschlüssel aus dem Hash der Turn-ID nach; widersprechen sich die Quellen, bleibt die Id unangetastet. Es hängt je Id eine Revision mit `origin.sessionKey` an, dazu die Regel-Vertraulichkeit, wo sie fehlt. Geschrieben werden nur Chat-Schlüssel (direct, group, channel); Cron-, Subagent- und Hauptsitzungs-Schlüssel bleiben Altbestand. `createdAt`, `updatedAt`, Status und Embedding-Felder bleiben unverändert, die Vektoren hängen weiter an der Id. Trockenlauf am 26.11.: main 2 887, bernhardine 4 589, heisenberg 156 (mit `--legacy-trajectories` 188). Index-Einträge, deren Journalzeilen schon vor 7.19.3 gekürzt wurden, bleiben ohne Schlüssel; `--include-index-only` schreibt die zuordenbaren als reine Indexzeilen.
+- **Kandidatenindex mit Vertraulichkeit.** Globale Neo-Treffer kamen als Indexkopien ohne `sensitivity` an und galten fremd immer als unklassifiziert, auch für Erfassungen ab 7.21.2.
+
+### Hinzugefügt
+
+- **`store.appendCandidateRevisions`.** `appendCandidates` verwirft eine Revision, deren Text gleich bleibt (Inhalts-Dedupe). Die neue Methode schreibt Journal und Index unter derselben Sperre, prüft dabei die erwarteten Dateigrößen und schreibt bei Abweichung nichts. Den Index nie aus dem Journal neu aufbauen, um so etwas rückgängig zu machen: Bei main und bernhardine stehen viele Einträge nur noch im Index, ein Neuaufbau würde sie und danach ihre Vektoren verlieren.
+- **GitHub Packages im Release-Workflow.** Der neue Job `github-packages` in `plugin-release.yml` veröffentlicht nach `github-release` denselben Tarball mit dem automatischen Token (`packages: write`, kein Secret) auf `npm.pkg.github.com`; bis 7.21.4 ging das von Hand. Vorher prüft er das Artefakt gegen `SHA256SUMS` und diese Datei gegen das Release-Asset, danach liest er `dist.integrity` zurück. Eine schon vorhandene Version mit denselben Bytes wird übersprungen, mit anderen Bytes bricht der Job ab. `latest` rückt nur auf ein reines x.y.z vor, das über der höchsten veröffentlichten Version liegt. Schlägt nur dieser Job fehl, reicht „Re-run failed jobs“.
+- **Messstand `bench/` auf Stand 25.11.2026**: `run.mjs`, `lib/common.mjs` und das neue `lib/recall-cache.mjs` aus dem Live-Messstand übernommen. Antwort, Jury, Einbettungen, Reranker und `ingest-capture.mjs --jev` laufen nur noch mit eigenen Schlüsseln (`BENCH_OPENAI_API_KEY`, `BENCH_COHERE_API_KEY`, `BENCH_DEEPSEEK_API_KEY`, `BENCH_TYPESAFE_API_KEY`); `loadEnv` lehnt jede Datei unter `~/.openclaw`, `$OPENCLAW_HOME` oder `$OPENCLAW_STATE_DIR` ab. Neu sind der Recall-Cache, `--auto-policy off|base|full`, `--cohere-billing`, `--temporal-mode`, `--judge-provider` und `--rerank-model` (Standard `rerank-v5.0-fast`, `BENCH_DEFAULT_RERANK_MODEL`). `excluded.json` führt nach der Gold-Prüfung vom 24.11. 25 Fragen.
+- **Package-Version 7.21.5.**
+
 ## [7.21.4] — 2026-11-25
 
 **Weniger synchrone Arbeit im Main-Thread nach jedem Zug.** Die Analyse der Main-Thread-Stalls vom 24./25.11. (884 Stalls ≥ 1 s im Betrieb, 2 100 s) fand im `agent_end`-Pfad von PLUR1BUS zwei feste Kosten je Capture, gemessen auf einer Kopie der bernhardine-Daten: der Neo-Embedding-Drain mit 0,8–1,0 s auch ohne offene Einträge und die Graph-Dedupe mit 0,3–0,5 s.

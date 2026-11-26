@@ -61,6 +61,7 @@ BREAKING_CHANGE_AUDIT.md
 !scripts/reindex-provider.mjs
 !scripts/reembed-clean.mjs
 !scripts/sensitivity-backfill.mjs
+!scripts/neo-origin-backfill.mjs
 !scripts/embed-promoted-memories.mjs
 !scripts/install-memory-system.sh
 !scripts/snapshot-store.mjs
