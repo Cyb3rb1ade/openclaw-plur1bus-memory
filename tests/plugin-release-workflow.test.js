@@ -5,15 +5,15 @@ import {
   chmodSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import test from "node:test";
+
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const readRepoFile = (path) =>
   readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -263,7 +263,7 @@ const integrityOf = (bytes) => `sha512-${createHash("sha512").update(bytes).dige
 
 function runPublish({ version, channel = "stable", versions = {}, publish = "ok", sameBytesAs = null }) {
   const script = publishScript(jobBlock(readRepoFile(WORKFLOW), "github-packages"));
-  const root = mkdtempSync(join(tmpdir(), "plugin-release-gpr-"));
+  const root = makeTempDir("plugin-release-gpr-");
   try {
     const runnerTemp = join(root, "runner");
     const release = join(runnerTemp, "release");
