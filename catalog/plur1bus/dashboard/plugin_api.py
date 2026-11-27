@@ -121,7 +121,7 @@ def desktop_capabilities(request: Request) -> dict[str, Any]:
 
 class _RetrievalPreview(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    kind: str = Field(pattern="^(embedding|reranker|reranker-prepare|activate)$")
+    kind: str = Field(pattern="^(embedding|embedding-prepare|reranker|reranker-prepare|activate)$")
     target: dict = Field(default_factory=dict, max_length=20)
     job: str = Field(default="", max_length=64)
 
@@ -195,18 +195,21 @@ def settings_commit(body: _SettingChange, request: Request):
 class _RetrievalCommit(BaseModel):
     model_config = ConfigDict(extra="forbid")
     nonce: str = Field(max_length=128)
-    confirmation: str = Field(pattern="^(embedding|reranker|reranker-prepare|activate)$")
+    confirmation: str = Field(pattern="^(embedding|embedding-prepare|reranker|reranker-prepare|activate)$")
 
 
 @router.get("/desktop/retrieval")
 def retrieval_options(request: Request) -> dict[str, Any]:
     """Return editable, secret-free settings for the authenticated current profile."""
     actor = _desktop_actor(request, read_only=True)
-    from plur1bus_hermes.retrieval_admin import public_config, EMBEDDING_PROVIDERS, RERANKER_PROVIDERS
+    from sys import platform
+    from plur1bus_hermes.retrieval_admin import public_config, gemma_default_target, EMBEDDING_PROVIDERS, RERANKER_PROVIDERS
     view = _active_runtime_view()
     return {"embedding": public_config(view.config.get("embedding", {})),
             "reranker": public_config(view.config.get("reranker", {})),
             "embeddingProviders": EMBEDDING_PROVIDERS, "rerankerProviders": RERANKER_PROVIDERS,
+            "embeddingGemma2": {dtype: gemma_default_target(view, dtype) for dtype in ("q8", "q4", "fp32")},
+            "engineIpcWindows": platform == "win32",
             "readOnly": actor == "hosted:read-only"}
 
 
@@ -214,8 +217,7 @@ def retrieval_options(request: Request) -> dict[str, Any]:
 def retrieval_preview(body: _RetrievalPreview, request: Request) -> dict[str, Any]:
     """Pin an explicit target and scope; preview does not load models or write data."""
     actor = _desktop_actor(request)
-    from plur1bus_hermes.retrieval_admin import context_revision, validate_target
-    from plur1bus_hermes.reembed_staged import plan_staged_reembed
+    from plur1bus_hermes.retrieval_admin import context_revision, embedding_migration_plan, validate_target
     view = _active_runtime_view()
     revision = context_revision(view)
     try:
@@ -223,13 +225,14 @@ def retrieval_preview(body: _RetrievalPreview, request: Request) -> dict[str, An
             with _nonce_lock:
                 job = _retrieval_jobs.get(body.job)
                 if (not job or job["actor"] != actor or job["revision"] != revision
-                        or job["kind"] != "embedding" or job["status"] != "done"):
+                        or job["kind"] != "embedding" or not job["plan"] or job["status"] != "done"):
                     raise HTTPException(409, "reviewed_stage_required")
                 target, plan = job["target"], job["plan"]
         else:
-            target = validate_target("reranker" if body.kind == "reranker-prepare" else body.kind, body.target)
-            plan = (plan_staged_reembed(view.data_dir, view.agent_id, {**view.config, "embedding": target})
-                    if body.kind == "embedding" else None)
+            target = validate_target(body.kind.removesuffix("-prepare"), body.target)
+            if body.kind == "embedding-prepare" and target["provider"] != "local-onnx":
+                raise HTTPException(422, "only_local_onnx_is_prepared")
+            plan = embedding_migration_plan(view, target) if body.kind == "embedding" else None
         nonce = secrets.token_urlsafe(32)
         with _nonce_lock:
             now = time.monotonic()
@@ -241,9 +244,9 @@ def retrieval_preview(body: _RetrievalPreview, request: Request) -> dict[str, An
             _retrieval_reviews[nonce] = {"actor": actor, "revision": revision, "target": target,
                 "plan": plan, "kind": body.kind, "expires": now + _NONCE_TTL_SECONDS}
         return {"nonce": nonce, "kind": body.kind, "profile": view.profile, "agentId": view.agent_id,
-                "target": target, "cards": plan["sourceCards"] if plan else None,
+                "target": target, "cards": plan["sourceCards"] if plan else (0 if body.kind == "embedding" else None),
                 "planId": plan["planId"] if plan else None,
-                "requiresStoppedRuntimes": True,
+                "requiresStoppedRuntimes": body.kind != "embedding-prepare",
                 "externalData": target.get("provider") in {"openai-compatible", "omlx", "cohere"}}
     except HTTPException:
         raise
@@ -253,7 +256,8 @@ def retrieval_preview(body: _RetrievalPreview, request: Request) -> dict[str, An
 
 def _run_retrieval_job(identifier: str, view: Any) -> None:
     """Run once; status polling never retries a mutation."""
-    from plur1bus_hermes.retrieval_admin import save_reranker, stage_embedding, context_revision
+    from plur1bus_hermes.retrieval_admin import (context_revision, prepare_embedding, prepare_reranker, save_empty_embedding,
+                                                 save_reranker, stage_embedding)
     from plur1bus_hermes.generation import activate_staged_generation
     with _nonce_lock:
         job = _retrieval_jobs[identifier]
@@ -270,10 +274,14 @@ def _run_retrieval_job(identifier: str, view: Any) -> None:
             # The view is already bound by Hermes to the active profile.  Do
             # not reconstruct a root/profile pair here: a profile-local home
             # must remain profile-local throughout preparation and probing.
-            from plur1bus_hermes.retrieval_admin import prepare_reranker
             result = prepare_reranker(view, job["target"], job["revision"])
+        elif job["kind"] == "embedding-prepare":
+            result = prepare_embedding(view, job["target"], job["revision"])
         elif job["kind"] == "embedding":
-            result = stage_embedding(view, job["target"], job["plan"], progress)
+            if job["plan"] is None:
+                result = save_empty_embedding(view, job["target"], job["revision"])
+            else:
+                result = stage_embedding(view, job["target"], job["plan"], progress, revision=job["revision"])
         else:
             result = activate_staged_generation(job["plan"], view.data_dir, view.agent_id,
                 {**view.config, "embedding": job["target"]}, approved_plan_id=job["plan"]["planId"])

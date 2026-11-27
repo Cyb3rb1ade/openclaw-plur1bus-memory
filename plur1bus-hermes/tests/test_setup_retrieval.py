@@ -146,3 +146,21 @@ class SetupRetrievalTests(unittest.TestCase):
         with patch.object(EmbeddingBackend, "embed", return_value=[0.2, 0.3]):
             self.assertTrue(execute(self.home, "empty", "embedding", self.target, "activate", confirmation=plan["confirmation"], stopped=True)["saved"])
         self.assertEqual(json.loads(self.path.read_text()), self.config)
+
+    def test_materialized_empty_writer_gets_a_staged_schema_and_keeps_its_source(self):
+        table = lancedb.connect(str(self.source)).open_table("memories")
+        table.delete("id IS NOT NULL")
+        original_schema = table.schema
+        plan = self.plan()
+        self.assertEqual(plan["migration"]["sourceCards"], 0)
+        self.assertEqual(plan["operation"], "reembed-memories")
+        with patch.object(EmbeddingBackend, "embed", return_value=[0.2, 0.3]) as probe:
+            staged = execute(self.home, "default", "embedding", self.target, "stage", confirmation=plan["confirmation"], stopped=True)
+        probe.assert_called_once()
+        self.assertTrue(staged["validated"])
+        self.assertIsNone(read_generation(self.data, "default"))
+        self.assertTrue(execute(self.home, "default", "embedding", self.target, "activate", confirmation=plan["confirmation"], stopped=True)["activated"])
+        self.assertTrue(lancedb.connect(str(self.source)).open_table("memories").schema.equals(original_schema))
+        target = lancedb.connect(plan["migration"]["targetRoute"]).open_table("memories")
+        self.assertEqual(target.count_rows(), 0)
+        self.assertEqual(target.schema.field("vector").type.list_size, 2)

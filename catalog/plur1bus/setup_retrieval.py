@@ -8,14 +8,12 @@ import hashlib
 import json
 from pathlib import Path
 
-from .generation import _atomic_json, _reject_symlink_components, _validate_complete, activate_staged_generation, read_generation, generation_namespace
+from .generation import _reject_symlink_components, _validate_complete, activate_staged_generation, generation_namespace
 from .operator_cli import runtime_view
-from .retrieval_admin import config_path, context_revision, public_config, save_reranker, stage_embedding, validate_target
-from .reembed_staged import _finite_vector, _source_snapshot, plan_staged_reembed, validate_staged_reembed
-from .runtime import EmbeddingBackend
-from .runtime_lease import exclusive_generation_lease
+from .retrieval_admin import (config_path, context_revision, embedding_migration_plan, prepare_embedding,
+                              public_config, save_empty_embedding, save_reranker, stage_embedding, validate_target)
+from .reembed_staged import _source_snapshot, validate_staged_reembed
 from .validation import ValidationError, safe_agent_id
-from .writer_lock import writer_lock
 
 
 def _view(home: Path, profile: str):
@@ -43,21 +41,8 @@ def review(home: Path, profile: str, kind: str, target: dict) -> dict:
     staged = None
     operation = "reranker-change"
     if kind == "embedding":
-        source = view._writer_route.path
-        _reject_symlink_components(view.data_dir.absolute(), source, message="unsafe source database")
-        empty = not source.exists()
-        if not empty:
-            import lancedb
-            database = lancedb.connect(str(source))
-            names = database.table_names()
-            empty = "memories" not in names or database.open_table("memories").count_rows() == 0
-        if empty:
-            if read_generation(view.data_dir, view.agent_id, generation_namespace(view.config)) is not None:
-                raise ValidationError("empty active generation requires explicit generation recovery, not a config reset")
-            operation = "configure-empty-store"
-        else:
-            staged = plan_staged_reembed(view.data_dir, view.agent_id, {**view.config, "embedding": target})
-            operation = "reembed-memories"
+        staged = embedding_migration_plan(view, target)
+        operation = "configure-empty-store" if staged is None else "reembed-memories"
     result = {"schema": 1, "home": str(view.hermes_home), "profile": profile, "agentId": view.agent_id,
               "kind": kind, "target": target, "current": public_config(view.config.get(kind, {})),
               "revision": context_revision(view), "operation": operation, "migration": staged,
@@ -87,17 +72,7 @@ def execute(home: Path, profile: str, kind: str, target: dict, action: str = "pl
         if kind == "reranker":
             from .retrieval_admin import prepare_reranker
             return prepare_reranker(view, plan["target"], plan["revision"])
-        if plan["target"]["provider"] == "local-onnx":
-            from .jina_v5_nano import prepare_model
-            prepared = prepare_model(plan["target"]["modelDir"], accepted=plan["target"].get("licenseAccepted") is True)
-        else:
-            prepared = {"prepared": True}
-        backend = EmbeddingBackend(plan["target"], view.hermes_home)
-        try:
-            _finite_vector(backend.embed("PLUR1BUS configuration probe"), plan["target"]["dimensions"])
-        finally:
-            backend.close()
-        return {**prepared, "modelProbePassed": True, "activeConfigurationUnchanged": True}
+        return prepare_embedding(view, plan["target"], plan["revision"])
     if action == "stage":
         if plan["migration"] is None:
             raise ValidationError("staging is only needed for a populated embedding store; use activate for a reviewed config change")
@@ -125,23 +100,4 @@ def execute(home: Path, profile: str, kind: str, target: dict, action: str = "pl
         # non-vector record fields immediately before/after pointer publication.
         return activate_staged_generation(plan["migration"], view.data_dir, view.agent_id, config,
                                           approved_plan_id=plan["migration"]["planId"])
-    with exclusive_generation_lease(view.data_dir), writer_lock(view.data_dir):
-        if review(home, profile, kind, target) != plan:
-            raise ValidationError("retrieval state changed while acquiring lease")
-        backend = EmbeddingBackend(plan["target"], view.hermes_home)
-        try:
-            _finite_vector(backend.embed("PLUR1BUS configuration probe"), plan["target"]["dimensions"])
-        finally:
-            backend.close()
-        path = config_path(view)
-        original = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-        if not isinstance(original, dict):
-            raise ValidationError("invalid profile configuration")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        backup = path.with_name("config.before-embedding-" + plan["confirmation"][:16] + ".json")
-        _reject_symlink_components(view.hermes_home, backup, message="unsafe config backup")
-        if not backup.exists():
-            _atomic_json(backup, {"existed": path.exists(), "config": original})
-        _atomic_json(path, {**original, "embedding": plan["target"], "reranker": view.config.get("reranker", {}),
-                            "retrieval": {**original.get("retrieval", {}), "mode": "plur1bus"}})
-        return {"saved": True, "restartRequired": True, "backup": str(backup), "memoryMigrationRequired": False}
+    return save_empty_embedding(view, plan["target"], plan["revision"], backup_key=plan["confirmation"])

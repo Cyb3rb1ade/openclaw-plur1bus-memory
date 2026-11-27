@@ -504,6 +504,7 @@ const css = `
  */
 export function retrievalDefaults(provider, kind) {
   if (provider === 'disabled') return { provider };
+  if (provider === 'engine-ipc') return { provider, model: '', dimensions: 768, stateRoot: '', fingerprintId: '' };
   if (provider === 'local-onnx' && kind === 'reranker') return { provider, model: 'BAAI/bge-reranker-v2-m3',
     revision: '6f5ff65298512715a1e669753bc754d2bc8f367b', modelDir: '', localFilesOnly: true,
     maxTokens: 512, batchSize: 8 };
@@ -708,6 +709,16 @@ function RetrievalSettings({ rest }) {
     h('input', { value: target[key] || '', maxLength: 2048, required, disabled: busy,
       onChange: event => { const next = { ...target }; if (event.target.value) next[key] = event.target.value; else delete next[key]; edit(next); } }));
   const providers = settings?.[kind === 'embedding' ? 'embeddingProviders' : 'rerankerProviders'] || [];
+  const gemmaPresets = settings?.embeddingGemma2;
+  const nativeEmbedding = kind === 'embedding' && target.provider === 'local-onnx';
+  const gemma = nativeEmbedding && target.model === 'google/embeddinggemma-2';
+  const modelOptions = nativeEmbedding && gemmaPresets?.q8;
+  const dimensionsControl = gemma
+    ? h('select', { value: target.dimensions, disabled: busy,
+      onChange: event => edit({ ...target, dimensions: Number(event.target.value) }) },
+      ...[128, 256, 512, 768].map(value => h('option', { key: value, value }, value)))
+    : h('input', { type: 'number', min: 1, max: 8192, required: true, value: target.dimensions || '', disabled: busy,
+      onChange: event => edit({ ...target, dimensions: Number(event.target.value) }) });
   return h('section', null, h('h2', null, tr('Providers & Dimensions', 'Provider & Dimensionen')),
     h('p', null, settings?.readOnly
       ? tr("This connection is read-only. Open the profile as the backend's launch profile to change providers or migrate dimensions.", "Diese Backend-Route erlaubt nur lesenden Zugriff. Für Provider-Wechsel und Dimensionsmigration das Profil als Backend-Startprofil öffnen.")
@@ -719,28 +730,65 @@ function RetrievalSettings({ rest }) {
           setKind(event.target.value); edit(settings[event.target.value]);
         } }, h('option', { value: 'embedding' }, tr('Embeddings / Dimensions', 'Embeddings / Dimensionen')), h('option', { value: 'reranker' }, 'Reranking'))),
         h('label', null, 'Ziel-Provider', h('select', { value: target.provider || '', disabled: busy,
-          onChange: event => edit(event.target.value === settings[kind].provider ? { ...settings[kind] }
-            : retrievalDefaults(event.target.value, kind)) }, providers.map(value => h('option', { key: value, value }, value)))),
-        target.provider !== 'disabled' ? textField('model', 'Ziel-Modell', true) : null,
-        kind === 'embedding' ? h('label', null, 'Ziel-Dimensionen', h('input', { type: 'number', min: 1, max: 8192,
-          required: true, value: target.dimensions || '', disabled: busy,
-          onChange: event => edit({ ...target, dimensions: Number(event.target.value) }) })) : null),
+          onChange: event => {
+            const provider = event.target.value;
+            if (provider === settings[kind].provider) edit({ ...settings[kind] });
+            else if (provider === 'local-onnx' && kind === 'embedding' && gemmaPresets?.q8) edit({ ...gemmaPresets.q8 });
+            else edit(retrievalDefaults(provider, kind));
+          } }, providers.map(value => h('option', { key: value, value }, value)))),
+        modelOptions ? h('label', null, tr("Local model", "Lokales Modell"), h('select', {
+          value: target.model, disabled: busy, onChange: event => {
+            const selected = event.target.value;
+            if (selected === settings.embedding.model && settings.embedding.provider === 'local-onnx') {
+              edit({ ...settings.embedding });
+            } else {
+              edit(selected === gemmaPresets.q8.model ? { ...gemmaPresets.q8 } : retrievalDefaults('local-onnx', kind));
+            }
+          } },
+          h('option', { value: 'jinaai/jina-embeddings-v5-text-nano-retrieval' }, 'Jina v5 Nano'),
+          h('option', { value: gemmaPresets.q8.model }, 'EmbeddingGemma 2')))
+          : target.provider !== 'disabled' ? textField('model', tr("Target model", "Ziel-Modell"), true) : null,
+        kind === 'embedding' ? h('label', null, tr("Target dimensions", "Ziel-Dimensionen"), dimensionsControl) : null),
       target.provider === 'local-onnx' ? h(React.Fragment, null,
-        h('div', { className: 'pb-actions' }, textField('modelDir', tr("Existing model folder", "Vorhandener Modellordner"), true)),
-        kind === 'embedding' ? h(React.Fragment, null,
-          h('p', null, tr("Jina v5 Nano supports 32, 64, 128, 256, 512 and 768 dimensions. Vectors are recomputed from the original text. The model must already be installed.", "Jina v5 Nano unterstützt 32, 64, 128, 256, 512 und 768 Dimensionen. Vektoren werden aus den Originaltexten neu berechnet. Kein automatischer Modelldownload.")),
-          h('label', { className: 'pb-check' }, h('input', { type: 'checkbox', checked: target.licenseAccepted === true, disabled: busy,
-            onChange: event => edit({ ...target, licenseAccepted: event.target.checked }) }), tr("Accept CC-BY-NC-4.0 for this model (non-commercial use).", "CC-BY-NC-4.0 für dieses Modell akzeptieren (keine kommerzielle Nutzung).")))
+        h('div', { className: 'pb-actions' }, textField('modelDir', tr("Model folder", "Modellordner"), true),
+          gemma && gemmaPresets ? h('label', null, tr("Quantization", "Quantisierung"), h('select', {
+            value: target.dtype || 'q8', disabled: busy, onChange: event => {
+              const preset = gemmaPresets[event.target.value];
+              if (preset) edit({ ...preset, dimensions: target.dimensions });
+            } },
+            ...Object.keys(gemmaPresets).map(value => h('option', { key: value, value }, value)))) : null),
+        gemma ? h('p', null, tr("EmbeddingGemma 2 supports 128, 256, 512 and 768 dimensions and uses Apache-2.0. Prepare the verified model before changing the memory store.",
+          "EmbeddingGemma 2 unterstützt 128, 256, 512 und 768 Dimensionen und steht unter Apache-2.0. Bereite das geprüfte Modell vor, bevor du den Speicher umstellst."))
+          : nativeEmbedding ? h(React.Fragment, null,
+            h('p', null, tr("Jina v5 Nano supports 32, 64, 128, 256, 512 and 768 dimensions. Vectors are recomputed from the original text.", "Jina v5 Nano unterstützt 32, 64, 128, 256, 512 und 768 Dimensionen. Vektoren werden aus den Originaltexten neu berechnet.")),
+            h('label', { className: 'pb-check' }, h('input', { type: 'checkbox', checked: target.licenseAccepted === true, disabled: busy,
+              onChange: event => edit({ ...target, licenseAccepted: event.target.checked }) }), tr("Accept CC-BY-NC-4.0 for this model (non-commercial use).", "CC-BY-NC-4.0 für dieses Modell akzeptieren (keine kommerzielle Nutzung).")))
           : h('p', null, tr("Prepare the checksum-verified, quantized BGE v2-m3 CPU ONNX model. Recall uses the installed model.", "BGE v2-m3 wird als byte-geprüftes, quantisiertes CPU-ONNX-Modell vorbereitet. Es gibt keinen Download während eines Recall-Aufrufs."))) : null,
       ['openai-compatible', 'omlx', 'cohere'].includes(target.provider) ? h('div', { className: 'pb-actions' },
         target.provider !== 'cohere' ? textField('baseUrl', 'API-Basis-URL', target.provider === 'openai-compatible') : null,
         textField('apiKeyEnv', tr("API key environment variable", "API-Key: Name der Umgebungsvariable"))) : null,
       target.provider === 'local-transformers' ? h('div', { className: 'pb-actions' }, textField('revision', 'Modell-Revision (optional)'),
         textField('cacheDir', 'Modell-Cache (optional)')) : null,
-      h('p', null, tr("Stop the gateway and other processes using this memory store before running the job. Hermes Desktop can stay open.", "Vor Ausführung müssen Gateway und andere Memory-Laufzeiten dieses Speichers gestoppt sein. Hermes Desktop kann offen bleiben. Es werden keine Prozesse automatisch beendet.")),
+      target.provider === 'engine-ipc' ? h(React.Fragment, null,
+        h('p', null, tr("Start the local Engine embedding service. Copy its model, dimensions and fingerprint. The fingerprint binds the vector space.",
+          "Starte den lokalen Engine-Embedding-Dienst. Übernimm das Modell, die Dimensionen und den Fingerabdruck aus seiner Ausgabe. Der Fingerabdruck bindet den Vektorraum.")),
+        h('div', { className: 'pb-actions' },
+          textField('stateRoot', tr("Engine state directory", "Engine-Zustandsordner"), true),
+          textField('fingerprintId', tr("Engine embedding fingerprint", "Engine-Embedding-Fingerabdruck"), true),
+          settings.engineIpcWindows ? h('label', null, tr("Windows pipe mode", "Windows-Pipe-Modus"), h('select', {
+            value: target.pipeMode || 'engine', disabled: busy, onChange: event => {
+              const next = { ...target };
+              if (event.target.value === 'legacy') next.pipeMode = 'legacy'; else delete next.pipeMode;
+              edit(next);
+            } }, h('option', { value: 'engine' }, tr("Engine", "Engine")),
+            h('option', { value: 'legacy' }, tr("Legacy owner", "Älterer Dienst")))) : null)) : null,
+      h('p', null, tr("Before applying a change or migrating vectors, stop the gateway and other processes using the memory store. Hermes Desktop can stay open.", "Zum Übernehmen einer Änderung oder zur Vektormigration müssen Gateway und andere Speicher-Laufzeiten gestoppt sein. Hermes Desktop kann offen bleiben.")),
       h('p', null, kind === 'embedding' ? tr("The existing store is preserved. Preview, back up and convert, verify, then activate separately.", "Der bestehende Speicher bleibt erhalten. Ablauf: Vorschau, Backup & Umrechnung, Prüfung, separate Aktivierung.")
         : tr("Reranking changes preserve the current vectors. The profile configuration is backed up. Restart the memory runtime to apply.", "Reranking benötigt keine Vektormigration. Die Profilkonfiguration wird gesichert; die Änderung gilt nach Neustart der Memory-Laufzeit.")),
       h('button', { type: 'submit', disabled: busy }, tr("Review change", "Änderung prüfen")),
+      nativeEmbedding && modelOptions
+        ? h('button', { type: 'button', disabled: busy, onClick: () => { void preview('embedding-prepare'); } },
+          tr("Prepare embedding model", "Embedding-Modell vorbereiten")) : null,
       kind === 'reranker' && target.provider === 'local-onnx'
         ? h('button', { type: 'button', disabled: busy, onClick: () => { void preview('reranker-prepare'); } }, tr("Prepare BGE model", "BGE-Modell vorbereiten")) : null) : null,
     error ? h('p', { role: 'alert' }, error) : null,
@@ -748,10 +796,14 @@ function RetrievalSettings({ rest }) {
       h('p', null, `Profil ${review.profile} · Agent ${review.agentId} · ${review.target.provider} · ${review.target.model || 'deaktiviert'}`),
       review.cards != null ? h('p', null, `${review.cards} Erinnerungen → ${review.target.dimensions} Dimensionen`) : null,
       review.externalData ? h('p', { role: 'alert' }, tr("This provider receives memory text over its API. Check the endpoint and potential costs before confirming.", "Achtung: Dieser Provider erhält Erinnerungstexte über seine API. Prüfe den Endpoint und mögliche Kosten vor der Bestätigung.")) : null,
+      review.target.provider === 'engine-ipc' ? h('p', null, tr("The selected Engine service receives the text to embed. Verify the service that owns this directory before confirming.",
+        "Der ausgewählte Engine-Dienst erhält den einzubettenden Text. Prüfe vor der Bestätigung, welcher Dienst diesen Ordner verwendet.")) : null,
       h('label', { className: 'pb-check' }, h('input', { type: 'checkbox', checked: approved, disabled: busy,
         onChange: event => setApproved(event.target.checked) }), tr("I have reviewed the target and profile and confirm the change.", "Ich habe Ziel und Profil geprüft und bestätige diese Änderung.")),
       h('button', { disabled: busy || !approved, onClick: () => { void commit(); } },
-        review.kind === 'activate' ? tr("Activate verified store", "Geprüften Speicher aktivieren") : review.kind === 'embedding' ? tr("Start backup and conversion", "Backup & Umrechnung starten")
+        review.kind === 'activate' ? tr("Activate verified store", "Geprüften Speicher aktivieren") : review.kind === 'embedding' ? (review.planId ? tr("Start backup and conversion", "Backup & Umrechnung starten")
+          : tr("Apply model settings", "Modelleinstellung übernehmen"))
+          : review.kind === 'embedding-prepare' ? tr("Prepare embedding model", "Embedding-Modell vorbereiten")
           : review.kind === 'reranker-prepare' ? tr("Prepare BGE model", "BGE-Modell vorbereiten") : tr("Save reranking", "Reranking speichern"))) : null,
     job ? h('div', { role: 'status' },
       h('p', null, `Auftrag: ${job.status}${job.progress ? ` · ${job.progress.cursor}/${job.progress.cards}` : ''}`),
@@ -760,7 +812,9 @@ function RetrievalSettings({ rest }) {
         : tr("The job failed and the source was preserved. Check model availability and source changes before retrying.", "Auftrag fehlgeschlagen. Quelle bleibt erhalten; Modellverfügbarkeit und Quelländerungen prüfen. Keine automatische Wiederholung.")) : null,
       job.result?.validated ? h(React.Fragment, null, h('p', null, tr("Backup created. The new vectors and metadata were verified and await activation.", "Backup vorhanden. Neue Vektoren und unveränderte Metadaten geprüft; noch nicht aktiv.")),
         h('button', { disabled: busy, onClick: () => { void preview('activate'); } }, tr("Review activation", "Aktivierung prüfen"))) : null,
-      job.result?.modelProbePassed ? h('p', null, tr("The BGE model passed checksum verification and a test. You can now select it in the reranker configuration.", "BGE-Modell byte-geprüft und getestet; die aktive Reranker-Konfiguration blieb unverändert.")) : null,
+      job.result?.modelProbePassed ? h('p', null, job.kind === 'embedding-prepare'
+        ? tr("The embedding model passed verification and a test. Review the model change when ready.", "Embedding-Modell geprüft und getestet. Du kannst den Modellwechsel jetzt prüfen.")
+        : tr("The BGE model passed verification and a test. You can now select it in the reranker configuration.", "BGE-Modell geprüft und getestet. Du kannst es jetzt als Reranker auswählen.")) : null,
       job.result?.restartRequired ? h('p', null, tr("Saved. Restart the memory runtime and refresh status.", "Gespeichert. Memory-Laufzeit jetzt neu starten und anschließend den Status aktualisieren.")) : null) : null);
 }
 

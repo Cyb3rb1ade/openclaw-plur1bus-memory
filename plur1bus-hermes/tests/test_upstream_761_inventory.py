@@ -22,7 +22,11 @@ HERMES_REVIEWED_BLOBS = {
     "plur1bus-hermes/src/plur1bus_hermes/mood.py": "16dc1acabca8dbb2e8c6221f2ca75fb58f909723",
     "plur1bus-hermes/src/plur1bus_hermes/query_refinement.py": "7fab5136af1e8b8de77b4e9cbd8cd5a1e1cd9ea2",
     "plur1bus-hermes/src/plur1bus_hermes/reembed.py": "afd7bf67ca56d0bc0d805863f9f2b3736ed6384c",
-    "plur1bus-hermes/src/plur1bus_hermes/reembed_staged.py": "4e685ff1576b58e45d67b707cfe1ec84f3d3e399",
+    # Hermes.1 certified recall identities and safe retrieval setup.
+    "plur1bus-hermes/src/plur1bus_hermes/generation.py": "1e3ef5b532f57eeddc1961a5cb85f10ab601458e",
+    "plur1bus-hermes/src/plur1bus_hermes/namespaces.py": "5441b42c08d9fe12e2beeac38f410121b0dab16f",
+    "plur1bus-hermes/src/plur1bus_hermes/reembed_staged.py": "4653e1b5b0b640b59d4b253867e0854c6713a4a1",
+    "plur1bus-hermes/src/plur1bus_hermes/setup_retrieval.py": "acee2b715ba777e817e1b46627b74d9578f385db",
     "plur1bus-hermes/src/plur1bus_hermes/shared_pools.py": "9a6f17fc2e7383e7d92f38a3ecc80244d7c109bd",
 }
 

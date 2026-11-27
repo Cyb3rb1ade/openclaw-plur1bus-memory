@@ -55,6 +55,7 @@ from .runtime_scheduler import AdmissionRejected, BoundedExecutor
 _PROFILE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 _DEFAULT_EMBEDDING_MODEL = "intfloat/multilingual-e5-base"
 _DEFAULT_RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
+_EMBEDDING_PROVIDERS = frozenset({"local-transformers", "local-onnx", "omlx", "openai-compatible", "engine-ipc"})
 # Hermes applies an 8 s external provider deadline. Keep recall below it while
 # allowing the embedding and reranking round-trip to finish on a normal turn.
 _CURRENT_RECALL_WAIT_SECONDS = 7.0
@@ -198,7 +199,7 @@ class Plur1busMemoryProvider(MemoryProvider):
             return False
         if (local_embedding_needed or local_reranker_needed) and importlib.util.find_spec("sentence_transformers") is None:
             return False
-        return provider in {"local-transformers", "local-onnx", "omlx", "openai-compatible"} or bool(
+        return provider in _EMBEDDING_PROVIDERS or bool(
             embedding.get("apiKey")
             or profile_secret(str(embedding.get("apiKeyEnv") or "PLUR1BUS_EMBEDDING_API_KEY"), self._hermes_home)
         )
@@ -240,7 +241,7 @@ class Plur1busMemoryProvider(MemoryProvider):
             return "missing Python dependency: lancedb"
         if local_needed and importlib.util.find_spec("sentence_transformers") is None:
             return "missing Python dependency: sentence-transformers"
-        if provider not in {"local-transformers", "local-onnx", "omlx", "openai-compatible"} and not (
+        if provider not in _EMBEDDING_PROVIDERS and not (
             embedding.get("apiKey")
             or profile_secret(str(embedding.get("apiKeyEnv") or "PLUR1BUS_EMBEDDING_API_KEY"), self._hermes_home)
         ):
@@ -1223,7 +1224,7 @@ class Plur1busMemoryProvider(MemoryProvider):
         if not isinstance(embedding, Mapping):
             raise ValidationError("embedding configuration must be a mapping")
         provider = embedding.get("provider", "local-transformers")
-        if provider not in {"local-transformers", "local-onnx", "omlx", "openai-compatible"}:
+        if provider not in _EMBEDDING_PROVIDERS:
             raise ValidationError("unsupported embedding provider")
         validate_native_embedding_config(embedding)
         dimensions = self._positive_int(embedding.get("dimensions", 768), "embedding.dimensions")

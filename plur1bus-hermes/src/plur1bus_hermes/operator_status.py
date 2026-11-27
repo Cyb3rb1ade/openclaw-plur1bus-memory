@@ -43,6 +43,8 @@ def _credential_state(
         return "disabled"
     if provider in {"local-transformers", "local-onnx"}:
         return "not_required"
+    if not reranker and provider == "engine-ipc":
+        return "local_control_token"
     explicit_env = str(config.get("apiKeyEnv") or "")
     if provider == "omlx" or (reranker and provider == "openai-compatible"):
         env_name = explicit_env or "OMLX_API_KEY"

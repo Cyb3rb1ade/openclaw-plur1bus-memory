@@ -20,7 +20,7 @@ const react = new vm.SyntheticModule(['default'], function () {
 });
 // Execute the actual distributed ESM, with only its documented host imports injected.
 const source = await readFile(new URL('./plugin.js', import.meta.url), 'utf8');
-const plugin = new vm.SourceTextModule(source + '\nexport { FeatureSettings, Partition, HealthWatch, writeFeatureSetting };');
+const plugin = new vm.SourceTextModule(source + '\nexport { FeatureSettings, Partition, HealthWatch, RetrievalSettings, writeFeatureSetting };');
 await plugin.link(name => {
   if (name === 'react') return react;
   if (name === '@hermes/plugin-sdk') return sdk;
@@ -277,6 +277,19 @@ assert.deepEqual(retrievalDefaults('disabled', 'reranker'), { provider: 'disable
 assert.equal(retrievalDefaults('local-transformers', 'embedding').localFilesOnly, true);
 assert.equal(retrievalDefaults('openai-compatible', 'embedding').model, '');
 assert.equal(retrievalDefaults('openai-compatible', 'embedding').apiKey, undefined);
+const gemmaTarget = { provider: 'local-onnx', model: 'google/embeddinggemma-2', dtype: 'q4',
+  dimensions: 256, modelDir: '/models/gemma/q4' };
+const gemmaPresets = { q8: { ...gemmaTarget, dtype: 'q8' }, q4: gemmaTarget, fp32: { ...gemmaTarget, dtype: 'fp32' } };
+hookValues = [{ embedding: gemmaTarget, embeddingProviders: ['local-onnx'],
+  embeddingGemma2: gemmaPresets }, 'embedding', gemmaTarget];
+hookCursor = 0;
+const gemmaSettings = plugin.namespace.RetrievalSettings({ rest: async () => ({}) });
+assert.match(plainText(gemmaSettings), /EmbeddingGemma 2/);
+assert.match(plainText(gemmaSettings), /Prepare embedding model/);
+assert.doesNotMatch(plainText(gemmaSettings), /Accept CC-BY-NC-4.0/);
+assert.ok(elements(gemmaSettings, 'select').some(select => select[1].value === 'q4'));
+assert.ok(elements(gemmaSettings, 'select').some(select => select[1].value === 256));
+
 
 // The ambient SDK transport can lag the visible profile. Require the
 // backend's profile-binding protocol before any data request.
@@ -537,3 +550,15 @@ legacyDisposers.forEach(dispose => dispose());
 delete globalThis.window;
 assert.equal(closed, 1, 'hot unload closes the owned workspace');
 console.log('Native desktop routing, lifecycle, read and scoped action contracts passed.');
+
+const ipcTarget = { provider: 'engine-ipc', model: 'google/embeddinggemma-2', dimensions: 256,
+  stateRoot: '/owner/engine', fingerprintId: 'embedding:v1:sha256:' + 'a'.repeat(64) };
+hookValues = [{ embedding: ipcTarget, embeddingProviders: ['engine-ipc'], engineIpcWindows: false }, 'embedding', ipcTarget];
+hookCursor = 0;
+const ipcSettings = plugin.namespace.RetrievalSettings({ rest: async () => ({}) });
+assert.match(plainText(ipcSettings), /Engine embedding fingerprint/);
+assert.match(plainText(ipcSettings), /Engine state directory/);
+assert.doesNotMatch(plainText(ipcSettings), /API key environment variable|Prepare embedding model|Windows pipe mode/);
+hookValues = [{ embedding: ipcTarget, embeddingProviders: ['engine-ipc'], engineIpcWindows: true }, 'embedding', ipcTarget];
+hookCursor = 0;
+assert.match(plainText(plugin.namespace.RetrievalSettings({ rest: async () => ({}) })), /Windows pipe mode/);

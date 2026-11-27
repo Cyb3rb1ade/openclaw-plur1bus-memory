@@ -58,6 +58,29 @@ def test_fast_additive_results_are_returned_and_bad_results_fail_open(tmp_path):
         runtime.shutdown()
 
 
+def test_reactivation_can_finish_after_graph_budget_without_admitting_late_graph_results(tmp_path):
+    runtime = Plur1busRuntime(tmp_path, {"conversationReactivationRecall": {"enabled": True}}, "main")
+    entered, release_graph = threading.Event(), threading.Event()
+    results = [{"id": "base"}]
+
+    def boost(rows, *_args, **kwargs):
+        if kwargs.get("include_graph_lens", True):
+            entered.set()
+            assert release_graph.wait(5)
+            return rows + [{"id": "late-graph"}]
+        assert entered.wait(1)
+        time.sleep(0.075)
+        return rows + [{"id": "reactivation"}]
+
+    runtime._domain.boost_recall = boost
+    try:
+        result = runtime._boost_recall_with_deadline(results, object(), 4, {"session_id": "active"})
+        assert [row["id"] for row in result] == ["base", "reactivation"]
+    finally:
+        release_graph.set()
+        runtime.shutdown()
+
+
 def test_late_primary_prefetch_pins_generation_even_after_runtime_shutdown(tmp_path):
     runtime = Plur1busRuntime(tmp_path, {}, "main")
     entered, finish = threading.Event(), threading.Event()

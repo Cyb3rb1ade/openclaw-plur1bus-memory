@@ -13,8 +13,8 @@ SOURCE_PATHS = ("index.js", "adapter/openclaw", "lib", "scripts", "tests", "test
 REVIEWED_JS_BLOBS = {
     "scripts/lib/deploy-integrity.mjs": "2255414cd747dbb0f5b19925f265dae62f04364a",
     "tests/db-adapter-timeouts.test.js": "019aa6650d7b272a13d3acdcdde53e2a34532f7b",
-    "tests/dev-openclaw-pin.test.js": "28041b873c4f2fe4be77b0c003a0cea1dfe50667",
-    "tests/release-750-compat.test.js": "25bd3ff010f1ee424db350607eb7d3f8db473170",
+    "tests/dev-openclaw-pin.test.js": "33cf2c0c984c5269ae89120e82d4c9e9ada23018",
+    "tests/release-750-compat.test.js": "1fdd4c541746bc2fa91f9ee2df2e4e4e2202d965",
 }
 
 

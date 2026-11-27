@@ -16,16 +16,54 @@ model and storage controls, a memory browser, and diagnostics.
 3. Start or restart the profile's gateway. **PLUR1BUS** then appears in the
    Desktop navigation for that profile.
 
-Each profile opts in separately. Model and storage migrations require
-confirmation. If Hermes exposes a secondary profile in read-only mode, open
-it as the backend's launch profile to edit its settings.
+Each profile opts in separately. Edit feature settings in the selected
+profile. Model and storage migrations require confirmation and a writable
+retrieval connection. Open the profile as the backend's launch profile when
+Hermes exposes its retrieval controls in read-only mode.
 
 The catalog bundle contains reviewable source only. It uses Hermes Package
 Management for Python dependencies. Apple Silicon, Linux x64/ARM64, and Windows
 x64 use the published Python dependency stack. For Windows ARM64, use the native
-installer on the [release page](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/7.21.8-hermes.0);
+installer on the [release page](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/7.21.8-hermes.1);
 the catalog cannot carry its native LanceDB/PyArrow wheels. The release page also
 has the signed macOS installer and step-by-step guides.
+
+## EmbeddingGemma 2
+
+In **PLUR1BUS → Models & Storage**, select **local-onnx → EmbeddingGemma 2**
+to prepare the pinned Apache-2.0 model for the current profile. Choose q8, q4
+or fp32 and 128, 256, 512 or 768 dimensions. Model preparation downloads and
+verifies the text graph. Changing an existing writer uses a separately
+reviewed migration and activation.
+
+## Recall across embedding generations
+
+In a profile's PLUR1BUS `config.json`, list independently staged and activated
+namespaces under `namespaces.activeRecallNamespaces`. List the writer under
+`namespaces.activeWriteNamespace` and include it in the recall list. For each
+other vector identity, set `namespaces.recallEmbeddings.<namespace>` to the
+complete embedding configuration used to build its generation. Hermes
+compares the fingerprint and dimensions before using the provider. Use
+profile-scoped credential references for remote models. This configuration
+adds read routes within the profile. Captures still use the active writer.
+
+## Engine embedding IPC
+
+To use an existing local Engine embedding owner, select `engine-ipc` in
+**Models & Storage**. Enter the owner's absolute state root, model, dimensions,
+and `embedding:v1:sha256:…` fingerprint from its probe or serve response.
+The profile uses the authenticated endpoint under the selected state root.
+On Windows, the legacy pipe mode is available for a legacy OpenClaw owner.
+Switching the active writer to IPC uses the reviewed embedding migration.
+
+To serve a prepared, revision-pinned Hermes model to a local Engine client, run
+the following with the Python that has the PLUR1BUS Hermes plugin installed.
+The command prints the connection settings, including the fingerprint. Keep
+the service running while clients use it.
+
+```sh
+python -m plur1bus_hermes.embedding_ipc --hermes-home /absolute/path/to/.hermes --profile default
+```
 
 ## Conversation compression
 

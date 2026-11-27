@@ -7,6 +7,25 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.21.8-hermes.1] — 2026-11-27
+
+- Hermes unterstützt EmbeddingGemma 2 mit gepinnten ONNX-Artefakten, q8, q4 oder
+  fp32 sowie 128, 256, 512 oder 768 Dimensionen. Vorbereitung und Aktivierung
+  sind getrennte Aktionen. Beim Upgrade bleibt der bestehende Encoder aktiv.
+- Multi-Identity-Recall sucht zertifizierte Generationen eines Profils mit
+  ihren eigenen Encodern und kombiniert Ranglisten per Reciprocal Rank Fusion.
+  Capture schreibt weiterhin in die aktive Generation.
+- Der lokale Engine-IPC-Provider prüft Modell, Dimensionen, Fingerprint,
+  Betriebssystem-Identität und den Token des konfigurierten IPC-Diensts.
+- Automatischer Recall kann belegte Teile desselben Turns und derselben Rolle
+  zusammenfassen. Alte Zustandsangaben erhalten ein Erfassungsdatum im Prompt.
+  Die optionale `clean-v1`-Bereinigung lässt gespeicherten Rohtext bestehen.
+- Die Gesprächsreaktivierung erhält einen eigenen 250-ms-Rahmen. Der Rahmen für
+  Graph und Semantic Lens bleibt bei höchstens 50 ms.
+- Der Memory Graph ergänzt belegte Themenverbindungen zwischen verschiedenen
+  Captures desselben Profils. Ein begrenzter Journalindex verarbeitet Anhänge
+  und erkennt Wiederholungen ohne vollständigen historischen Scan.
+
 ## [7.21.8-hermes.0] — 2026-11-27
 
 - In Hermes Desktop lassen sich die unterstützten PLUR1BUS-Einstellungen im

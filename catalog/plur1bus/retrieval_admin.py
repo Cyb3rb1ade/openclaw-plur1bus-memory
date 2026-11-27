@@ -17,11 +17,12 @@ from .runtime_lease import exclusive_generation_lease
 from .writer_lock import writer_lock
 from .validation import ValidationError, safe_agent_id
 
-EMBEDDING_PROVIDERS = ["local-onnx", "local-transformers", "openai-compatible", "omlx"]
+EMBEDDING_PROVIDERS = ["local-onnx", "local-transformers", "engine-ipc", "openai-compatible", "omlx"]
 RERANKER_PROVIDERS = ["local-transformers", "local-onnx", "openai-compatible", "cohere", "omlx", "disabled"]
+IPC_FIELDS = {"stateRoot", "fingerprintId", "pipeMode"}
 FIELDS = {"provider", "model", "dimensions", "baseUrl", "apiKeyEnv", "modelDir", "cacheDir",
           "revision", "queryPrefix", "passagePrefix", "license", "licenseAccepted", "localFilesOnly",
-          "maxTokens", "batchSize"}
+          "maxTokens", "batchSize", "dtype"} | IPC_FIELDS
 
 
 def active_profile_name(home=None) -> str:
@@ -110,6 +111,11 @@ def validate_target(kind: str, value: dict) -> dict:
     choices = EMBEDDING_PROVIDERS if kind == "embedding" else RERANKER_PROVIDERS
     if result.get("provider") not in choices:
         raise ValidationError("unsupported retrieval provider")
+    if result["provider"] == "engine-ipc":
+        if result.keys() - IPC_FIELDS - {"provider", "model", "dimensions"}:
+            raise ValidationError("Engine IPC settings accept only a local endpoint and pinned identity")
+    elif IPC_FIELDS & result.keys():
+        raise ValidationError("Engine IPC settings require the matching provider")
     for key, item in result.items():
         if key in {"licenseAccepted", "localFilesOnly"}:
             if type(item) is not bool:
@@ -132,6 +138,8 @@ def validate_target(kind: str, value: dict) -> dict:
             raise ValidationError("use HTTPS or a loopback URL without credentials or query")
     if result["provider"] == "openai-compatible" and not result.get("baseUrl"):
         raise ValidationError("an explicit endpoint is required")
+    if "dtype" in result and (kind != "embedding" or result.get("model") != "google/embeddinggemma-2"):
+        raise ValidationError("dtype is only configurable for EmbeddingGemma 2")
     if kind == "embedding":
         from .runtime import validate_native_embedding_config
         validate_native_embedding_config(result)
@@ -186,6 +194,97 @@ def config_path(view) -> Path:
         path = nested
     _reject_symlink_components(home, path, message="unsafe profile config")
     return path
+
+
+def gemma_default_target(view, dtype: str) -> dict:
+    """Select an operator-visible model directory under the owning profile."""
+    from .embeddinggemma2 import default_config, model_artifacts
+    model_artifacts(dtype)
+    profile_home = config_path(view).parents[2]
+    directory = profile_home / "plur1bus" / "models" / "embeddinggemma-2" / dtype
+    return default_config(directory, dtype=dtype)
+
+
+def embedding_migration_plan(view, target: dict) -> dict | None:
+    """Plan a preserved-source migration, or identify an empty store."""
+    from .generation import generation_namespace, read_generation
+    from .reembed_staged import plan_staged_reembed
+
+    source = view._writer_route.path
+    _reject_symlink_components(view.data_dir.absolute(), source, message="unsafe source database")
+    active = read_generation(view.data_dir, view.agent_id, generation_namespace(view.config))
+    if source.exists():
+        import lancedb
+        database = lancedb.connect(str(source))
+        if "memories" in database.list_tables().tables:
+            table = database.open_table("memories")
+            width = getattr(table.schema.field("vector").type, "list_size", None)
+            if table.count_rows() or active is not None or width != target["dimensions"]:
+                # Keep the original schema even when the populated content is
+                # empty. A different width needs a staged Arrow schema.
+                return plan_staged_reembed(view.data_dir, view.agent_id, {**view.config, "embedding": target},
+                                           allow_empty_schema=True)
+    if active is not None:
+        raise ValidationError("active generation is missing its memory table")
+    return None
+
+
+def _probe_embedding(view, target: dict) -> None:
+    from .reembed_staged import _finite_vector
+    from .runtime import EmbeddingBackend
+
+    base = config_path(view).parents[2]
+    backend = EmbeddingBackend(target, view.hermes_home, credential_home=base)
+    try:
+        _finite_vector(backend.embed("PLUR1BUS configuration probe"), target["dimensions"])
+        if target["provider"] in {"local-onnx", "engine-ipc"}:
+            _finite_vector(backend.embed("PLUR1BUS configuration probe", purpose="query"), target["dimensions"])
+    finally:
+        backend.close()
+
+
+def prepare_embedding(view, target: dict, revision: str) -> dict:
+    """Fetch and probe an explicitly selected model without changing configuration."""
+    checked = validate_target("embedding", target)
+    if context_revision(view) != revision:
+        raise ValidationError("configuration changed; review again")
+    # Preparation publishes only verified model files and can run while
+    # Hermes holds a memory lease. Config and vector changes stay exclusive.
+    prepared = {"prepared": True}
+    if checked["provider"] == "local-onnx":
+        from . import embeddinggemma2, native_onnx
+        if checked["model"] == embeddinggemma2.MODEL_ID:
+            directory = Path(checked["modelDir"]).expanduser().absolute()
+            builtin = gemma_default_target(view, checked.get("dtype", "q8"))
+            if directory == Path(builtin["modelDir"]).absolute():
+                profile_home = config_path(view).parents[2]
+                _reject_symlink_components(profile_home, directory, message="unsafe profile model directory")
+                embeddinggemma2.safe_model_path(directory).parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        prepared = native_onnx.prepare_model(checked)
+    _probe_embedding(view, checked)
+    return {**prepared, "modelProbePassed": True, "activeConfigurationUnchanged": True}
+
+
+def save_empty_embedding(view, target: dict, revision: str, *, backup_key: str | None = None) -> dict:
+    """Configure an empty writer after rechecking its state and running a model probe."""
+    checked = validate_target("embedding", target)
+    with exclusive_generation_lease(view.data_dir), writer_lock(view.data_dir):
+        if context_revision(view) != revision or embedding_migration_plan(view, checked) is not None:
+            raise ValidationError("configuration or source changed; review again")
+        _probe_embedding(view, checked)
+        path = config_path(view)
+        existed = path.exists()
+        original = json.loads(path.read_text(encoding="utf-8")) if existed else {}
+        if not isinstance(original, dict):
+            raise ValidationError("invalid profile configuration")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        backup = path.with_name("config.before-embedding-" + (backup_key or revision)[:16] + ".json")
+        _reject_symlink_components(Path(view.hermes_home), backup, message="unsafe config backup")
+        if not backup.exists():
+            _atomic_json(backup, {"existed": existed, "config": original})
+        _atomic_json(path, {**original, "embedding": checked, "reranker": view.config.get("reranker", {}),
+                            "retrieval": {**original.get("retrieval", {}), "mode": "plur1bus"}})
+        return {"saved": True, "restartRequired": True, "backup": str(backup), "memoryMigrationRequired": False}
 
 
 def context_revision(view) -> str:

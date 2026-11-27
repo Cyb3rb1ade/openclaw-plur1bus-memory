@@ -104,4 +104,29 @@ def test_unknown_explicit_embedding_mode_does_not_return_raw_for_regeneration():
     from plur1bus_hermes.validation import ValidationError
 
     with pytest.raises(ValidationError, match="unsupported stored embedding text mode"):
-        prepare_embedding_text("legacy foreign input", "clean-v1")
+        prepare_embedding_text("legacy foreign input", "unknown-format")
+
+
+@pytest.mark.parametrize(("content", "cleaned"), [
+    ("[Audio transcript (machine-generated)]: \"Alice: Ähm, send the draft (lacht).\"", "send the draft."),
+    ("User: Talk Mode active. Reply in a concise, spoken tone.\n\nÄhm, der Plan steht.", "der Plan steht."),
+    ("Egbert Ehm uses 100 hm, hm.com, ERM-model and [Musik](https://example.org).",
+     "Egbert Ehm uses 100 hm, hm.com, ERM-model and [Musik](https://example.org)."),
+    ("[Telegram Alice id:1]\n[visible thinking]\nDas Meeting ist um 14 Uhr.", "Das Meeting ist um 14 Uhr."),
+    ("Die Funktionen sleep(pause) und Spotify (Musik) bleiben.", "Die Funktionen sleep(pause) und Spotify (Musik) bleiben."),
+])
+def test_clean_v1_matches_portable_capture_rules_and_keeps_raw_query_content(content, cleaned):
+    from plur1bus_hermes.embedding_text import configured_text_mode, prepare_embedding_query, prepare_embedding_text
+
+    config = {"embedding": {"cleanText": {"enabled": True, "mode": "clean-v1", "stripSpeaker": True}}}
+    mode = configured_text_mode(config)
+    assert mode == "clean-v1-nospeaker"
+    assert prepare_embedding_text(content, mode) == (cleaned, mode)
+    if "Ähm" in content:
+        assert "Ähm" in prepare_embedding_query(content, mode)
+
+
+def test_explicit_clean_v1_mode_falls_back_when_only_a_host_envelope_remains():
+    from plur1bus_hermes.embedding_text import prepare_embedding_text
+
+    assert prepare_embedding_text("[visible thinking]", "clean-v1") == ("[visible thinking]", "raw")

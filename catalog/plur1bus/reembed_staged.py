@@ -207,9 +207,10 @@ def _read_checkpoint(path: Path) -> dict[str, Any]:
 
 
 def plan_staged_reembed(
-    data_dir: Path, agent_id: str, config: Mapping[str, Any], *, connect: Callable[[str], Any] | None = None
+    data_dir: Path, agent_id: str, config: Mapping[str, Any], *, connect: Callable[[str], Any] | None = None,
+    allow_empty_schema: bool = False,
 ) -> dict[str, Any]:
-    """Create a read-only plan; this never loads an embedding backend or writes."""
+    """Plan an immutable re-embedding or an explicit schema-only conversion."""
     agent_id = safe_agent_id(agent_id)
     source = _exact_source_route(Path(data_dir).expanduser().absolute(), agent_id, config)
     from .generation import read_generation, generation_namespace
@@ -217,13 +218,13 @@ def plan_staged_reembed(
     if active is not None:
         source = Path(active["targetRoute"])
     rows, source_version, source_fingerprint = _source_snapshot(source, connect)
+    if not rows and not allow_empty_schema:
+        raise ValidationError("source table is empty; no re-embedding is required")
     return _make_plan(source, agent_id, rows, source_version, source_fingerprint, config)
 
 
 def _make_plan(source: Path, agent_id: str, rows: list[dict[str, Any]], source_version: str, source_fingerprint: str, config: Mapping[str, Any]) -> dict[str, Any]:
     """Build the sole accepted plan shape from verified current inputs."""
-    if not rows:
-        raise ValidationError("source table is empty; no re-embedding is required")
     target = _embedding_fingerprint(config)
     plan_id = _digest({"source": str(source), "sourceVersion": source_version, "sourceFingerprint": source_fingerprint, "target": target["fingerprint"]})[:24]
     return {
@@ -319,7 +320,7 @@ def _apply_staged_reembed_unlocked(
     cursor = int(checkpoint.get("cursor", 0))
     if cursor < 0 or cursor > len(rows):
         raise ValidationError("staged re-embedding checkpoint cursor is invalid")
-    if cursor == len(rows):
+    if cursor == len(rows) and checkpoint.get("completed"):
         return {"completion": "staged", "active": False, "targetRoute": str(target), "cursor": cursor, "cards": len(rows)}
     if cursor and existing_table_rows != cursor:
         raise ValidationError("staged target/checkpoint mismatch; refusing duplicate batch")
@@ -330,6 +331,9 @@ def _apply_staged_reembed_unlocked(
     cards: list[dict[str, Any]] = []
     dimensions = int(plan["targetEmbedding"]["dimensions"])
     try:
+        if not rows:
+            # No rows exercise the encoder during a schema-only conversion.
+            _finite_vector(backend.embed("PLUR1BUS configuration probe"), dimensions)
         for row in batch:
             content = str(row.get("content") or "").strip()
             if not content:
@@ -347,7 +351,7 @@ def _apply_staged_reembed_unlocked(
     if cursor == 0 and existing_table_rows is None:
         source_table = _connect(source, connect).open_table("memories")
         database.create_table("memories", data=_schema_preserving_data(cards, source_table, dimensions))
-    else:
+    elif cards:
         target_table = database.open_table("memories")
         target_table.add(_schema_preserving_data(cards, target_table, dimensions))
     checkpoint.update({"cursor": cursor + len(cards), "written": cursor + len(cards), "completed": cursor + len(cards) == len(rows), "tableInitialized": True})
@@ -391,10 +395,13 @@ def validate_staged_reembed(
     checkpoint = _read_checkpoint(_checkpoint_path(target))
     if checkpoint.get("plan") != dict(plan) or not checkpoint.get("completed"):
         raise ValidationError("staged re-embedding is incomplete or belongs to another plan")
-    rows = [dict(row) for row in _connect(target, connect).open_table("memories").to_arrow().to_pylist()]
+    target_table = _connect(target, connect).open_table("memories").to_arrow()
+    rows = [dict(row) for row in target_table.to_pylist()]
     dimensions = int((plan.get("targetEmbedding") or {}).get("dimensions", 0))
     if len(rows) != int(plan.get("sourceCards", -1)):
         raise ValidationError("staged target row count differs from pinned source")
+    if not rows and getattr(target_table.schema.field("vector").type, "list_size", None) != dimensions:
+        raise ValidationError("staged empty table has the wrong vector schema")
     for row in rows:
         _finite_vector(row.get("vector"), dimensions)
     return {"completion": "staged", "active": False, "validated": True, "targetRoute": str(target), "cards": len(rows)}

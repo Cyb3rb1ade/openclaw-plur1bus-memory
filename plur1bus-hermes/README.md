@@ -78,12 +78,51 @@ are not modified; use a compatible host update or a supported source build.
 installation; it **never** confirms or starts a host build. It does not submit
 upstream PRs or publish a new plugin release.
 
+## Local EmbeddingGemma 2
+
+In Hermes Desktop, open **PLUR1BUS → Models & Storage → Open provider
+settings**. Select **local-onnx → EmbeddingGemma 2**. Choose a quantization and
+128, 256, 512, or 768 dimensions. **Prepare embedding model** downloads and
+checks the pinned ONNX files for the selected profile. Then review the model
+change. An existing vector table is backed up, staged and verified before you
+activate its replacement. A new empty profile can save the model selection
+directly after a model probe. Where a Desktop connection offers read-only
+settings, open the target as the backend's launch profile.
+
+EmbeddingGemma 2 uses the existing `plur1bus-hermes[local-onnx]` dependencies
+and the CPU ONNX provider. q8 is the default variant, with q4 and fp32
+available. The Apache-2.0 text export supports 8,192 input tokens. Its revision,
+quantization, and dimensions are part of the vector-space configuration.
+Preparation downloads model weights from Hugging Face. Capture and recall load
+the verified local files and never send memory text to the model repository.
+
 Jina v5 Text Nano is an explicit `local-onnx` option, with optional
 `plur1bus-hermes[local-onnx]` dependencies. Preparation requires acknowledgement
 of CC-BY-NC-4.0; inference is pinned, local-only, and limited to 512 tokens per
 input. Use `plur1bus-hermes-operator embedding-model --help` for preparation.
 Existing configurations are not switched automatically. Migrate existing
 vectors through the separately approved staged re-embedding workflow.
+
+## Local Engine embedding IPC
+
+An operator can run an existing pinned local profile encoder as an Engine
+embedding owner. Use the selected Hermes environment's Python to start it:
+
+```bash
+python -m plur1bus_hermes.embedding_ipc --hermes-home "/absolute/hermes/home" --profile default --state-root "/absolute/local/engine-state"
+```
+
+The state directory must already exist. Keep the service running and copy the
+printed model, dimensions, state directory and fingerprint into the **Engine
+IPC** embedding selection of the client profile. A matching upstream PLUR1BUS
+Engine owner can provide the same fields. Both processes run as the same OS
+user. Windows uses its Engine pipe by default and can select the legacy mode
+for a compatible older owner. The control token is read from the local owner
+state. The GUI has no token or API key field.
+
+An embedding upgrade uses the same review and source-preserving migration as
+the other providers. The selected local service receives the query and memory
+text to embed.
 
 Core architecture:
 

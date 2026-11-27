@@ -15,7 +15,7 @@ class _Search:
     def to_list(self):
         return [
             {
-                "id": "existing",
+                "id": "53628ada-8595-43dc-92da-216fe2c69835",
                 "content": "Bernd will morgen nicht nach Berlin fahren",
                 "_distance": 0.2,
             }
@@ -34,7 +34,7 @@ class LiveContradictionTests(unittest.TestCase):
 
             domain._build_graph_edges(
                 {
-                    "id": "new",
+                    "id": "53628ada-8595-43dc-92da-216fe2c69836",
                     "content": "Bernd will morgen nach Berlin fahren",
                     "vector": [0.1, 0.2],
                 },

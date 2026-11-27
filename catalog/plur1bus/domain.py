@@ -42,6 +42,7 @@ from .writer_lock import serialized_memory_write, writer_lock
 from .neo_retention import JOURNALS, NeoRetention
 from .epistemic import is_recallable_epistemic
 from .generation import effective_generation_config
+from .graph_edges import EdgeJournalIndex, edge_key, entity_strength, graph_topics
 from .knowledge import content_fingerprint, is_eligible, is_invalidated, write_confirmed_knowledge
 from .obsidian_maintenance import generate_obsidian_control_room
 from .persona_voice import evolve as evolve_persona_voice_file
@@ -185,6 +186,7 @@ class Plur1busDomain:
             self._knowledge_writer_identity = self._current_knowledge_writer_identity()
         self.neo_dir = data_dir / "neo" / self.agent_id
         self._neo_retention = NeoRetention(data_dir)
+        self._graph_index = EdgeJournalIndex(data_dir)
         self.workspace_dir = data_dir / "profiles" / self.agent_id / "workspace"
         self.state_dir = data_dir / "state" / self.agent_id
         self._speakers = SpeakerMappingStore(self.neo_dir / "speaker-mappings.json")
@@ -1774,6 +1776,8 @@ class Plur1busDomain:
         reactivation_trigger: str | None = None,
         reactivation_substantive: bool = False,
         reactivation_query: str = "",
+        include_graph_lens: bool = True,
+        include_reactivation: bool = True,
     ) -> list[dict[str, Any]]:
         """Append graph, semantic-lens, and reactivation candidates after base recall."""
         acl_bindings = aclBindings if aclBindings is not None else acl_bindings
@@ -1787,13 +1791,11 @@ class Plur1busDomain:
         if not rows:
             return rows
         seen = {str(row.get("id") or "") for row in rows}
-        graph_ids = self._graph_neighbor_ids(
-            seen, acl_bindings=selector.acl_bindings
-        )
+        graph_ids = self._graph_neighbor_ids(seen, acl_bindings=selector.acl_bindings) if include_graph_lens else set()
         lens_ids: set[str] = set()
         lens_deadline: float | None = None
         # The lens adds scoped candidates within the existing recall budget.
-        if parity_feature_enabled(self.config, "semanticLens"):
+        if include_graph_lens and parity_feature_enabled(self.config, "semanticLens"):
             lens_cfg = self.config.get("semanticLens")
             lens_cfg = lens_cfg if isinstance(lens_cfg, Mapping) else {}
             lens_budget_ms = self._bounded_int(lens_cfg.get("timeoutMs"), 50, 1, 50)
@@ -1808,7 +1810,7 @@ class Plur1busDomain:
         session_key = self._session_key(session_id)
         now = _now_ms()
         trigger = str(reactivation_trigger or "").strip().lower()
-        crr_enabled = self._opt_in_feature_enabled("conversationReactivationRecall")
+        crr_enabled = include_reactivation and self._opt_in_feature_enabled("conversationReactivationRecall")
         if session_key:
             session_key = hashlib.sha256(f"{selector.scope_key}:{session_key}".encode()).hexdigest()
         query = str(reactivation_query or "").strip().lower()
@@ -1847,7 +1849,7 @@ class Plur1busDomain:
                 self._save_reactivation_state(session_key, state)
         if should_reactivate:
             reactivation_budget_ms = self._bounded_int(
-                reactivation_cfg.get("timeoutMs"), 50, 1, 50
+                reactivation_cfg.get("timeoutMs"), 250, 1, 250
             )
             reactivation_deadline = time.monotonic() + reactivation_budget_ms / 1000
             reactivation_ids.update(
@@ -4280,78 +4282,127 @@ class Plur1busDomain:
         else:
             database.create_table("metadata", data=[row])
 
+    @serialized_memory_write
     def _build_graph_edges(self, record: dict[str, Any], table: Any) -> None:
+        from .epistemic import epistemic_recall_where_clause
+
         selector = self._scope_selector(record=record)
         neo_dir = self._scope_neo_dir(selector)
         state_dir = self._scope_state_dir(selector)
-        try:
-            neighbors = table.search(record["vector"]).where(
-                selector.where(" AND status = 'active'")
-            ).limit(4).to_list()
-            neighbors = self._filter_rows(neighbors, selector)
-        except Exception as error:
-            self._append_jsonl(state_dir / "domain-errors.jsonl", {
-                "operation": "graph-neighbor-search",
-                "errorType": type(error).__name__,
-                "error": str(error),
-                "createdAt": _utcnow(),
-            })
+        now = _now_ms()
+        if (not _row_matches_scope(record, selector) or record.get("status", "active") != "active"
+                or not is_recallable_epistemic(record) or not is_entry_live(record, now)):
             return
-        for neighbor in neighbors:
-            target = str(neighbor.get("id") or "")
-            if not target or target == record["id"]:
-                continue
+        try:
+            source = safe_memory_id(record.get("id"))
+        except ValueError:
+            return
+        where = selector.where(f" AND status = 'active' AND id != '{source}'")
+        schema_attr = getattr(table, "schema", None)
+        schema = schema_attr() if callable(schema_attr) else schema_attr
+        columns = frozenset(getattr(schema, "names", ()))
+        if "epistemicStatus" in columns:
+            where += f" AND {epistemic_recall_where_clause()}"
+        if "expiresAt" in columns:
+            where += f" AND (expiresAt IS NULL OR expiresAt = 0 OR expiresAt > {now})"
+
+        def eligible_targets(neighbors):
+            for neighbor in self._filter_rows(neighbors, selector):
+                if (neighbor.get("status", "active") != "active" or not is_recallable_epistemic(neighbor)
+                        or not is_entry_live(neighbor, now)):
+                    continue
+                try:
+                    target = safe_memory_id(neighbor.get("id"))
+                except ValueError:
+                    continue
+                if target != source:
+                    yield target, neighbor
+
+        def record_error(operation, error):
+            self._append_jsonl(state_dir / "domain-errors.jsonl", {
+                "operation": operation, "errorType": type(error).__name__, "createdAt": _utcnow(),
+            })
+
+        proposed = {}
+        try:
+            neighbors = table.search(record["vector"]).where(where).limit(4).to_list()
+        except Exception as error:
+            record_error("graph-neighbor-search", error)
+            neighbors = []
+        content = str(record.get("content") or "")
+        for target, neighbor in eligible_targets(neighbors):
             contradiction = contradiction_score(
-                str(record.get("content") or ""),
+                content,
                 str(neighbor.get("content") or ""),
             )
             if contradiction:
-                self._append_jsonl(neo_dir / "memory-graph.jsonl", {
-                    "source": record["id"],
-                    "target": target,
-                    "agentId": self.agent_id,
-                    "scopeKey": selector.scope_key,
-                    "aclBindings": selector.acl_bindings,
-                    "type": "contradiction",
-                    "strength": contradiction,
-                    "directed": False,
-                    "createdAt": _utcnow(),
-                    "updatedAt": _utcnow(),
-                    "lastReinforcedAt": _utcnow(),
-                    "observations": 1,
-                    "algorithmVersion": "hermes-1.0",
-                })
+                key = (target, "contradiction")
+                proposed[key] = max(contradiction, proposed.get(key, 0))
+            distance = neighbor.get("_distance", 1.0)
+            if type(distance) in (int, float) and math.isfinite(distance) and distance <= 0.5:
+                key = (target, "semantic")
+                proposed[key] = max(min(1.0, 1 - distance), proposed.get(key, 0))
+
+        subjects = graph_topics(content)
+        if len(subjects) >= 2 and {"id", "agentId", "scopeKey", "status", "content", "createdAt"} <= columns:
+            from lancedb.query import ColumnOrdering
+
+            projection = sorted(columns & {"id", "agentId", "scopeKey", "status", "content", "createdAt",
+                                           "expiresAt", "epistemicStatus"})
+            try:
+                recent = (table.search().where(where).select(projection)
+                          .order_by([ColumnOrdering(column_name="createdAt", ascending=False),
+                                     ColumnOrdering(column_name="id")]).limit(100).to_list())
+                matches = {}
+                for target, neighbor in eligible_targets(recent):
+                    strength = entity_strength(subjects, graph_topics(str(neighbor.get("content") or "")))
+                    if strength:
+                        matches[target] = max(strength, matches.get(target, 0))
+                for target, strength in sorted(matches.items(), key=lambda match: match[1], reverse=True)[:10]:
+                    proposed[target, "entity"] = strength
+            except Exception as error:
+                record_error("graph-entity-search", error)
+
+        if not proposed:
+            return
+        captured = _utcnow()
+        edges = [{
+            "source": source, "target": target, "agentId": self.agent_id,
+            "scopeKey": selector.scope_key, "aclBindings": selector.acl_bindings,
+            "type": kind, "strength": strength, "directed": False,
+            "createdAt": captured, "updatedAt": captured, "lastReinforcedAt": captured,
+            "observations": 1, "algorithmVersion": "hermes-1.1" if kind == "entity" else "hermes-1.0",
+        } for (target, kind), strength in proposed.items()]
+        graph_path = neo_dir / "memory-graph.jsonl"
+        try:
+            already_exists = self._graph_index.existing(graph_path, {edge_key(edge) for edge in edges})
+        except (OSError, ValueError) as error:
+            record_error("graph-edge-index", error)
+            return
+        mirror_targets = set()
+        for edge in edges:
+            target, kind = edge["target"], edge["type"]
+            if kind != "contradiction":
+                mirror_targets.add(target)
+            if edge_key(edge) in already_exists:
+                continue
+            if kind == "contradiction":
+                # Keep review evidence durable before suppressing replay via
+                # the existence of the graph edge.
                 self._append_jsonl(neo_dir / "contradiction-disclosure.jsonl", {
                     "id": str(uuid.uuid4()),
                     "agentId": self.agent_id,
                     "scopeKey": selector.scope_key,
                     "aclBindings": selector.acl_bindings,
-                    "newMemoryId": record["id"],
+                    "newMemoryId": source,
                     "existingMemoryId": target,
-                    "score": contradiction,
+                    "score": edge["strength"],
                     "status": "requires_review",
-                    "createdAt": _utcnow(),
+                    "createdAt": captured,
                 })
-            distance = float(neighbor.get("_distance", 1.0))
-            strength = max(0.0, min(1.0, 1.0 - distance))
-            if strength < 0.5:
-                continue
-            self._append_jsonl(neo_dir / "memory-graph.jsonl", {
-                "source": record["id"],
-                "target": target,
-                "agentId": self.agent_id,
-                "scopeKey": selector.scope_key,
-                "aclBindings": selector.acl_bindings,
-                "type": "semantic",
-                "strength": strength,
-                "directed": False,
-                "createdAt": _utcnow(),
-                "updatedAt": _utcnow(),
-                "lastReinforcedAt": _utcnow(),
-                "observations": 1,
-                "algorithmVersion": "hermes-1.0",
-            })
-            self._update_graph_links(str(record["id"]), target, selector=selector)
+            self._append_jsonl(graph_path, edge)
+        for target in sorted(mirror_targets):
+            self._update_graph_links(source, target, selector=selector)
 
     def _write_obsidian_note(self, record: dict[str, Any]) -> None:
         selector = self._scope_selector(record=record)
@@ -4377,14 +4428,22 @@ class Plur1busDomain:
     def _update_graph_links(
         self, source: str, target: str, *, selector: _ScopeSelector
     ) -> None:
+        from .validation import resolve_inside
+
         workspace_dir = self._scope_workspace_dir(selector)
         for memory_id, linked_id in ((source, target), (target, source)):
-            note = workspace_dir / "plur1bus" / "memories" / f"{memory_id}.md"
+            try:
+                note = resolve_inside(str(workspace_dir), "plur1bus", "memories", f"{memory_id}.md")
+            except ValueError:
+                logging.getLogger(__name__).debug("graph link target leaves its owner workspace")
+                continue
             if not note.is_file():
                 continue
             text = note.read_text(encoding="utf-8", errors="replace")
             match = re.search(r'<section id="graph-links">.*?</section>', text, flags=re.DOTALL)
             links = set(re.findall(r"\[\[plur1bus/memories/([^\]|]+)", match.group(0) if match else ""))
+            if linked_id in links:
+                continue
             links.add(linked_id)
             block = '<section id="graph-links">\n' + "\n".join(
                 f"- [[plur1bus/memories/{value}|{value}]]" for value in sorted(links)
@@ -4403,23 +4462,21 @@ class Plur1busDomain:
         scope_key: str | None = None,
     ) -> set[str]:
         selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
-        neighbors = set()
-        for edge in self._scoped_jsonl(
-            self.neo_dir,
-            self._scope_neo_dir(selector),
-            "memory-graph.jsonl",
-            selector,
-        ):
-            if not _row_matches_scope(edge, selector):
+        roots = dict.fromkeys((self._scope_neo_dir(selector), self.neo_dir))
+        candidates = []
+        for root in roots:
+            try:
+                edges = self._graph_index.adjacent(root / "memory-graph.jsonl", seeds)
+            except (OSError, ValueError) as error:
+                logging.getLogger(__name__).debug("graph journal unavailable (%s)", type(error).__name__)
                 continue
-            if float(edge.get("strength") or 0) < 0.5:
-                continue
-            source, target = str(edge.get("source") or ""), str(edge.get("target") or "")
-            if source in seeds:
-                neighbors.add(target)
-            if not edge.get("directed") and target in seeds:
-                neighbors.add(source)
-        return neighbors
+            for edge in edges:
+                if edge["strength"] >= 0.5 and _row_matches_scope(edge, selector):
+                    other = edge["target"] if edge["source"] in seeds else edge["source"]
+                    if other not in seeds:
+                        candidates.append((other, edge["strength"]))
+        ranked = dict.fromkeys(other for other, _strength in sorted(candidates, key=lambda item: -item[1]))
+        return set(list(ranked)[:50])
 
     def _semantic_lens_ids(
         self,

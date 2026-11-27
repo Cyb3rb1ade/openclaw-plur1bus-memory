@@ -271,7 +271,10 @@ def resolve_generation_route(data_dir: Path, agent_id: str, canonical_route: Nam
         raise ValidationError("canonical writer route is unavailable") from error
     if route_path != source:
         raise ValidationError("active generation does not match canonical writer route")
-    return NamespaceRoute(canonical_route.name, Path(manifest["targetRoute"]), canonical_route.writable)
+    return NamespaceRoute(
+        canonical_route.name, Path(manifest["targetRoute"]), canonical_route.writable,
+        manifest["embeddingFingerprint"], int(manifest["selectedEmbedding"]["dimensions"]),
+    )
 
 
 def _non_vector_identity(rows: list[dict[str, Any]]) -> list[str]:
