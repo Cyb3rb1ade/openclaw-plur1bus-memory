@@ -17,8 +17,8 @@ jobs:
     env:
       PLUR1BUS_SOURCE: 154ceb629c22d19dfceaf8daca8db43c4bbe7c13
       PLUR1BUS_VERSION: 7.21.8-hermes.1
-      PLUR1BUS_INTEGRITY: "SET_FROM_VERIFIED_CANDIDATE"
-      PLUR1BUS_PROBE_RUN: "0"
+      PLUR1BUS_INTEGRITY: "sha512-JuWjuHC60fbMXVXnbmihhRXlNaa7aKEmsie2pqYKw+7RFny6UpimBM3/1ArBLqmtyhOQ0c2sXQAosk4o+W2a/w=="
+      PLUR1BUS_PROBE_RUN: "46067002257"
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
