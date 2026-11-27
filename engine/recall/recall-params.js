@@ -63,6 +63,10 @@ export function autoRecallPolicyOptionsFor(ctx, event, hookCtx, now = Date.now()
  *   the pipeline waits for the query vector before it falls back.
  * @param {boolean} [call.keywordFallback] 7.21.1: keyword/recent fallback when
  *   the query vector is late or the embedding fails (per-turn recall only).
+ * Prototype switches (all off by default): `collectionWidth`,
+ * `candidateHardLimitMax`, `retrievalArms` and `enrichmentIndexFor` come
+ * from `ctx.cfg.recall` and `ctx.enrichmentIndexFor`; without the config
+ * they are null/100 and the pipeline behaves as before.
  * @returns {Record<string, any>} The pipeline parameters. `embeddingQuery`
  *   (7.20.10) is the prompt without host envelopes (cleanQueryForEmbedding);
  *   the query vector comes from it, rerank and echo check read `query`.
@@ -109,6 +113,9 @@ export function autoRecallParams(ctx, {
     softBudgetFallback,
     summaryMaxWords,
   } = ctx;
+  const recallCfg = ctx.cfg?.recall ?? {};
+  const armsCfg = recallCfg.retrievalArms;
+  const armsOn = Boolean(armsCfg && (armsCfg.mode === "shadow" || armsCfg.mode === "on"));
   return {
     query,
     // Kanonische Treffer zusaetzlich zu maxPromptMemories (7.20.6).
@@ -161,5 +168,13 @@ export function autoRecallParams(ctx, {
     keywordFallback,
     // 7.21.2: Herkunftsgewichtung (lib/recall-context.js), nur Auto-Recall.
     contextPolicy,
+    // V0/V2/V3c-Prototyp (recall.collectionWidth, recall.candidateHardLimitMax,
+    // recall.retrievalArms), Standard aus.
+    collectionWidth: recallCfg.collectionWidth?.enabled === true ? recallCfg.collectionWidth : null,
+    candidateHardLimitMax: Number.isFinite(recallCfg.candidateHardLimitMax) ? recallCfg.candidateHardLimitMax : 100,
+    retrievalArms: armsOn ? { ...armsCfg, timeZone: ctx.cfg?.timezone || undefined } : null,
+    enrichmentIndexFor: armsOn && typeof ctx.enrichmentIndexFor === "function"
+      ? ({ namespace, sourceKind }) => ctx.enrichmentIndexFor({ agentId, namespace, sourceKind })
+      : null,
   };
 }

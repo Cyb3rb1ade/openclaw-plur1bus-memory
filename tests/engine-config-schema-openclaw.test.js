@@ -243,6 +243,11 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
       [afterSchema.properties.recall, "mergeTurnParts"],
       // 7.21.2: origin weighting and confidentiality.
       [afterSchema.properties.recall, "contextWeighting"],
+      // Retrieval-arm prototype switches (all off by default, no schema defaults).
+      [afterSchema.properties.recall, "candidateHardLimitMax"],
+      [afterSchema.properties.recall, "collectionWidth"],
+      [afterSchema.properties.recall, "retrievalArms"],
+      [afterSchema.properties.recall, "eventDateRender"],
     ]) {
       assert.ok(Object.hasOwn(node.properties, key), key);
       delete node.properties[key];

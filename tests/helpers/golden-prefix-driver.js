@@ -132,13 +132,15 @@ const routingCapability = Object.freeze({
 /**
  * @param {object} pluginConfig
  */
-function makeApi(pluginConfig) {
+function makeApi(pluginConfig, onLog = null) {
   const handlers = new Map();
   const noop = () => {};
+  // Optional log sink (scenario.onLog) for tests that check a log line.
+  const log = (level) => (typeof onLog === "function" ? (message) => onLog(level, String(message)) : noop);
   return {
     pluginConfig,
     config: {},
-    logger: { info: noop, warn: noop, error: noop, debug: noop },
+    logger: { info: log("info"), warn: log("warn"), error: log("error"), debug: log("debug") },
     resolvePath: (value) => value,
     registerCommand: noop,
     registerTool(factory) { this.toolFactory = factory; },
@@ -296,7 +298,9 @@ export async function runScenario(scenario, { freezeClock: useFrozenClock = true
         ...(memory.fields || {}),
       });
     }
-    const api = makeApi(baseConfig(baseDbPath, scenario.config));
+    // Optional fixture files next to the store (e.g. an enrichment sidecar).
+    if (typeof scenario.beforeRegister === "function") await scenario.beforeRegister({ baseDbPath, workspaceDir });
+    const api = makeApi(baseConfig(baseDbPath, scenario.config), scenario.onLog ?? null);
     const listeners = [hostEvents, recallTimingSink && {
       emit: (name, payload) => {
         if (name === "recall.completed") recallTimingSink({ agentId: payload.agentId, phases: payload.timing.phases, totalMs: payload.timing.totalMs, namespacePhases: payload.timing.namespacePhases });
