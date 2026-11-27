@@ -59,6 +59,22 @@ describe("applyTemperamentToRawConfig", () => {
     assert.ok(result.error);
   });
 
+  it("schreibt eine tiefe Kopie des Presets", async () => {
+    const { TEMPERAMENT_PRESETS } = await import("../lib/emotional-state.js");
+    const result = applyTemperamentToRawConfig(makeRawCfg(), pluginKey, "bernhardine", "warm");
+    const entry = result.merged.plugins.entries[pluginKey].config.emotion.temperaments.bernhardine;
+    assert.deepStrictEqual(entry, { baseline: { joy: 0.35, trust: 0.5 }, sensitivity: 1.5, decayMultiplier: 1.3, preset: "warm" });
+    assert.notStrictEqual(entry.baseline, TEMPERAMENT_PRESETS.warm.baseline);
+    entry.baseline.joy = 0.9;
+    assert.strictEqual(TEMPERAMENT_PRESETS.warm.baseline.joy, 0.35);
+  });
+
+  it("lehnt geerbte Objekt-Schlüssel als Preset ab", () => {
+    for (const name of ["constructor", "toString", "__proto__"]) {
+      assert.ok(applyTemperamentToRawConfig(makeRawCfg(), pluginKey, "main", name).error, name);
+    }
+  });
+
   it("mutiert das Original nicht", () => {
     const raw = makeRawCfg();
     applyTemperamentToRawConfig(raw, pluginKey, "main", "warm");

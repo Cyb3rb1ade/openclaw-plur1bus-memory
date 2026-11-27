@@ -369,6 +369,7 @@ export const DEPLOY_FILES = [
   "lib/dreaming/dreaming-status-provider.js",
   "lib/chat-model.js",
   "lib/conversation-compaction-model.js",
+  "lib/agent-temperament.js",
   "lib/episode-watermark.js",
   "lib/episodes.js",
   "lib/jobs/auto-accept-stale-criticals.js",

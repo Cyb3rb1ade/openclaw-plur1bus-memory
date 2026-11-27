@@ -67,6 +67,19 @@ test("vergleicht nur die Werte, die das Dashboard schreiben darf", () => {
   assert.equal(pendingChanges(running, eff({ ...base, recall: { dedupJaccard: 0.1 } })).size, 0);
 });
 
+test("markiert Temperamente je Agent, auch die Zeile für alle anderen", () => {
+  const eff = (raw) => resolveEffectiveConfig(raw);
+  const warm = { preset: "warm", baseline: { joy: 0.35, trust: 0.5 }, sensitivity: 1.5, decayMultiplier: 1.3 };
+  const running = eff({ emotion: { temperaments: { bernhardine: warm, default: { preset: "feurig", sensitivity: 1.8, decayMultiplier: 1.5 } } } });
+  // Gleicher Inhalt in anderer Schlüsselreihenfolge ist keine Änderung.
+  const reordered = eff({ emotion: { temperaments: { default: { decayMultiplier: 1.5, sensitivity: 1.8, preset: "feurig" }, bernhardine: { ...warm } } } });
+  assert.equal(pendingChanges(running, reordered).size, 0);
+  const saved = eff({ emotion: { temperaments: { bernhardine: warm, main: { preset: "stoisch", sensitivity: 0.5, decayMultiplier: 0.6 } } } });
+  const projected = projectPendingChanges(running, { status: "ok", config: saved, mtimeMs: 7 });
+  assert.deepEqual(projected.ids, ["temperament:default", "temperament:main"]);
+  assert.doesNotMatch(JSON.stringify(projected), /stoisch|feurig/, "nur Kennungen, keine Werte");
+});
+
 test("die Projektion liefert Kennungen und Zeitpunkt, nie Werte aus der Datei", () => {
   const projected = projectPendingChanges(resolveEffectiveConfig({ autoRecall: true }), { status: "ok", config: resolveEffectiveConfig({ autoRecall: false }), mtimeMs: 1000 });
   assert.deepEqual(projected, { status: "ok", ids: ["feature.autoRecall"], count: 1, savedAt: 1000 });

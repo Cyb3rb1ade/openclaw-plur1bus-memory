@@ -39,7 +39,7 @@ import { resolveEffectiveConfig } from "../../lib/setup/config-contract.js";
 import { boundTelegramAccountId } from "../../lib/setup/feature-cron-plan.js";
 import { createCompactionRunner, isPartitionId } from "../../lib/setup/control-ui-compaction.js";
 import { registerControlUiRuntime } from "../../lib/setup/control-ui-plugin-runtime.js";
-import { applyControlUiWriteAction, createCaptureChunkingMutator, createCompactionModelMutator, createPendingCompactionModels, createJevApiKeyMutator, createConfirmationStore, createEmbeddingProfileMutator, createFeatureModelMutator, createChatModelMutator, createFormTokenStore, createRerankerMutator, createSettingMutator, rerankerKeyConfigured } from "../../lib/setup/control-ui-write.js";
+import { applyControlUiWriteAction, createCaptureChunkingMutator, createCompactionModelMutator, createPendingCompactionModels, createJevApiKeyMutator, createConfirmationStore, createEmbeddingProfileMutator, createFeatureModelMutator, createChatModelMutator, createFormTokenStore, createRerankerMutator, createSettingMutator, createTemperamentMutator, rerankerKeyConfigured } from "../../lib/setup/control-ui-write.js";
 import { registerFeatureCronNativeDispatch, loadOpenClawPluginSdkRuntime } from "../../lib/setup/feature-cron-plugin-runtime.js";
 import { resolveAgentWorkspaceDir } from "../../lib/setup/memory-host-runtime.js";
 import { describeVaultCandidates, registerObsidianVaultRuntime } from "../../lib/setup/obsidian-vault-plugin-runtime.js";
@@ -495,6 +495,9 @@ export function registerChatCommands(ctx) {
       loadModelSession: () => loadOpenClawPluginSdkRuntime("model-session-runtime"),
     });
     const setCompactionModel = createCompactionModelMutator({ api, pending: pendingCompactionModels });
+    // Same key as /plur1bus temperament; a plugin-config write, so the
+    // saved-vs-running marker covers the reload lag (no overlay needed).
+    const setTemperament = createTemperamentMutator({ api, validate: resolveEffectiveConfig });
     const setCaptureChunking = createCaptureChunkingMutator({ api });
     const setJevApiKey = createJevApiKeyMutator({ api });
     const setSetting = createSettingMutator({
@@ -548,6 +551,7 @@ export function registerChatCommands(ctx) {
           setFeatureModel,
           setChatModel,
           setCompactionModel,
+          setTemperament,
           setCaptureChunking,
           setJevApiKey,
           setSetting,
