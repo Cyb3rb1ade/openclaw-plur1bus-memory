@@ -958,6 +958,12 @@ export function createEngine(host, config, testOptions = {}) {
   const EMOTION_REFINE_MAX_ROWS = 100;
   const EMOTION_REFINE_DEADLINE_MS = 240000;
   const EMOTION_REFINE_MAX_CONSECUTIVE_FAILURES = 3;
+  // 27.11.2026: Zeilen, deren Aufruf leer zurückkam (Claude-5.x-Verweigerung
+  // löst OpenClaw als text "" auf, nicht als Wurf), je Agent im Prozess
+  // gemerkt. Eine schon einmal gescheiterte Zeile löst den Breaker nicht mehr
+  // aus und wartet diese Frist ab, bevor sie erneut versucht wird.
+  const EMOTION_REFINE_ROW_RETRY_MS = 6 * 60 * 60 * 1000;
+  const emotionRefineRowFailures = new Map();
   // EMOTION_REFINE_ENCODING_MAX_TOKENS (19.09.2026): encodingCallLlm oben
   // (lib/encoding-llm.js) fragt seit der Acht-Dimensionen-Emotions-Label-
   // Map + Freitext-Grund eine deutlich längere Antwort ab als vorher — die
@@ -3116,6 +3122,8 @@ export function createEngine(host, config, testOptions = {}) {
     EMOTION_REFINE_DEADLINE_MS,
     EMOTION_REFINE_MAX_CONSECUTIVE_FAILURES,
     EMOTION_REFINE_MAX_ROWS,
+    EMOTION_REFINE_ROW_RETRY_MS,
+    emotionRefineRowFailures,
     encodingCallLlm,
     episodeExtractionLlmCfg,
     findNeoRecord,
