@@ -7,6 +7,17 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.21.6] — 2026-11-27
+
+**Herkunft für alte Neo-Einträge von main, die nur noch im Index stehen.** Neu ist eine Zuordnungsdatei als zusätzliche Quelle für das Nachtragen der Herkunft. Damit bekommen 1 209 Chatnachrichten aus Bernds Telegram vom 11.07. bis 08.09.2026 ihren Chat (1 056 DM, 153 Gruppe), die weder Lauf-ID noch Turn-Hash zuordnen konnten.
+
+Upgrade-Hinweise: keine neuen Konfigurationsschlüssel, keine Laufzeitänderung. Die Zuordnung ist ein eigener Schritt mit gestopptem Gateway und Snapshot.
+
+### Hinzugefügt
+
+- **`--id-map` für `scripts/neo-origin-backfill.mjs`.** Eine TSV mit der Kopfzeile `id<TAB>sessionKey<TAB>method` nennt den Sitzungsschlüssel je Neo-Kandidaten-ID, für Einträge, die weder die Lauf-ID noch der Hash der Turn-ID zuordnet. Sie gilt für Journal-Kandidaten und reine Indexeinträge, als Quelle `id-map` nach den Lauf-ID-Quellen und vor dem Turn-ID-Hash; nennt eine andere Quelle einen anderen Schlüssel, bleibt die Id wie bisher unangetastet. Eine Zeile gilt nur, wenn der Agent im Schlüssel der des Eintrags ist (Einträge ohne Agent: der Agent des Workspace). Nur Chat-Schlüssel, IDs im Format `mem_` plus 20 Hex-Zeichen, höchstens 8 MiB; fehlerhafte Zeilen und IDs mit zwei Schlüsseln werden gezählt und übersprungen. Ein Gruppenschlüssel ohne Thema und derselbe mit `:topic:` gelten als ein Schlüssel, geschrieben wird der mit Thema (auch zwischen den bisherigen Quellen); zwei verschiedene Themen bleiben ein Widerspruch. Zeilen für reine Indexeinträge brauchen `--include-index-only`, ohne die Option schreibt `--apply` gar nichts. Der Bericht `archive/origin-backfill.*.jsonl` führt die Spalte `method` mit, Journal-Revisionen aus der Liste tragen `sessionKeySource: "backfill:id-map"`. Probelauf auf einer Kopie von main mit der Liste vom 26.11.: 1 209 Indexzeilen (1 056 direct, 153 group), keine Journal-Revision, keine unbekannte, mehrdeutige oder schon mit Schlüssel versehene Id; ein zweiter Lauf schreibt nichts. Angewendet wird die Liste erst im nächsten Deploy-Fenster.
+- **Package-Version 7.21.6.**
+
 ## [7.21.5] — 2026-11-26
 
 **Neo-Erinnerungen bekommen ihre Herkunft nachgetragen, GitHub Packages veröffentlicht der Release-Workflow selbst, der Messstand ist auf dem Stand vom 25.11.**
