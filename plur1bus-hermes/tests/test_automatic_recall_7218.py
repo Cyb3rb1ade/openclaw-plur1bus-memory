@@ -7,6 +7,7 @@ import threading
 import time
 import unittest
 import uuid
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -17,19 +18,19 @@ from plur1bus_hermes.runtime_lease import exclusive_generation_lease
 
 
 class AutomaticRecallTests(unittest.TestCase):
-    def _runtime(self, root: str, **config) -> Plur1busRuntime:
+    def _runtime(self, root: str, lifetime: ExitStack, **config) -> Plur1busRuntime:
         runtime = Plur1busRuntime(Path(root), {"embedding": {"dimensions": 2}, **config}, "default")
+        lifetime.callback(runtime.shutdown)
         runtime._embedding.embed = lambda _text, **_kwargs: [0.1, 0.2]
         runtime._domain.on_memory = lambda *_args, **_kwargs: None
         runtime._domain.recall_overlay = lambda *_args, **_kwargs: ""
         runtime._domain.contradiction_context = lambda *_args, **_kwargs: ""
         runtime._domain.cognitive_prompt_blocks = lambda **_kwargs: []
-        self.addCleanup(runtime.shutdown)
         return runtime
 
     def test_auto_recall_preserves_head_and_tail_and_never_calls_llm_refiner(self):
-        with TemporaryDirectory() as root:
-            runtime = self._runtime(root, recall={"queryRefinement": {"useLlm": True}})
+        with TemporaryDirectory() as root, ExitStack() as lifetime:
+            runtime = self._runtime(root, lifetime, recall={"queryRefinement": {"useLlm": True}})
             runtime._remember("A project fact distinct from the input", "older-session", "user")
             observed = []
 
@@ -48,8 +49,8 @@ class AutomaticRecallTests(unittest.TestCase):
             runtime._internal_llm.complete_json.assert_not_called()
 
     def test_exact_echo_is_removed_only_in_automatic_mode_even_if_booster_returns_it(self):
-        with TemporaryDirectory() as root:
-            runtime = self._runtime(root)
+        with TemporaryDirectory() as root, ExitStack() as lifetime:
+            runtime = self._runtime(root, lifetime)
             query = "Bitte überprüfe den neuen Hermes Installer für Apple Silicon"
             runtime._remember(query, "older-session", "user")
             runtime._remember("The previous installer bundled the profile picker", "older-session", "assistant")
@@ -64,8 +65,8 @@ class AutomaticRecallTests(unittest.TestCase):
             self.assertIn("previous installer bundled", automatic)
 
     def test_slow_embedding_uses_scoped_keyword_fallback_and_keeps_lease(self):
-        with TemporaryDirectory() as root:
-            runtime = self._runtime(root)
+        with TemporaryDirectory() as root, ExitStack() as lifetime:
+            runtime = self._runtime(root, lifetime)
             eligible = "Hermes Polaris project migration uses staged snapshots"
             runtime._remember(eligible, "past", "user")
             table, _ = runtime._table(create=False)
@@ -132,8 +133,8 @@ class AutomaticRecallTests(unittest.TestCase):
         self.assertEqual(match["end"], "2026-11-24T02:00:00+00:00")
 
     def test_recall_expands_a_ranked_list_fragment_to_its_scoped_whole(self):
-        with TemporaryDirectory() as root:
-            runtime = self._runtime(root, recall={"candidateTopK": 1, "queryRefinement": False})
+        with TemporaryDirectory() as root, ExitStack() as lifetime:
+            runtime = self._runtime(root, lifetime, recall={"candidateTopK": 1, "queryRefinement": False})
             origin = str(uuid.uuid4())
             whole = "Worauf achten:\n1. Online Reviews lesen.\n2. Referenzen vergleichen."
             part = "Worauf achten: Online Reviews lesen."
@@ -158,8 +159,8 @@ class AutomaticRecallTests(unittest.TestCase):
         self.assertEqual(prefer_whole_rows([part], wholes), [part])
 
     def test_rendering_explains_relative_time_with_a_real_created_at(self):
-        with TemporaryDirectory() as root:
-            runtime = self._runtime(root)
+        with TemporaryDirectory() as root, ExitStack() as lifetime:
+            runtime = self._runtime(root, lifetime)
             runtime._remember("We reopened the project yesterday", "older", "user")
             result = runtime.recall("project")
             self.assertIn("RELATIVE TIME:", result)
@@ -167,9 +168,9 @@ class AutomaticRecallTests(unittest.TestCase):
             self.assertLess(result.index("RELATIVE TIME:"), result.index("We reopened"))
 
     def test_cohere_default_and_document_bound_keep_original_content(self):
-        with TemporaryDirectory() as root:
+        with TemporaryDirectory() as root, ExitStack() as lifetime:
             reranker = RerankerBackend({}, Path(root))
-            self.addCleanup(reranker.close)
+            lifetime.callback(reranker.close)
             rows = [{"id": "row", "content": "x" * 1600}]
             response = MagicMock()
             response.__enter__.return_value.read.return_value = (
