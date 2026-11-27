@@ -20,8 +20,15 @@
  * different key makes the id ambiguous) and resolves records the run ids
  * cannot.
  *
+ * A third source is an id map (--id-map): a TSV of Neo candidate ids and
+ * session keys from a separate, verified attribution, for ids neither the run
+ * ids nor the turn-id hash can name. It applies to journal candidates and
+ * index-only entries of the processed workspaces and follows the same rule:
+ * a different key from any other source makes the id ambiguous.
+ *
  *   node scripts/neo-origin-backfill.mjs --workspace main --workspace bernhardine --workspace heisenberg
  *   node scripts/neo-origin-backfill.mjs --workspace main --apply --snapshot ~/.openclaw/.snapshots/plur1bus-YYYYMMDD-HHMMSS
+ *   node scripts/neo-origin-backfill.mjs --workspace main --include-index-only --id-map ~/.openclaw/backup/map.tsv
  *
  * Options:
  *   --workspace <key>        repeatable, required; the Neo store key (main,
@@ -46,6 +53,17 @@
  *   --no-turn-hash           do not use the turn-id hash (run ids only)
  *   --no-sensitivity         do not add the rules sensitivity
  *   --run-map <tsv>          extra pairs "runId<TAB>sessionKey"
+ *   --id-map <tsv>           keys by Neo candidate id (source "id-map"):
+ *                            header "id<TAB>sessionKey[<TAB>method]", one row
+ *                            per id (mem_ + 20 hex), at most 8 MiB. Chat keys
+ *                            only (also with --include-non-chat). A row
+ *                            applies only if the entry's agent (origin.agentId
+ *                            or agentId; without one the workspace's agent)
+ *                            is the key's agent. Rows for index-only entries
+ *                            need --include-index-only: without it the dry
+ *                            run reports them and --apply refuses and writes
+ *                            nothing. The method column goes into the audit
+ *                            report archive/origin-backfill.*.jsonl
  *   --legacy-trajectories    also read agents/<id>/sessions and
  *                            session-sqlite-import-archive *.trajectory.jsonl
  *                            (several GB; run under a memory cap)
@@ -62,6 +80,14 @@
  * vector exists only inline (run scripts/migrate-neo-vectors-sidecar.mjs
  * first). A second run writes nothing, except index lines a broken earlier
  * run left out (index repair).
+ *
+ * Group topics: a key and the same key plus ":topic:<id>" (group or channel)
+ * are one key, the topic key is written; the source that named the topic key
+ * names the revision. Two different topics of one group stay a conflict
+ * (ambiguous), although the context weighting treats the whole group as one
+ * chat (chatContextFromSessionKey): the written key is compared exactly
+ * (session echo in routeNeoRecall), and one source would contradict it.
+ * Direct keys with and without ":thread:…" stay a conflict as well.
  *
  * Rollback: restore the snapshot (scripts/restore-snapshot.sh). While the
  * gateway is still stopped after the apply, truncating is exact as well:
@@ -87,9 +113,13 @@ import { createNeoStore, neoRevisionTimeMs } from "../lib/neo-arch.js";
 import { normalizeMemorySessionKey } from "../lib/query-echo.js";
 import { chatContextFromSessionKey } from "../lib/recall-context.js";
 import { classifySensitivityByRules, normalizeSensitivity } from "../lib/sensitivity.js";
-import { appendDestructiveOpLog, resolveInside, safeAgentId } from "../lib/sql-safety.js";
+import { appendDestructiveOpLog, isSafeAgentId, resolveInside, safeAgentId } from "../lib/sql-safety.js";
 
-/** Values of origin.sessionKeySource (prefixed with "backfill:"), in resolution order. */
+/**
+ * Values of origin.sessionKeySource (prefixed with "backfill:"), in resolution
+ * order: when several sources name the same key, the earliest one names the
+ * revision.
+ */
 export const BACKFILL_SOURCES = Object.freeze({
   sessionId: "session-id",
   transcriptEvents: "transcript-events",
@@ -100,8 +130,18 @@ export const BACKFILL_SOURCES = Object.freeze({
   runMap: "run-map",
   legacyTrajectory: "legacy-trajectory",
   neoSibling: "neo-sibling",
+  idMap: "id-map",
   turnHash: "turn-hash",
 });
+const SOURCE_RANK = new Map(Object.values(BACKFILL_SOURCES).map((source, rank) => [source, rank]));
+
+/** Size limit of an --id-map file (about 60,000 rows). */
+export const ID_MAP_MAX_BYTES = 8 * 1024 * 1024;
+// stableId("mem", …) in lib/neo-arch.js: Kandidaten-IDs
+const NEO_CANDIDATE_ID_RE = /^mem_[0-9a-f]{20}$/;
+const ID_MAP_METHOD_MAX_CHARS = 200;
+const SESSION_KEY_AGENT_RE = /^agent:([^:]+):/;
+const TOPIC_SUFFIX_RE = /:topic:[^:]+$/;
 
 const SKIP_STATUSES = new Set(["pruned", "tombstoned", "demoted"]);
 // wie NEO_GLOBAL_SEARCH_STATUSES in lib/neo-arch.js (globale Suche, Index)
@@ -174,6 +214,7 @@ export function parseArgs(argv, home = homedir()) {
     turnHash: true,
     sensitivity: true,
     runMap: "",
+    idMap: "",
     legacyTrajectories: false,
     compactIndex: false,
     json: false,
@@ -201,6 +242,7 @@ export function parseArgs(argv, home = homedir()) {
     else if (a === "--no-turn-hash") opts.turnHash = false;
     else if (a === "--no-sensitivity") opts.sensitivity = false;
     else if (a === "--run-map") opts.runMap = resolve(value(++i, a));
+    else if (a === "--id-map") opts.idMap = resolve(value(++i, a));
     else if (a === "--legacy-trajectories") opts.legacyTrajectories = true;
     else if (a === "--compact-index") opts.compactIndex = true;
     else if (a === "--json") opts.json = true;
@@ -710,6 +752,108 @@ export function readRunMap(path) {
   return runs;
 }
 
+// `specific` ist `general` plus ":topic:<id>" derselben Gruppe (oder desselben
+// Kanals); `general` traegt selbst kein Thema. "…:topic:5778:heartbeat" ist
+// keine Verfeinerung von "…:topic:5778".
+function isTopicRefinement(specific, general) {
+  if (TOPIC_SUFFIX_RE.test(general) || !specific.startsWith(`${general}:topic:`)) return false;
+  if (!TOPIC_SUFFIX_RE.test(specific) || specific.replace(TOPIC_SUFFIX_RE, "") !== general) return false;
+  const a = chatContextFromSessionKey(general);
+  const b = chatContextFromSessionKey(specific);
+  return (a.kind === "group" || a.kind === "channel") && a.kind === b.kind && a.chatKey === b.chatKey;
+}
+
+/**
+ * Merge keys that differ only by a group topic: a key without topic goes into
+ * the key with topic (its sources are added there). With two or more topic
+ * keys for one group all of them stay (a conflict for the caller).
+ * @param {string[]} keys distinct normalized keys
+ * @returns {Map<string, string>} each input key → the key it merges into (itself if none)
+ */
+export function topicMergeTargets(keys) {
+  const list = [...new Set(keys)];
+  const targets = new Map(list.map((key) => [key, key]));
+  for (const general of list) {
+    const refiners = list.filter((key) => key !== general && isTopicRefinement(key, general));
+    if (refiners.length === 1) targets.set(general, refiners[0]);
+  }
+  return targets;
+}
+
+function cleanIdMapMethod(value) {
+  const method = typeof value === "string" ? value.trim() : "";
+  if (method.length > ID_MAP_METHOD_MAX_CHARS || /[\u0000-\u001f\u007f]/.test(method)) return null;
+  return method;
+}
+
+/**
+ * Read an --id-map TSV: header with the columns `id` and `sessionKey` (any
+ * order, case-insensitive), optional `method`; CRLF and a BOM are tolerated,
+ * empty lines skipped. A row is malformed if it has too many or too few
+ * cells, an id that is no Neo candidate id (mem_ + 20 lowercase hex), a key
+ * that normalizeMemorySessionKey rejects or that has no agent segment, or a
+ * method over 200 characters. An id with two different keys (a key and the
+ * same key plus a group topic are one key) is a conflict and is dropped;
+ * keys that chatContextFromSessionKey does not call direct/group/channel are
+ * counted as non-chat and dropped.
+ * @param {string} path
+ * @param {{maxBytes?: number}} [opts] size limit, default ID_MAP_MAX_BYTES
+ * @returns {{entries: Map<string, {sessionKey: string, method: string, agentId: string, kind: string}>, stats: {bytes: number, rows: number, accepted: number, malformed: number, duplicates: number, conflicts: number, nonChat: number, byKind: object, conflictIds: string[]}}}
+ */
+export function readIdMap(path, { maxBytes = ID_MAP_MAX_BYTES } = {}) {
+  const bytes = statSync(path).size;
+  if (bytes > maxBytes) throw new Error(`--id-map ${path} has ${bytes} bytes, more than the limit of ${maxBytes}`);
+  const lines = readFileSync(path, "utf8").replace(/^\uFEFF/, "").split("\n").map((line) => line.replace(/\r$/, ""));
+  const headerAt = lines.findIndex((line) => line.trim() !== "");
+  if (headerAt < 0) throw new Error(`--id-map ${path} is empty; it needs the header "id<TAB>sessionKey[<TAB>method]"`);
+  const header = lines[headerAt].split("\t").map((cell) => cell.trim().toLowerCase());
+  const column = (name) => header.indexOf(name.toLowerCase());
+  const idCol = column("id");
+  const keyCol = column("sessionKey");
+  const methodCol = column("method");
+  if (idCol < 0 || keyCol < 0) throw new Error(`--id-map ${path}: the first line must be the header "id<TAB>sessionKey[<TAB>method]"`);
+  const named = header.filter(Boolean);
+  if (new Set(named).size !== named.length) throw new Error(`--id-map ${path}: duplicate column in the header`);
+  const minCells = Math.max(idCol, keyCol) + 1;
+  const stats = { bytes, rows: 0, accepted: 0, malformed: 0, duplicates: 0, conflicts: 0, nonChat: 0, byKind: {}, conflictIds: [] };
+  const byId = new Map();
+  for (const line of lines.slice(headerAt + 1)) {
+    if (line.trim() === "") continue;
+    stats.rows++;
+    const cells = line.split("\t");
+    const id = (cells[idCol] ?? "").trim();
+    const sessionKey = normalizeMemorySessionKey(cells[keyCol]);
+    const agentId = SESSION_KEY_AGENT_RE.exec(sessionKey)?.[1] || "";
+    const method = methodCol >= 0 ? cleanIdMapMethod(cells[methodCol]) : "";
+    if (cells.length < minCells || cells.length > header.length || !NEO_CANDIDATE_ID_RE.test(id) || !sessionKey || !isSafeAgentId(agentId) || method === null) {
+      stats.malformed++;
+      continue;
+    }
+    let rows = byId.get(id);
+    if (!rows) byId.set(id, (rows = []));
+    else stats.duplicates++;
+    rows.push({ sessionKey, method, agentId });
+  }
+  const entries = new Map();
+  for (const [id, rows] of byId) {
+    const targets = topicMergeTargets(rows.map((row) => row.sessionKey));
+    const keys = new Set(targets.values());
+    if (keys.size > 1) {
+      stats.conflicts++;
+      if (stats.conflictIds.length < 50) stats.conflictIds.push(id);
+      continue;
+    }
+    const [sessionKey] = keys;
+    const { kind } = chatContextFromSessionKey(sessionKey);
+    if (kind !== "direct" && kind !== "group" && kind !== "channel") { stats.nonChat++; continue; }
+    const named = rows.filter((r) => r.sessionKey === sessionKey);
+    entries.set(id, { sessionKey, method: named.find((r) => r.method)?.method || "", agentId: named[0].agentId, kind });
+    stats.accepted++;
+    increment(stats.byKind, kind);
+  }
+  return { entries, stats };
+}
+
 // ---------------------------------------------------------------------------
 // Journal and plan (pure)
 // ---------------------------------------------------------------------------
@@ -957,16 +1101,35 @@ function emptyResolutionStats() {
   };
 }
 
-// Ein Datensatz: alle Treffer sammeln, eindeutig? Chat? Liefert den Schlüssel
-// oder null (gezählt in stats).
-function resolveForWrite(record, runId, resolveFn, stats, includeNonChat) {
-  const keys = new Map();
-  let hashKey = "";
-  for (const hit of (typeof resolveFn === "function" ? resolveFn(runId, record) : null) || []) {
+function sourceRank(source) {
+  return SOURCE_RANK.has(source) ? SOURCE_RANK.get(source) : Number.POSITIVE_INFINITY;
+}
+
+// Ein Datensatz: alle Treffer sammeln (dazu `extraHits`, etwa die Id-Map),
+// eindeutig? Chat? Den Schlüssel benennt die früheste Quelle in
+// BACKFILL_SOURCES (unbekannte Quellen danach, unter sich der erste Treffer);
+// ein Schlüssel ohne Gruppenthema geht im selben Schlüssel mit Thema auf, die
+// Quelle des Themenschlüssels benennt ihn. Liefert den Schlüssel mit allen
+// Quellen oder null (gezählt in stats).
+function resolveForWrite(record, runId, resolveFn, stats, includeNonChat, extraHits = []) {
+  const found = new Map();
+  const hits = [...((typeof resolveFn === "function" ? resolveFn(runId, record) : null) || []), ...extraHits];
+  for (const hit of hits) {
     const key = normalizeMemorySessionKey(hit?.sessionKey);
     if (!key) continue;
-    if (hit.source === BACKFILL_SOURCES.turnHash) hashKey = key;
-    if (!keys.has(key)) keys.set(key, String(hit.source || "unknown"));
+    const source = String(hit.source || "unknown");
+    const seen = found.get(key);
+    if (!seen) found.set(key, { source, sources: new Set([source]) });
+    else {
+      seen.sources.add(source);
+      if (sourceRank(source) < sourceRank(seen.source)) seen.source = source;
+    }
+  }
+  const keys = new Map();
+  for (const [key, target] of topicMergeTargets([...found.keys()])) {
+    const merged = keys.get(target) || { source: found.get(target).source, sources: new Set() };
+    for (const source of found.get(key).sources) merged.sources.add(source);
+    keys.set(target, merged);
   }
   if (keys.size === 0) {
     if (runId) stats.unresolved++;
@@ -976,14 +1139,16 @@ function resolveForWrite(record, runId, resolveFn, stats, includeNonChat) {
   }
   if (keys.size > 1) {
     stats.ambiguous++;
-    if (hashKey) stats.turnHashConflicts++;
+    if ([...keys.values()].some((info) => info.sources.has(BACKFILL_SOURCES.turnHash))) stats.turnHashConflicts++;
     return null;
   }
-  const [[sessionKey, source]] = keys;
+  const [[sessionKey, { source, sources }]] = keys;
   stats.resolved++;
   increment(stats.bySource, source);
-  if (source === BACKFILL_SOURCES.turnHash) stats.turnHashOnly++;
-  else if (hashKey === sessionKey) stats.turnHashConfirmed++;
+  if (sources.has(BACKFILL_SOURCES.turnHash)) {
+    if (sources.size === 1) stats.turnHashOnly++;
+    else stats.turnHashConfirmed++;
+  }
   const { kind } = chatContextFromSessionKey(sessionKey);
   if (kind === "unknown") {
     stats.nonChat++;
@@ -993,7 +1158,60 @@ function resolveForWrite(record, runId, resolveFn, stats, includeNonChat) {
     stats.chat++;
     increment(stats.byKind, kind);
   }
-  return { sessionKey, source, kind };
+  return { sessionKey, source, kind, sources: [...sources] };
+}
+
+// Id-Map-Zeile eines Eintrags: gilt nur, wenn der Agent des Eintrags
+// (origin.agentId/agentId, ohne beide der Agent des Workspace) der Agent im
+// Schlüssel ist.
+function idMapRowFor(record, idMap, workspaceAgent) {
+  const row = idMap instanceof Map ? idMap.get(String(record?.id ?? "")) : undefined;
+  if (!row) return { row: null, status: "none", agentId: "" };
+  const agentId = recordAgentId(record) || workspaceAgent || "";
+  return { row, agentId, status: agentId && agentId === row.agentId ? "applicable" : "agentMismatch" };
+}
+
+function emptyIdMapPlanStats() {
+  return {
+    applicable: 0, wouldWrite: 0, byKind: {}, confirmed: 0, ambiguous: 0, agentMismatch: 0, noAgent: 0,
+    alreadyKeyed: 0, keyDiffers: 0, ineligible: 0, inlineVectorNoSidecar: 0, notWritten: 0,
+  };
+}
+
+// Vorpruefung einer Id-Map-Zeile fuer einen Eintrag ohne Schluessel;
+// liefert die Zusatztreffer fuer resolveForWrite (leer: die Zeile gilt nicht).
+function idMapExtraHits(record, opts, idStats) {
+  const { row, status, agentId } = idMapRowFor(record, opts.idMap, opts.workspaceAgent);
+  if (!row) return { row: null, extraHits: [] };
+  if (status !== "applicable") {
+    idStats.agentMismatch++;
+    if (!agentId) idStats.noAgent++;
+    return { row: null, extraHits: [] };
+  }
+  idStats.applicable++;
+  return { row, extraHits: [{ sessionKey: row.sessionKey, source: BACKFILL_SOURCES.idMap }] };
+}
+
+// Vor dem Schreiben gezaehlte Id-Map-Zeilen, die nicht gelten: schon mit
+// Schluessel, oder nicht lebend/ohne Herkunft.
+function countIdMapSkip(record, id, opts, idStats, reason) {
+  const row = opts.idMap instanceof Map ? opts.idMap.get(id) : undefined;
+  if (!row) return;
+  if (reason === "keyed") {
+    idStats.alreadyKeyed++;
+    const key = normalizeMemorySessionKey(originOf(record)?.sessionKey) || normalizeMemorySessionKey(record?.sessionKey);
+    if (new Set(topicMergeTargets([key, row.sessionKey]).values()).size > 1) idStats.keyDiffers++;
+  } else idStats.ineligible++;
+}
+
+// Ergebnis von resolveForWrite fuer eine geltende Id-Map-Zeile: true, wenn
+// die Zeile den geschriebenen Schluessel nennt (allein oder bestaetigt).
+function idMapContributed(row, hit, ambiguous, idStats) {
+  if (!row) return false;
+  if (ambiguous) { idStats.ambiguous++; return false; }
+  if (!hit || !hit.sources.includes(BACKFILL_SOURCES.idMap)) { idStats.notWritten++; return false; }
+  if (hit.sources.length > 1) idStats.confirmed++;
+  return true;
 }
 
 function keyedRevision(record, origin, { sessionKey, source }, { now, addSensitivity, stats }) {
@@ -1022,11 +1240,14 @@ function hasInlineVector(record) {
  * Plan the backfill of one journal (pure; writes nothing).
  * @param {Array<object|null>} records journal lines in file order
  * @param {(runId: string, record: object) => Array<{sessionKey: string, source: string}>} resolveFn
- * @param {{includeNonChat?: boolean, sensitivity?: boolean, now?: string, hasSidecarVector?: (id: string) => boolean}} [opts]
+ * @param {{includeNonChat?: boolean, sensitivity?: boolean, now?: string, hasSidecarVector?: (id: string) => boolean, idMap?: Map<string, object>|null, workspaceAgent?: string}} [opts]
  *   hasSidecarVector: a record whose newest revision carries an inline
  *   vector is written only if the sidecar has one for its id (the revision
- *   drops the inline copy); without the check such records are skipped
- * @returns {{stats: object, writes: object[], entries: Array<{id: string, position: number, sessionKey: string, source: string, kind: string}>, ambiguousIds: string[]}}
+ *   drops the inline copy); without the check such records are skipped.
+ *   idMap: readIdMap(...).entries, a further source by id (stats.idMap);
+ *   workspaceAgent: the agent for records that name none
+ * @returns {{stats: object, writes: object[], entries: Array<{id: string, position: number, sessionKey: string, source: string, kind: string, method?: string}>, ambiguousIds: string[]}}
+ *   entries carry `method` when an id-map row names the written key
  */
 export function planNeoOriginBackfill(records, resolveFn, opts = {}) {
   const includeNonChat = opts.includeNonChat === true;
@@ -1039,23 +1260,33 @@ export function planNeoOriginBackfill(records, resolveFn, opts = {}) {
     lines: list.length, ids: latest.size, keyed: 0, noKey: 0, skippedStatus: 0, live: 0, noOrigin: 0,
     inlineVectorNoSidecar: 0, ...emptyResolutionStats(),
   };
+  const idStats = emptyIdMapPlanStats();
+  if (opts.idMap instanceof Map) stats.idMap = idStats;
   const planned = [];
   const ambiguousIds = [];
   for (const [id, { record, position }] of latest) {
-    if (isKeyed(record)) { stats.keyed++; continue; }
+    if (isKeyed(record)) { stats.keyed++; countIdMapSkip(record, id, opts, idStats, "keyed"); continue; }
     stats.noKey++;
-    if (isSkippedStatus(record)) { stats.skippedStatus++; continue; }
+    if (isSkippedStatus(record)) { stats.skippedStatus++; countIdMapSkip(record, id, opts, idStats, "ineligible"); continue; }
     stats.live++;
     const origin = originOf(record);
-    if (!origin) { stats.noOrigin++; continue; }
+    if (!origin) { stats.noOrigin++; countIdMapSkip(record, id, opts, idStats, "ineligible"); continue; }
+    const { row, extraHits } = idMapExtraHits(record, opts, idStats);
     const ambiguousBefore = stats.ambiguous;
-    const hit = resolveForWrite(record, nonEmptyString(origin.sessionId), resolveFn, stats, includeNonChat);
-    if (stats.ambiguous > ambiguousBefore) ambiguousIds.push(id);
+    const hit = resolveForWrite(record, nonEmptyString(origin.sessionId), resolveFn, stats, includeNonChat, extraHits);
+    const ambiguous = stats.ambiguous > ambiguousBefore;
+    if (ambiguous) ambiguousIds.push(id);
+    const mapped = idMapContributed(row, hit, ambiguous, idStats);
     if (!hit) continue;
-    if (hasInlineVector(record) && !hasSidecarVector(id)) { stats.inlineVectorNoSidecar++; continue; }
+    if (hasInlineVector(record) && !hasSidecarVector(id)) {
+      stats.inlineVectorNoSidecar++;
+      if (mapped) idStats.inlineVectorNoSidecar++;
+      continue;
+    }
     const next = keyedRevision(record, origin, hit, { now, addSensitivity, stats });
     increment(stats.writeBySource, hit.source);
-    planned.push({ id, position, sessionKey: hit.sessionKey, source: hit.source, kind: hit.kind, record: next });
+    if (mapped) { idStats.wouldWrite++; increment(idStats.byKind, hit.kind); }
+    planned.push({ id, position, sessionKey: hit.sessionKey, source: hit.source, kind: hit.kind, ...(mapped ? { method: row.method } : {}), record: next });
   }
   // Reihenfolge der alten juengsten Zeilen: das 500-Zeilen-Fenster bleibt so
   // chronologisch wie vorher.
@@ -1064,7 +1295,7 @@ export function planNeoOriginBackfill(records, resolveFn, opts = {}) {
   return {
     stats,
     writes: planned.map((entry) => entry.record),
-    entries: planned.map(({ id, position, sessionKey, source, kind }) => ({ id, position, sessionKey, source, kind })),
+    entries: planned.map(({ record: _record, ...entry }) => entry),
     ambiguousIds,
   };
 }
@@ -1072,13 +1303,15 @@ export function planNeoOriginBackfill(records, resolveFn, opts = {}) {
 /**
  * Plan keys for candidate-index entries whose journal lines are gone (pure).
  * Only searchable, unkeyed entries with an origin; without a run id in the
- * index projection only the turn-id hash and Neo siblings can name the key.
- * The writes are index entries (they go to candidate-index.jsonl only).
+ * index projection only the turn-id hash, Neo siblings and the id map can
+ * name the key. The writes are index entries (they go to
+ * candidate-index.jsonl only).
  * @param {Map<string, object>} indexEntries newest index entry per id (readCandidateIndex)
  * @param {Set<string>} journalIds ids the journal still has
  * @param {(runId: string, record: object) => Array<{sessionKey: string, source: string}>} resolveFn
- * @param {{includeNonChat?: boolean, sensitivity?: boolean, now?: string}} [opts]
- * @returns {{stats: object, writes: object[], entries: Array<{id: string, sessionKey: string, source: string, kind: string}>}}
+ * @param {{includeNonChat?: boolean, sensitivity?: boolean, now?: string, idMap?: Map<string, object>|null, workspaceAgent?: string}} [opts]
+ *   idMap/workspaceAgent as in planNeoOriginBackfill (stats.idMap)
+ * @returns {{stats: object, writes: object[], entries: Array<{id: string, sessionKey: string, source: string, kind: string, method?: string}>}}
  */
 export function planIndexOnlyBackfill(indexEntries, journalIds, resolveFn, opts = {}) {
   const includeNonChat = opts.includeNonChat === true;
@@ -1086,22 +1319,32 @@ export function planIndexOnlyBackfill(indexEntries, journalIds, resolveFn, opts 
   const now = nonEmptyString(opts.now) || new Date().toISOString();
   const entries = indexEntries instanceof Map ? indexEntries : new Map();
   const stats = { entries: entries.size, indexOnly: 0, searchable: 0, keyed: 0, noKey: 0, noOrigin: 0, ...emptyResolutionStats() };
+  const idStats = emptyIdMapPlanStats();
+  if (opts.idMap instanceof Map) stats.idMap = idStats;
   const writes = [];
   const report = [];
   for (const [id, entry] of entries) {
     if (journalIds?.has(id)) continue;
     stats.indexOnly++;
-    if (!GLOBAL_SEARCH_STATUSES.has(String(entry?.status || "candidate")) || entry?.hardDeleted === true) continue;
+    if (!GLOBAL_SEARCH_STATUSES.has(String(entry?.status || "candidate")) || entry?.hardDeleted === true) {
+      countIdMapSkip(entry, id, opts, idStats, "ineligible");
+      continue;
+    }
     stats.searchable++;
-    if (isKeyed(entry)) { stats.keyed++; continue; }
+    if (isKeyed(entry)) { stats.keyed++; countIdMapSkip(entry, id, opts, idStats, "keyed"); continue; }
     stats.noKey++;
     const origin = originOf(entry);
-    if (!origin) { stats.noOrigin++; continue; }
-    const hit = resolveForWrite(entry, "", resolveFn, stats, includeNonChat);
+    if (!origin) { stats.noOrigin++; countIdMapSkip(entry, id, opts, idStats, "ineligible"); continue; }
+    // Die Indexprojektion fuehrt keine Lauf-ID: Turn-Hash, Geschwister, Id-Map.
+    const { row, extraHits } = idMapExtraHits(entry, opts, idStats);
+    const ambiguousBefore = stats.ambiguous;
+    const hit = resolveForWrite(entry, "", resolveFn, stats, includeNonChat, extraHits);
+    const mapped = idMapContributed(row, hit, stats.ambiguous > ambiguousBefore, idStats);
     if (!hit) continue;
     writes.push(keyedRevision(entry, origin, hit, { now, addSensitivity, stats }));
     increment(stats.writeBySource, hit.source);
-    report.push({ id, sessionKey: hit.sessionKey, source: hit.source, kind: hit.kind });
+    if (mapped) { idStats.wouldWrite++; increment(idStats.byKind, hit.kind); }
+    report.push({ id, sessionKey: hit.sessionKey, source: hit.source, kind: hit.kind, ...(mapped ? { method: row.method } : {}) });
   }
   stats.wouldWrite = writes.length;
   return { stats, writes, entries: report };
@@ -1190,11 +1433,43 @@ function workspaceAgentIds(records, indexEntries) {
   return [...agents];
 }
 
+// Agent fuer Eintraege ohne origin.agentId/agentId (Indexprojektion): der
+// Workspace-Schluessel, wenn er unter den Agenten des Workspace ist (main,
+// bernhardine, heisenberg), sonst der einzige Agent, sonst keiner.
+function workspaceAgentFor(workspaceKey, agents) {
+  if (agents.includes(workspaceKey)) return workspaceKey;
+  return agents.length === 1 ? agents[0] : "";
+}
+
+// Id-Map je Workspace: Zeilen aus der Datei, dazu was Journal- und Indexplan
+// mit ihnen gemacht haben. accepted = unknownId + alreadyKeyed + ineligible +
+// agentMismatch + applicable; applicable = wouldWrite + ambiguous +
+// inlineVectorNoSidecar + notWritten.
+function summarizeIdMap(parseStats, idMap, journalIds, index, journalStats, indexStats) {
+  let unknownId = 0;
+  for (const id of idMap.keys()) if (!journalIds.has(id) && !index.has(id)) unknownId++;
+  const sum = (key) => (journalStats?.[key] || 0) + (indexStats?.[key] || 0);
+  const byKind = {};
+  for (const stats of [journalStats, indexStats]) for (const [kind, n] of Object.entries(stats?.byKind || {})) increment(byKind, kind, n);
+  return {
+    rowsRead: parseStats.rows, accepted: parseStats.accepted, malformed: parseStats.malformed, duplicates: parseStats.duplicates,
+    conflicts: parseStats.conflicts, nonChat: parseStats.nonChat, unknownId, alreadyKeyed: sum("alreadyKeyed"), keyDiffers: sum("keyDiffers"),
+    ineligible: sum("ineligible"), agentMismatch: sum("agentMismatch"), noAgent: sum("noAgent"), applicable: sum("applicable"),
+    wouldWrite: { journal: journalStats?.wouldWrite || 0, indexOnly: indexStats?.wouldWrite || 0 }, byKind,
+    confirmed: sum("confirmed"), ambiguous: sum("ambiguous"), inlineVectorNoSidecar: sum("inlineVectorNoSidecar"), notWritten: sum("notWritten"),
+    indexOnlyNeedsFlag: 0,
+  };
+}
+
 /**
  * Run the backfill for the given options (dry run or apply).
  * @param {object} opts from parseArgs
  * @param {{gatewayRunning?: Function, home?: string, now?: string}} [deps]
  * @returns {{apply: boolean, includeIndexOnly: boolean, turnHash: boolean, sources: object, workspaces: object[], errors: string[]}}
+ *   with --id-map: sources.idMap (file counts) and per workspace `idMap`
+ *   (summary) and `workspaceAgent`; --apply with id-map rows for index-only
+ *   entries but without --include-index-only writes nothing and reports one
+ *   error
  */
 export function runNeoOriginBackfill(opts, deps = {}) {
   const home = deps.home || homedir();
@@ -1208,6 +1483,8 @@ export function runNeoOriginBackfill(opts, deps = {}) {
   if (opts.apply) checkApplyPreconditions(opts, { ...deps, home });
   const neoRoot = join(opts.base, "_neo");
   if (!existsSync(neoRoot)) throw new Error(`no Neo store under ${neoRoot}`);
+  // Vor den Host-DBs: ein kaputtes --id-map bricht sofort ab.
+  const idMapRead = opts.idMap ? readIdMap(opts.idMap) : null;
 
   const workspaces = [];
   for (const key of opts.workspaces) {
@@ -1248,7 +1525,7 @@ export function runNeoOriginBackfill(opts, deps = {}) {
     if (useTurnHash) for (const agentId of entry.agents) agentIds.add(agentId);
   }
 
-  const sources = { agents: {}, state: null, runMap: null, legacy: {} };
+  const sources = { agents: {}, state: null, runMap: null, idMap: null, legacy: {} };
   const agentRuns = new Map();
   const legacyRuns = new Map();
   const keysByAgent = new Map();
@@ -1306,13 +1583,19 @@ export function runNeoOriginBackfill(opts, deps = {}) {
     sources.runMap = { runs: runMap.size };
   }
 
+  if (idMapRead) sources.idMap = { path: opts.idMap, ...idMapRead.stats };
+  const idMap = idMapRead ? idMapRead.entries : null;
+
+  // Erst alle Workspaces planen, dann schreiben: eine Verweigerung (Id-Map
+  // ohne --include-index-only) gilt vor dem ersten Schreibzugriff.
   const stamp = now.replace(/[:.]/g, "-");
   for (const entry of workspaces) {
     if (entry.error || !entry.journal) continue;
     const { store } = entry;
     const turnHash = useTurnHash ? createTurnHashResolver({ keysByAgent, extraKeys: entry.siblings.keys }) : null;
     const resolveFn = createRunKeyResolver({ agentRuns, globalRuns, runMap, legacyRuns, siblings: entry.siblings, turnHash, workspaceAgents: entry.agents });
-    const planOpts = { includeNonChat: opts.includeNonChat, sensitivity: opts.sensitivity, now };
+    entry.workspaceAgent = workspaceAgentFor(entry.workspace, entry.agents);
+    const planOpts = { includeNonChat: opts.includeNonChat, sensitivity: opts.sensitivity, now, idMap, workspaceAgent: entry.workspaceAgent };
     const hasSidecarVector = (id) => {
       const vector = store.readVector(id);
       return Array.isArray(vector) ? vector.length > 0 : Boolean(vector);
@@ -1325,10 +1608,24 @@ export function runNeoOriginBackfill(opts, deps = {}) {
     entry.indexPlan = indexPlan;
     entry.repairs = repairs;
     entry.parseErrors = entry.journal.parseErrors;
+    if (idMap) entry.idMap = summarizeIdMap(idMapRead.stats, idMap, journalIds, entry.index, plan.stats.idMap, indexPlan.stats.idMap);
+  }
+
+  const blocked = idMap && !opts.includeIndexOnly ? workspaces.filter((entry) => entry.idMap?.wouldWrite.indexOnly > 0) : [];
+  for (const entry of blocked) entry.idMap.indexOnlyNeedsFlag = entry.idMap.wouldWrite.indexOnly;
+  if (blocked.length > 0 && opts.apply) {
+    const counts = blocked.map((entry) => `${entry.idMap.wouldWrite.indexOnly} in ${entry.workspace}`).join(", ");
+    errors.push(`--id-map keys index-only entries (${counts}), and index-only lines are written only with --include-index-only; add it or remove those rows from the map. Nothing written`);
+  }
+
+  for (const entry of workspaces) {
+    if (entry.error || !entry.plan || (blocked.length > 0 && opts.apply)) continue;
+    const { store, plan, indexPlan, repairs } = entry;
     const indexOnlyWrites = opts.includeIndexOnly ? indexPlan.writes : [];
     const indexWrites = [...repairs, ...indexOnlyWrites];
     if (!opts.apply || (plan.writes.length === 0 && indexWrites.length === 0)) continue;
     if (errors.length > 0) { entry.error = "not written: an earlier workspace failed"; continue; }
+    const idMapPlanned = idMap ? { journal: plan.stats.idMap.wouldWrite, indexOnly: opts.includeIndexOnly ? indexPlan.stats.idMap.wouldWrite : 0 } : null;
     const logDir = join(opts.base, "..");
     try {
       // Unmittelbar vor dem Schreiben noch einmal: der Schutz-Cron startet
@@ -1347,6 +1644,7 @@ export function runNeoOriginBackfill(opts, deps = {}) {
         snapshot: opts.snapshot, planned: plan.writes.length, indexOnlyPlanned: indexOnlyWrites.length, indexRepairPlanned: repairs.length,
         bySource: plan.stats.writeBySource, byKind: opts.includeNonChat ? { ...plan.stats.byKind, nonChat: plan.stats.nonChat } : plan.stats.byKind,
         includeNonChat: opts.includeNonChat, includeIndexOnly: opts.includeIndexOnly === true, turnHash: useTurnHash, sensitivity: opts.sensitivity,
+        ...(idMapPlanned ? { idMap: opts.idMap, idMapPlanned } : {}),
         journalBytesBefore, indexBytesBefore, indexExistedBefore,
       });
       if (!started) throw new Error("cannot write destructive-ops.jsonl; nothing written");
@@ -1368,9 +1666,11 @@ export function runNeoOriginBackfill(opts, deps = {}) {
       // und der committed-Eintrag muss geschrieben werden.
       let report = "";
       try {
+        // method nur bei Schluesseln, die eine Id-Map-Zeile nennt.
+        const reportLine = ({ id, sessionKey, source, kind, method }, target) => ({ id, sessionKey, source, kind, ...(method !== undefined ? { method } : {}), target });
         const lines = [
-          ...plan.entries.map(({ id, sessionKey, source, kind }) => ({ id, sessionKey, source, kind, target: "journal" })),
-          ...(opts.includeIndexOnly ? indexPlan.entries.map(({ id, sessionKey, source, kind }) => ({ id, sessionKey, source, kind, target: "index-only" })) : []),
+          ...plan.entries.map((line) => reportLine(line, "journal")),
+          ...(opts.includeIndexOnly ? indexPlan.entries.map((line) => reportLine(line, "index-only")) : []),
           ...repairs.map((record) => ({ id: String(record.id), sessionKey: record.origin.sessionKey, source: String(record.origin.sessionKeySource).replace(/^backfill:/, ""), target: "index-repair" })),
         ];
         report = basename(writeBackfillReport(store, lines, stamp));
@@ -1378,12 +1678,13 @@ export function runNeoOriginBackfill(opts, deps = {}) {
         warn(`${entry.workspace}: id report not written (${describe(error)}); the backfill itself is written`);
       }
       entry.applied = {
-        ...result, indexOnlyWritten: indexOnlyWrites.length, indexRepaired: repairs.length,
+        ...result, indexOnlyWritten: indexOnlyWrites.length, indexRepaired: repairs.length, ...(idMapPlanned ? { idMap: idMapPlanned } : {}),
         journalBytesBefore, indexBytesBefore, journalBytesAfter: fileSize(store.paths.candidates), indexBytesAfter: fileSize(store.paths.candidateIndex), report,
       };
       appendDestructiveOpLog(logDir, {
         timestamp: new Date().toISOString(), op: "neo-origin-backfill", phase: "committed", workspace: entry.workspace, workspaceDir: entry.dir,
         written: result.written, indexOnlyWritten: indexOnlyWrites.length, indexRepaired: repairs.length,
+        ...(idMapPlanned ? { idMapWritten: idMapPlanned } : {}),
         journalBytesAfter: entry.applied.journalBytesAfter, indexBytesAfter: entry.applied.indexBytesAfter,
         compacted: Boolean(result.compact), report: entry.applied.report,
       });
@@ -1432,7 +1733,17 @@ function formatReport(report) {
       lines.push(`    ${report.includeIndexOnly ? (report.apply ? "write" : "would write") : "with --include-index-only would write"} ${x.wouldWrite} index lines; sensitivity ${formatCounts(x.sensitivity)}`);
       if (ws.indexRepair > 0) lines.push(`  index repair: ${ws.indexRepair} index lines an earlier, interrupted run left out`);
     }
+    const m = ws.idMap;
+    if (m) {
+      const verb = report.apply ? "write" : "would write";
+      const indexVerb = report.includeIndexOnly ? verb : "with --include-index-only would write";
+      lines.push(`  id-map: rows read ${m.rowsRead} (accepted ${m.accepted}, malformed ${m.malformed}, duplicate rows ${m.duplicates}, conflicting ids ${m.conflicts}, non-chat ${m.nonChat})`);
+      lines.push(`    unknown id ${m.unknownId}, already keyed ${m.alreadyKeyed}${m.keyDiffers ? ` (other key ${m.keyDiffers})` : ""}, not live/no origin ${m.ineligible}, agent mismatch ${m.agentMismatch}${m.noAgent ? ` (no agent ${m.noAgent})` : ""}, applicable ${m.applicable}`);
+      lines.push(`    ${verb} ${m.wouldWrite.journal} journal revisions, ${indexVerb} ${m.wouldWrite.indexOnly} index lines (${formatCounts(m.byKind)}); confirmed by another source ${m.confirmed}, ambiguous ${m.ambiguous}${m.inlineVectorNoSidecar ? `, inline vector only ${m.inlineVectorNoSidecar}` : ""}`);
+      if (m.indexOnlyNeedsFlag > 0) lines.push(`    NOTE: ${m.indexOnlyNeedsFlag} id-map rows key index-only entries; --apply refuses (writes nothing) without --include-index-only`);
+    }
     if (ws.applied) {
+      if (ws.applied.idMap) lines.push(`  id-map written: ${ws.applied.idMap.journal} journal revisions, ${ws.applied.idMap.indexOnly} index lines`);
       lines.push(`  written ${ws.applied.written} journal revisions, ${ws.applied.indexOnlyWritten} index-only lines, ${ws.applied.indexRepaired} repaired index lines; journal ${ws.applied.journalBytesBefore} → ${ws.applied.journalBytesAfter} bytes, index ${ws.applied.indexBytesBefore} → ${ws.applied.indexBytesAfter} bytes${ws.applied.compact ? ", index compacted" : ""}${ws.applied.report ? `; report archive/${ws.applied.report}` : "; no id report"}`);
     }
     if (ws.error) lines.push(`  ERROR: ${ws.error}`);
