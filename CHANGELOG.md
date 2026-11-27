@@ -7,6 +7,15 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.21.8] — 2026-11-27
+
+**emotion-refine bleibt nicht mehr an verweigerten Zeilen hängen.** Keine neuen Konfigurationsschlüssel, keine Datenänderung.
+
+### Fixed
+
+- **Verweigerte Zeilen blockierten die Warteschlange.** Lehnt das Modell eine Zeile ab, liefert der Host keinen Fehler, sondern eine leere Antwort. emotion-refine wertete das als toten Weg; nach drei solchen Zeilen griff die Sicherung, die Zeilen blieben vorne stehen, und jeder stündliche Lauf traf dieselben drei. Bei main hing die Warteschlange so seit dem 12.11.2026 (959 offene Zeilen: Platzhalter-Wichtigkeit, Emotion nur aus Stufe 1–2, kein LLM-Urteil zur Vertraulichkeit). Gescheiterte Zeilen merkt sich das Plugin jetzt je Agent im Speicher (höchstens 1 000); eine schon einmal gescheiterte Zeile zählt nicht mehr für die Sicherung, rückt ans Ende und wird erst nach 6 h wieder versucht (`deferred`). Ein wirklich toter Weg löst nach drei neuen Zeilen weiter die Sicherung aus. Geschätzte Werte werden nie geschrieben; verweigerte Zeilen bleiben `pending_t3`. Nach einem Neustart ist die Merkliste leer, der erste Lauf verliert dann eine Stunde.
+- **Package-Version 7.21.8.**
+
 ## [7.21.7] — 2026-11-27
 
 **Temperament pro Agent im Dashboard wählbar.** Keine neuen Konfigurationsschlüssel; die Karte schreibt denselben Eintrag wie `/plur1bus temperament`.

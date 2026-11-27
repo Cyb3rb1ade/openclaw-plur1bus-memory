@@ -60,6 +60,8 @@ export function createInternalJobBodies(ctx) {
     EMOTION_REFINE_DEADLINE_MS,
     EMOTION_REFINE_MAX_CONSECUTIVE_FAILURES,
     EMOTION_REFINE_MAX_ROWS,
+    EMOTION_REFINE_ROW_RETRY_MS,
+    emotionRefineRowFailures,
     encodingCallLlm,
     episodeExtractionLlmCfg,
     flashbulbEncodingEnabled,
@@ -859,24 +861,41 @@ export function createInternalJobBodies(ctx) {
         const refineStartedAt = Date.now();
         const result = await pool.withDb(internalAgent, async (agentDb) => {
           if (!agentDb?.table && typeof agentDb?.init === "function") await agentDb.init();
-          const counts = { refined: 0, finalized: 0, failed: 0, poisoned: 0, pending: 0, scanned: 0, deadlineHit: false, ms: 0 };
+          const counts = { refined: 0, finalized: 0, failed: 0, poisoned: 0, deferred: 0, pending: 0, scanned: 0, deadlineHit: false, ms: 0 };
           if (!agentDb?.table || !agentDb.schemaFieldNames?.has("emotionStatus") || !agentDb.schemaFieldNames?.has("importanceStatus")) {
             return { ...counts, skipped: true, reason: "no_emotion_status_column" };
           }
           // pending_backfill bewusst ausgeschlossen: die rund 23.000 Bestandszeilen
           // gehören einem eigenen Batch-Skript, nicht diesem stündlichen Cron —
           // sonst entstünde eine LanceDB-Version je Zeile (siehe 13.09.2026).
+          // 27.11.2026: eine leere Antwort (callFailed) kann eine tote Route
+          // ODER eine verweigerte Zeile sein — OpenClaw löst eine
+          // Claude-5.x-Verweigerung als text "" auf, nicht als Wurf. Nur eine
+          // frische Zeile zählt zum Breaker; eine schon gescheiterte rückt
+          // nach hinten und wartet EMOTION_REFINE_ROW_RETRY_MS ab, sonst
+          // blockieren dieselben drei Zeilen am Kopf jeden Lauf.
+          const rowFailures = emotionRefineRowFailures.get(internalAgent) || new Map();
+          emotionRefineRowFailures.set(internalAgent, rowFailures);
           const rows = await agentDb.table.query()
             .where(`emotionStatus = 'pending_t3' OR importanceStatus = '${IMPORTANCE_STATUS.PENDING}'`)
-            .limit(EMOTION_REFINE_MAX_ROWS + 1)
+            .limit(EMOTION_REFINE_MAX_ROWS + 1 + rowFailures.size)
             .toArray();
           if (!encodingCallLlm) {
             counts.pending = rows.length;
             return { ...counts, skipped: true, reason: "no_llm_route" };
           }
-          counts.scanned = Math.min(rows.length, EMOTION_REFINE_MAX_ROWS);
+          const freshRows = [];
+          const retryRows = [];
+          for (const row of rows) {
+            const failure = rowFailures.get(String(row.id));
+            if (!failure) freshRows.push(row);
+            else if (refineStartedAt - failure.at >= EMOTION_REFINE_ROW_RETRY_MS) retryRows.push(row);
+            else counts.deferred++;
+          }
+          const batch = [...freshRows, ...retryRows].slice(0, EMOTION_REFINE_MAX_ROWS);
+          counts.scanned = batch.length;
           let consecutiveFailures = 0;
-          for (const row of rows.slice(0, EMOTION_REFINE_MAX_ROWS)) {
+          for (const row of batch) {
             if (Date.now() - refineStartedAt > EMOTION_REFINE_DEADLINE_MS) {
               counts.deadlineHit = true;
               break;
@@ -915,14 +934,20 @@ export function createInternalJobBodies(ctx) {
               // übersprungen, separat gezählt, und beim nächsten Lauf erneut
               // versucht.
               if (encoding?.callFailed) {
+                const rowId = String(row.id);
+                const knownFailure = rowFailures.has(rowId);
+                rowFailures.delete(rowId);
+                rowFailures.set(rowId, { at: Date.now() });
+                while (rowFailures.size > EMOTION_REFINE_MAX_ROWS * 10) rowFailures.delete(rowFailures.keys().next().value);
                 counts.failed++;
-                if (++consecutiveFailures >= EMOTION_REFINE_MAX_CONSECUTIVE_FAILURES) break;
+                if (!knownFailure && ++consecutiveFailures >= EMOTION_REFINE_MAX_CONSECUTIVE_FAILURES) break;
               } else {
                 counts.poisoned++;
               }
               continue;
             }
             consecutiveFailures = 0;
+            rowFailures.delete(String(row.id));
             try {
               await agentDb.update(row.id, patch);
             } catch (updateError) {
