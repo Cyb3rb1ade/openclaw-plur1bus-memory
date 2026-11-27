@@ -197,7 +197,8 @@ def gateway_source_workspace(parent, source, project):
 def gateway_plugin_host(proc, env, project, excluded):
     """The gateway owns its exact pipe-bound plugin host, including its shutdown."""
     argv = proc.cmdline()
-    if len(argv) != 3 or argv[1:] != ['-m', 'hermes_cli.plugin_host_child']:
+    # Current Hermes launches its profile-local host in Python safe-path mode.
+    if argv[1:] not in (['-m', 'hermes_cli.plugin_host_child'], ['-P', '-m', 'hermes_cli.plugin_host_child']):
         return False
     parent = proc.parent()
     if parent is None or parent.pid not in excluded:
