@@ -15,7 +15,7 @@ test("dev OpenClaw pin is the lowest 2026.8.x with patched undici; build baselin
   const lock = await readJson("../package-lock.json");
   const installed = require(join(dirname(dirname(require.resolve("openclaw"))), "package.json"));
 
-  assert.equal(packageJson.version, "7.21.8");
+  assert.equal(packageJson.version, "7.21.8-hermes.0");
   assert.deepEqual(packageJson.engines, { node: ">=24.16.0 <25 || >=26.1.0" });
   assert.deepEqual(packageJson.dependencies, {
     "@lancedb/lancedb": "^0.26.2",

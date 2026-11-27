@@ -37,6 +37,7 @@ from .dreaming import build_rem_dream
 from .dream_diary import append_dream_diary_entry
 from .dynamics import index_feedback_events, transform_metadata
 from .encoding import AGENT_BAND_MIN
+from .sensitivity import classify_sensitivity, is_confidential
 from .writer_lock import serialized_memory_write, writer_lock
 from .neo_retention import JOURNALS, NeoRetention
 from .epistemic import is_recallable_epistemic
@@ -190,7 +191,9 @@ class Plur1busDomain:
         self._proactive = ProactiveEngine(
             self.state_dir, self.neo_dir, self.workspace_dir
         )
-        self._mood = MoodEngine(self.workspace_dir)
+        emotion_config = self.config.get("emotion")
+        preset = emotion_config.get("temperament") if isinstance(emotion_config, Mapping) else None
+        self._mood = MoodEngine(self.workspace_dir, preset=preset)
         self._llm_backend = None
         self._lock = threading.RLock()
         # Reactivation is deliberately per session.  A process-wide timestamp
@@ -1478,6 +1481,8 @@ class Plur1busDomain:
         entries_by_memory: dict[str, dict[str, str]] = {}
         for item in [*confirmed, {"memoryId": memory_id, "text": text[:2000]}]:
             confirmed_memory_id = str(item["memoryId"])
+            if is_confidential(str(item["text"])):
+                continue
             # Re-insertion makes the newest explicit confirmation authoritative
             # for one UUID while retaining the append-only confirmation ledger.
             entries_by_memory.pop(confirmed_memory_id, None)
@@ -4221,6 +4226,8 @@ class Plur1busDomain:
             "summary": content[:500],
             "importance": importance_value,
             "importanceStatus": "pending" if importance is None else "final",
+            "sensitivity": classify_sensitivity(content),
+            "sensitivitySource": "rules",
             "category": "conversation",
             "scope": str(record.get("scopeType") or "agent-private"),
             "scopeKey": str(record.get("scopeKey") or ""),

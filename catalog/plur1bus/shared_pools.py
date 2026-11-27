@@ -8,12 +8,26 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .embedding_text import RAW
 from .epistemic import epistemic_recall_where_clause, is_missing_epistemic_status_column_error
+from .sensitivity import SENSITIVITY_LEVELS, is_confidential
 from .valid_time import is_missing_validity_column_error, validity_where_clause
 
 
 def _digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:62]
+
+
+def _shareable(record: dict[str, Any]) -> bool:
+    """Shared pool membership does not establish the card's original chat."""
+    content = record.get("content")
+    if not isinstance(content, str) or not content.strip():
+        return False
+    sensitivity = record.get("sensitivity")
+    if sensitivity is not None and not isinstance(sensitivity, str):
+        return False
+    level = (sensitivity or "").strip().casefold()
+    return (not level or level in SENSITIVITY_LEVELS) and not is_confidential(content, level)
 
 
 def _schema_names(table: Any) -> set[str]:
@@ -132,6 +146,8 @@ class SharedPoolStore:
         user_scope: bool = False,
     ) -> dict[str, Any]:
         """Copy one card idempotently while preserving its private origin."""
+        if not _shareable(record):
+            raise ValueError("This memory cannot be shared.")
         try:
             import lancedb
         except ImportError as error:
@@ -162,6 +178,8 @@ class SharedPoolStore:
         })
         for field in ("validFrom", "validUntil", "expiresAt"):
             shared.setdefault(field, 0)
+        if "embeddingTextMode" in shared and shared["embeddingTextMode"] in (None, ""):
+            shared["embeddingTextMode"] = RAW
         path = self._path(user_scope)
         path.mkdir(parents=True, exist_ok=True)
         database = lancedb.connect(str(path))
@@ -174,7 +192,7 @@ class SharedPoolStore:
             # Do not turn a corrupt/unreadable existing table into an
             # accidental replacement database.
             table = database.open_table("memories")
-            self._ensure_temporal_columns(table)
+            self._align_copy_columns(table, shared)
             # Idempotent copy of a card that is active in the guard-protected
             # agent table (share_memory filters status='active'); a forgotten
             # card cannot enter this guarded upsert, so no tombstone check is
@@ -189,14 +207,15 @@ class SharedPoolStore:
         }
 
     @staticmethod
-    def _ensure_temporal_columns(table: Any) -> None:
-        schema = table.schema
-        schema = schema() if callable(schema) else schema
-        names = set(getattr(schema, "names", ()) or ())
+    def _align_copy_columns(table: Any, shared: dict[str, Any]) -> None:
+        names = _schema_names(table)
         for field in ("validFrom", "validUntil", "expiresAt"):
             if field not in names:
                 table.add_columns({field: "0"})
-                names.add(field)
+        if "embeddingTextMode" in names:
+            shared.setdefault("embeddingTextMode", RAW)
+        elif "embeddingTextMode" in shared:
+            table.add_columns({"embeddingTextMode": f"'{RAW}'"})
 
     def recall_rows(self, vector: list[float], limit: int, *, valid_at: int | None = None,
                     now_ms: int | None = None) -> list[dict[str, Any]]:
@@ -246,7 +265,5 @@ class SharedPoolStore:
             found = _search_recall_rows(
                 table, vector, where, expiry_where, scoped_where, limit, valid_at, fallback,
             )
-            for row in found:
-                row["_namespace"] = name
-            rows.extend(found)
+            rows.extend({**row, "_namespace": name} for row in found if _shareable(row))
         return rows[:limit]

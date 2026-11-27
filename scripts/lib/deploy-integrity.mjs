@@ -879,6 +879,21 @@ const NPM_IGNORED_DIRS = new Set([".git", ".svn", ".hg", "CVS", "node_modules"])
 const NPM_IGNORED_FILE_RE = /^(?:\.DS_Store|\.npmrc|\.npmignore|\.gitignore|npm-debug\.log|\.lock-wscript|\.wafpickle-\d+|\._.*|\..*\.swp|.*\.orig)$/;
 // npm always packs these from the package root, `files` or not.
 const NPM_ALWAYS_INCLUDED_RE = /^(?:package\.json|readme(?:\.[^/]*)?|licen[cs]e(?:\.[^/]*)?)$/i;
+const PYTHON_PACK_DIRS = new Set(["plur1bus-hermes", "plur1bus-controls", "mtplx-embed"]);
+
+function isHermesPackIgnored(rel, entry) {
+  // Match the port's nested .npmignore files without excluding similarly
+  // named directories in the OpenClaw adapter or engine.
+  const [root, component] = rel.split("/", 2);
+  if (root === "hermes-dashboard" && component === "tests") return true;
+  if (PYTHON_PACK_DIRS.has(root)) {
+    return component === "dist" || component === "build"
+      || entry.name === "__pycache__" || entry.name === ".pytest_cache"
+      || /\.(?:py[cod]|egg-info)$/.test(entry.name);
+  }
+  if (root === "scripts") return entry.name === "__pycache__" || /\.py[co]$/.test(entry.name);
+  return root === "hermes-dashboard" && (entry.name === "__pycache__" || /\.py[cod]$/.test(entry.name));
+}
 
 function isInsideDir(root, candidate) {
   return candidate === root || candidate.startsWith(`${root}${sep}`);
@@ -895,6 +910,7 @@ function lstatOrNull(path) {
 function walkPackagedDir(root, relDir, out) {
   for (const entry of readdirSync(join(root, relDir), { withFileTypes: true })) {
     const rel = `${relDir}/${entry.name}`;
+    if (isHermesPackIgnored(rel, entry)) continue;
     if (entry.isDirectory()) {
       if (!NPM_IGNORED_DIRS.has(entry.name)) walkPackagedDir(root, rel, out);
     } else if (entry.isFile() && !NPM_IGNORED_FILE_RE.test(entry.name)) {

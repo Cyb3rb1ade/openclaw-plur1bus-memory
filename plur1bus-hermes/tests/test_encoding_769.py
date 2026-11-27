@@ -4,6 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 import uuid
+from unittest.mock import patch
 
 import lancedb
 
@@ -16,6 +17,58 @@ from plur1bus_hermes.namespaces import binding_from_scope
 
 
 class Encoding769Tests(unittest.TestCase):
+    def test_refusals_do_not_block_new_rows_across_hourly_processes(self):
+        with tempfile.TemporaryDirectory() as root:
+            data = Path(root)
+            domain = Plur1busDomain(data, "main")
+            scope = binding_from_scope("main").scope_key
+            database = lancedb.connect(str(data / "lancedb/main"))
+            cards = [
+                {"id": str(uuid.uuid4()), "agentId": "main", "scopeKey": scope,
+                 "status": "active", "content": message}
+                for message in ("refusal one", "refusal two", "refusal three", "valid memory")
+            ]
+            metadata = database.create_table("metadata", data=[
+                {**{key: card[key] for key in ("id", "agentId", "scopeKey")},
+                 "metadataJson": json.dumps({"text": card["content"], "importance": 0.5,
+                                             "importanceStatus": "pending", "scopeKey": scope})}
+                for card in cards
+            ])
+            memories = database.create_table("memories", data=cards)
+            seen = []
+
+            class Backend:
+                def available(self):
+                    return True
+
+                def complete_json(self, _purpose, _system, prompt):
+                    seen.append(prompt)
+                    if "refusal" in prompt:
+                        raise RuntimeError("empty completion")
+                    return {"importance": 0.8, "dominant": "neutral"}
+
+            domain.set_llm_backend(Backend())
+            with patch("plur1bus_hermes.encoding_job.time.time", return_value=10_000):
+                self.assertEqual(run_encoding(domain, memories)["reason"], "route-failed")
+            self.assertEqual(len(seen), 3)
+
+            reopened = Plur1busDomain(data, "main")
+            reopened.set_llm_backend(Backend())
+            with patch("plur1bus_hermes.encoding_job.time.time", return_value=13_600):
+                result = run_encoding(reopened, memories)
+            self.assertEqual(result["deferred"], 3)
+            self.assertEqual(result["refined"], 1)
+            self.assertIn("valid memory", seen[-1])
+            self.assertEqual(len(seen), 4)
+            metadata.checkout_latest()
+            rows = [json.loads(row["metadataJson"]) for row in metadata.to_arrow().to_pylist()]
+            self.assertEqual([row["importance"] for row in rows if row["text"].startswith("refusal")],
+                             [0.5, 0.5, 0.5])
+            with patch("plur1bus_hermes.encoding_job.time.time", return_value=31_600):
+                retried = run_encoding(reopened, memories)
+            self.assertEqual(retried["failed"], 3)
+            self.assertNotIn("reason", retried)
+
     def test_encoding_budget_is_independent_of_disabled_emotion_tier(self):
         seen = []
         class Response:

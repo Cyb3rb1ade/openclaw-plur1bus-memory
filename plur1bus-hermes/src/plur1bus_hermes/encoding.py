@@ -4,6 +4,8 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from .sensitivity import SENSITIVITY_LEVELS, is_confidential
+
 DIMENSIONS = ("joy", "trust", "fear", "surprise", "sadness", "disgust", "anger", "anticipation")
 AGENT_BAND_MIN = 0.95
 FLASHBULB_THRESHOLD = 0.80
@@ -32,7 +34,9 @@ def encoding_prompt(text: str) -> str:
         'Return JSON: importance (number 0..0.94; 0.1 incidental, 0.5 useful, 0.8 significant), '
         'intensity (0..1), dominant (neutral or ' + ', '.join(DIMENSIONS) + '), '
         'emotions (object with ONLY actually evidenced dimensions, not a filled scorecard; '
-        'empty object for neutral), reason (one short sentence).\nMemory:\n' + text
+        'empty object for neutral), sensitivity (banal, personal or confidential; '
+        'health, finances, intimacy, family conflicts, addresses, credentials and legal matters are confidential), '
+        'reason (one short sentence).\nMemory:\n' + text
     )
 
 
@@ -57,6 +61,11 @@ def refine_patch(row: dict[str, Any], judgment: Any, now: int, *, flashbulb: boo
         emotions[dominant] = max(emotions[dominant], intensity)
     patch = {"importanceStatus": "final", "emotionStatus": "final", "emotionalValence": emotions,
              "emotionalDominant": dominant, "emotionalIntensity": intensity}
+    sensitivity = judgment.get("sensitivity")
+    if sensitivity in SENSITIVITY_LEVELS and (
+        sensitivity == "confidential" or not is_confidential(str(row.get("text") or ""), row.get("sensitivity"))
+    ):
+        patch.update(sensitivity=sensitivity, sensitivitySource="llm")
     agent_band = _number(row.get("importance")) and row["importance"] >= AGENT_BAND_MIN
     flash = flashbulb and (intensity + importance) * 0.5 >= FLASHBULB_THRESHOLD
     if not agent_band:

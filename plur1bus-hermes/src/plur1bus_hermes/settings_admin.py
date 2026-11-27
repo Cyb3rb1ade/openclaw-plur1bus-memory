@@ -9,6 +9,7 @@ from .feature_models import PURPOSE_FEATURE, configured_routes
 from .feature_profiles import PARITY_DEFAULT_FEATURES, parity_feature_enabled
 from .generation import _atomic_json, _reject_symlink_components
 from .jev_chunk_decider import credential_status as jev_credential_status
+from .mood import PRESETS as TEMPERAMENT_PRESETS
 from .retrieval_admin import active_runtime_view, config_path, context_revision
 from .validation import ValidationError
 from .writer_lock import writer_lock
@@ -39,8 +40,12 @@ LABELS = {
     "recall.queryRefinement.enabled": "Suchanfragen verfeinern", "metaCognition.enabled": "Meta-Kognition",
     "contradictionDisclosure.enabled": "Widersprüche anzeigen", "capture.mode": "Speicherweise",
     "dailyConsolidation.decayMode": "Konsolidierung: Verfallsberechnung",
+    "emotion.temperament": "Temperament",
 }
-ENUMS = {"dailyConsolidation.decayMode": ("batch", "rows")}
+ENUMS = {
+    "dailyConsolidation.decayMode": ("batch", "rows"),
+    "emotion.temperament": ("", *TEMPERAMENT_PRESETS),
+}
 INTEGERS = {"recall.candidateTopK": (40, 5, 100), "recall.maxPromptMemories": (12, 5, 100)}
 LABELS.update({"recall.candidateTopK": "Suchkandidaten vor dem Ranking",
                "recall.maxPromptMemories": "Erinnerungen im Prompt"})
@@ -63,6 +68,7 @@ HELP = {
     "continuityEngine.enabled": "Zusammenhänge und offene Gesprächsfäden über einzelne Nachrichten hinweg berücksichtigen.",
     "memoryDynamics.flashbulbEncoding": "Besonders wichtige oder emotional intensive Erinnerungen bei der Verarbeitung hervorheben und länger gewichten.",
     "emotion.t3.enabled": "Ein LLM für die zusätzliche Emotionseinschätzung verwenden. Benötigt ein verfügbares Aufgabenmodell und kann zusätzliche Tokens verbrauchen.",
+    "emotion.temperament": "Bestimmt, wie stark dieser Agent reagiert und wie lange die Stimmung anhält. Ohne eigenes Preset gilt die gespeicherte Einstellung des Agenten oder Ausgewogen.",
     "recall.queryRefinement.enabled": "Bei schwachen ersten Suchtreffern eine verfeinerte Anfrage versuchen. Kann zusätzliche Embedding-Arbeit auslösen.",
     "metaCognition.enabled": "Lokale Feedback-Metriken mit einem LLM reflektieren. Die Reflexion ändert keine Einstellungen automatisch und kann Tokens verbrauchen.",
     "contradictionDisclosure.enabled": "Erkannte Widersprüche beim Erinnern sichtbar machen. Gegensätzliche Aussagen werden dadurch nicht automatisch gelöscht.",
@@ -88,6 +94,7 @@ EN_LABELS = {
     "recall.queryRefinement.enabled": "Refine search queries", "metaCognition.enabled": "Metacognition",
     "contradictionDisclosure.enabled": "Show contradictions", "capture.mode": "Storage mode",
     "dailyConsolidation.decayMode": "Consolidation decay calculation",
+    "emotion.temperament": "Temperament",
     "recall.candidateTopK": "Search candidates before ranking", "recall.maxPromptMemories": "Memories in the prompt",
 }
 EN_HELP = {
@@ -109,6 +116,7 @@ EN_HELP = {
     "continuityEngine.enabled": "Track relationships and open threads across messages.",
     "memoryDynamics.flashbulbEncoding": "Highlight important or emotionally intense memories and keep them weighted for longer.",
     "emotion.t3.enabled": "Use a task model for additional emotion assessment. This can use extra tokens.",
+    "emotion.temperament": "Controls how strongly this agent reacts and how long the mood lasts. Without an override, the agent uses its saved preset or Balanced.",
     "recall.queryRefinement.enabled": "Try a refined query when the initial search has weak results. This may run another embedding request.",
     "metaCognition.enabled": "Ask a task model to reflect on local feedback metrics. The reflection does not change settings.",
     "contradictionDisclosure.enabled": "Show contradictions during recall. Conflicting memories are retained.",
@@ -125,20 +133,32 @@ EN_MODEL_LABELS = {
 
 
 def settings_rpc(params, *, session_id=None):
-    """Apply a reviewed preference in the gateway's session-control profile."""
+    """Read or save one profile's settings through Hermes session control."""
     from hermes_cli.config import load_config_readonly
 
-    if session_id or set(params) not in ({"expectedProfile"}, {"expectedProfile", "identifier", "value", "revision"}):
+    fields = set(params) - {"profile"}
+    if session_id or fields not in (
+        {"expectedProfile"}, {"expectedProfile", "language"},
+        {"expectedProfile", "identifier", "value", "revision"},
+    ):
         raise ValueError("Invalid PLUR1BUS settings request.")
     view = active_runtime_view()
-    if params["expectedProfile"] != view.profile:
+    # Shared gateways add a profile selector to the RPC envelope. Hermes has
+    # already routed it. Assert both names against the server-owned scope.
+    if params["expectedProfile"] != view.profile or params.get("profile", view.profile) != view.profile:
         raise ValueError("PLUR1BUS backend profile mismatch.")
     memory = load_config_readonly().get("memory") or {}
     if (not isinstance(memory, dict) or memory.get("provider") != "plur1bus"
             or memory.get("memory_enabled", True) is not True):
         raise ValueError("PLUR1BUS is not active in this profile.")
-    if "identifier" not in params:
-        return {"profile": view.profile, "writable": True}
+    access = {"profile": view.profile, "profileBinding": 1, "memoryProviderEnabled": True, "writable": True}
+    if fields == {"expectedProfile"}:
+        return access
+    if "language" in params:
+        language = params["language"]
+        if language not in ("en", "de"):
+            raise ValueError("Invalid PLUR1BUS settings language.")
+        return {**public_settings(view, language=language), **access}
     identifier, revision = params["identifier"], params["revision"]
     if not isinstance(identifier, str) or not isinstance(revision, str) or not re.fullmatch(r"[a-f0-9]{64}", revision):
         raise ValueError("Invalid PLUR1BUS settings request.")
@@ -201,6 +221,10 @@ def public_settings(view, *, language="en"):
     capture_labels = ({"ganz": "Volltext", "geteilt": "Segmente", "beides": "Volltext und Segmente", "automatisch": "Automatisch (Jev)"}
         if german else {"ganz": "Full text", "geteilt": "Segments", "beides": "Full text and segments", "automatisch": "Automatic (Jev)"})
     decay_labels = {"batch": "Gebündelt (Batch)", "rows": "Einzelzeilen"} if german else {"batch": "Batch", "rows": "Per row"}
+    temperament_labels = ({"balanced": "Ausgewogen", "warm": "Warm", "cool": "Kühl", "fiery": "Feurig", "stoic": "Stoisch"}
+        if german else {"balanced": "Balanced", "warm": "Warm", "cool": "Cool", "fiery": "Fiery", "stoic": "Stoic"})
+    choice_labels = {"capture.mode": capture_labels, "dailyConsolidation.decayMode": decay_labels,
+                     "emotion.temperament": temperament_labels}
     for setting in settings:
         key = setting["id"]
         task = key.removeprefix("model.")
@@ -209,11 +233,13 @@ def public_settings(view, *, language="en"):
             "Modell für diese interne Aufgabe im aktiven Profil. Der Standard erbt die bestehende Modellzuordnung."
             if german else "Model for this internal task in the active profile. The default inherits the current assignment."
         ))
-        setting["choiceLabels"] = capture_labels if key == "capture.mode" else decay_labels if key in ENUMS else {}
+        setting["choiceLabels"] = choice_labels.get(key, {})
         if key.startswith("model."):
             setting["group"] = "Aufgabenmodelle" if german else "Task models"
         elif key in {"capture.mode", "autoCapture", "merging.enabled", "gc.enabled", "dailyConsolidation.decayMode"}:
             setting["group"] = "Speicherung" if german else "Storage"
+        elif key.startswith("emotion."):
+            setting["group"] = "Emotion"
         else:
             setting["group"] = "Gedächtnisfunktionen" if german else "Memory features"
     return {"agentId": view.agent_id, "profile": view.profile,

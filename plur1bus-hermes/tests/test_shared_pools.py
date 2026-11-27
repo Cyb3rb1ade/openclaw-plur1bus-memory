@@ -36,6 +36,68 @@ class _PoolTable:
 
 
 class SharedPoolTests(unittest.TestCase):
+    def test_embedding_mode_copy_migrates_shared_pool_and_preserves_per_row_vectors(self):
+        import lancedb
+
+        with tempfile.TemporaryDirectory() as temporary:
+            store = SharedPoolStore(Path(temporary), SharedPrincipal(workspace="ws"))
+            path = store._path(False)
+            base = {"status": "active", "content": "The museum opens tomorrow.", "vector": [1.0, 0.0]}
+            old = store.copy({**base, "id": "original"}, source_agent="main")
+            table = lancedb.connect(str(path)).open_table("memories")
+            assert "embeddingTextMode" not in table.schema.names
+            cleaned = store.copy({**base, "id": "clean-card", "vector": [0.0, 1.0],
+                                  "embeddingTextMode": "hermes-envelope-v1-nospeaker"}, source_agent="main")
+            raw = store.copy({**base, "id": "raw-card"}, source_agent="main")
+            table = lancedb.connect(str(path)).open_table("memories")
+            rows = {row["id"]: (row["embeddingTextMode"], row["vector"]) for row in table.to_arrow().to_pylist()}
+            self.assertEqual(rows, {
+                old["id"]: ("raw", [1.0, 0.0]),
+                cleaned["id"]: ("hermes-envelope-v1-nospeaker", [0.0, 1.0]),
+                raw["id"]: ("raw", [1.0, 0.0]),
+            })
+
+    def test_confidential_and_malformed_cards_are_refused_before_creating_shared_pools(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            store = SharedPoolStore(root, SharedPrincipal(workspace="ws", platform="telegram", user="owner"))
+            base = {"id": "86f1097a-b219-46a1-8cdd-15fec5a40a25", "status": "active", "vector": [1.0, 0.0]}
+            for additions in (
+                {"content": "An ordinary note", "sensitivity": " ConfIDENTial "},
+                {"content": "The fictional diagnosis was documented.", "sensitivity": "banal"},
+                {"content": "An ordinary note", "sensitivity": "unknown"},
+                {"content": 17},
+                {},
+            ):
+                for user_scope in (False, True):
+                    with self.subTest(additions=additions, user_scope=user_scope):
+                        with self.assertRaisesRegex(ValueError, "cannot be shared"):
+                            store.copy({**base, **additions}, source_agent="main", user_scope=user_scope)
+            self.assertFalse(store.root.exists())
+
+    def test_existing_shared_pools_exclude_confidential_cards_at_recall(self):
+        import lancedb
+
+        with tempfile.TemporaryDirectory() as temporary:
+            store = SharedPoolStore(Path(temporary), SharedPrincipal(workspace="ws", platform="telegram", user="owner"))
+            for user_scope in (False, True):
+                path = store._path(user_scope)
+                path.mkdir(parents=True)
+                table_base = {
+                    "status": "active", "vector": [1.0, 0.0],
+                    "sharedScope": "user" if user_scope else "workspace",
+                    "principalHash": store.principal.user_key if user_scope else store.principal.workspace_key,
+                }
+                lancedb.connect(str(path)).create_table("memories", data=[
+                    {**table_base, "id": "known", "content": "An ordinary note", "sensitivity": "confidential"},
+                    {**table_base, "id": "legacy", "content": "The fictional diagnosis was documented.", "sensitivity": ""},
+                    {**table_base, "id": "invalid", "content": "An ordinary note", "sensitivity": "unknown"},
+                    {**table_base, "id": "benign", "content": "The museum opens tomorrow.", "sensitivity": ""},
+                ])
+            recalled = store.recall_rows([1.0, 0.0], 10)
+            self.assertEqual([row["id"] for row in recalled], ["benign", "benign"])
+            self.assertEqual({row["_namespace"] for row in recalled}, {"user-shared", "workspace-shared"})
+
     def test_workspace_and_user_copies_are_physically_isolated_and_recallable(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -4,6 +4,8 @@ from pathlib import Path
 import subprocess
 import unittest
 
+from test_upstream_7218_inventory import UPSTREAM_HEAD, assert_active_upstream_file
+
 ROOT = Path(__file__).resolve().parents[2]
 BASE = "bcb80ccef6ce5ab9e4604cfe923901885cc59d9e"
 TARGET = "039329d0c74525448190b0bd2ec3ef3551ed168f"
@@ -12,6 +14,14 @@ HERMES_BASE = "34dfd2102a079ec818818aca39dba81134b69d2a"
 # Keep the reviewed revision pinned so later drift still fails the inventory.
 HERMES_REVIEWED_UPDATES = {
     "plur1bus-hermes/src/plur1bus_hermes/cognition.py": "c8366c240a892862c1cb22036f0efc63ad105b57",
+}
+# Exact 7.21.8 native ports for temperament defaults, refined recall and
+# confidential knowledge and shared-pool guards.
+HERMES_REVIEWED_BLOBS = {
+    "plur1bus-hermes/src/plur1bus_hermes/knowledge.py": "85353d2972f174045b6d596bbb98a044d649ad0a",
+    "plur1bus-hermes/src/plur1bus_hermes/mood.py": "16dc1acabca8dbb2e8c6221f2ca75fb58f909723",
+    "plur1bus-hermes/src/plur1bus_hermes/query_refinement.py": "7fab5136af1e8b8de77b4e9cbd8cd5a1e1cd9ea2",
+    "plur1bus-hermes/src/plur1bus_hermes/shared_pools.py": "9a6f17fc2e7383e7d92f38a3ecc80244d7c109bd",
 }
 
 
@@ -30,10 +40,10 @@ class Upstream761InventoryTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertIn("`" + path + "`", review)
                 if path.startswith(("lib/", "tests/")) and path != "tests/release-750-compat.test.js":
-                    self.assertEqual((ROOT / path).read_text(), git("show", "v7.20.2:" + path))
+                    assert_active_upstream_file(path)
 
     def test_dependency_graph_matches_official_release(self):
-        upstream = json.loads(git("show", "v7.20.2:package-lock.json"))
+        upstream = json.loads(git("show", UPSTREAM_HEAD + ":package-lock.json"))
         current = json.loads((ROOT / "package-lock.json").read_text())
         current["version"] = upstream["version"]
         current["packages"][""]["version"] = upstream["packages"][""]["version"]
@@ -98,6 +108,8 @@ class Upstream761InventoryTests(unittest.TestCase):
                 # Compare canonical Git blobs, applying this checkout's clean
                 # filters. Windows autocrlf changes working-tree bytes without
                 # changing source; binary files remain byte-exact.
-                baseline = HERMES_REVIEWED_UPDATES.get(path, HERMES_BASE)
-                expected = git("rev-parse", baseline + ":" + path).strip()
+                expected = HERMES_REVIEWED_BLOBS.get(path)
+                if expected is None:
+                    baseline = HERMES_REVIEWED_UPDATES.get(path, HERMES_BASE)
+                    expected = git("rev-parse", baseline + ":" + path).strip()
                 self.assertEqual(git("hash-object", "--path=" + path, path).strip(), expected)

@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -91,6 +92,39 @@ def test_hosted_transport_reads_only_and_fails_closed_on_wrong_profile(tmp_path)
     with TestClient(with_hosted_admission(app, False)) as client:
         assert client.get("/desktop/settings?expectedProfile=beta",
                           headers={"X-Hosted-Http-Authenticated": "true"}).status_code == 401
+
+
+def test_settings_rpc_handles_shared_gateway_envelope_and_saves_only_the_bound_profile(tmp_path):
+    from plur1bus_hermes import settings_admin
+
+    _, _, view = _fixture(tmp_path)
+    root_config = tmp_path / "plugins/plur1bus/config.json"
+    root_config.parent.mkdir(parents=True)
+    root_config.write_text('{"autoCapture": true}', encoding="utf-8")
+    (tmp_path / "profiles/beta").mkdir(parents=True)
+    bound = {"expectedProfile": "beta", "profile": "beta"}
+    with patch.object(settings_admin, "active_runtime_view", return_value=view), patch(
+        "hermes_cli.config.load_config_readonly", return_value={"memory": {"provider": "plur1bus"}}
+    ):
+        caps = settings_admin.settings_rpc(bound)
+        assert caps["profileBinding"] == 1 and caps["memoryProviderEnabled"] is True
+        state = settings_admin.settings_rpc({**bound, "language": "de"})
+        assert state["writable"] and state["profile"] == "beta"
+        assert next(setting for setting in state["settings"] if setting["id"] == "autoCapture")["label"] == "Automatisch speichern"
+        change = {**bound, "identifier": "autoCapture", "value": False, "revision": state["revision"]}
+        for rejected in (
+            {**change, "profile": "default"}, {**change, "expectedProfile": "default"}, {**change, "home": str(tmp_path)},
+        ):
+            with pytest.raises(ValueError):
+                settings_admin.settings_rpc(rejected)
+        with pytest.raises(ValueError):
+            settings_admin.settings_rpc(change, session_id="unrelated-session")
+        assert settings_admin.settings_rpc(change)["saved"] is True
+        with pytest.raises(ValueError):
+            settings_admin.settings_rpc(change)
+    assert json.loads(root_config.read_text()) == {"autoCapture": True}
+    profile_config = tmp_path / "profiles/beta/plugins/plur1bus/config.json"
+    assert json.loads(profile_config.read_text()) == {"profileSettings": {"beta": {"autoCapture": False}}}
 
 
 def test_direct_verified_native_subject_can_review_only_its_own_profile(tmp_path):

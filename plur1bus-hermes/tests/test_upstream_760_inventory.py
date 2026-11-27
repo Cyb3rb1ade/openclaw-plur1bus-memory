@@ -3,6 +3,8 @@ from pathlib import Path
 import subprocess
 import unittest
 
+from test_upstream_7218_inventory import assert_active_upstream_file
+
 ROOT = Path(__file__).resolve().parents[2]
 BASE = "5d79fb91a907b13929e41523348b761a748e6c81"
 TARGET = "bcb80ccef6ce5ab9e4604cfe923901885cc59d9e"
@@ -21,12 +23,10 @@ class Upstream760InventoryTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertIn("`" + path + "`", review)
         whitespace_only = "tests/db-adapter-timeouts.test.js"
-        runtime = [path for path in paths if (path.startswith(("lib/", "tests/")) or path == "index.js") and path != whitespace_only]
-        successor = "9cc5f833b188d8299000faeb94bd0b2015e6217b"
-        successor_paths = set(subprocess.check_output(
-            ["git", "diff", "--name-only", TARGET, successor], cwd=ROOT, text=True).splitlines())
-        for path in runtime:
-            expected = "v7.20.2"
-            subprocess.run(["git", "diff", "--exit-code", expected, "--", path], cwd=ROOT, check=True)
-        upstream = subprocess.check_output(["git", "show", TARGET + ":" + whitespace_only], cwd=ROOT, text=True)
-        self.assertEqual((ROOT / whitespace_only).read_text().rstrip(), upstream.rstrip())
+        historical = subprocess.check_output(["git", "show", TARGET + ":" + whitespace_only], cwd=ROOT, text=True)
+        retained = subprocess.check_output(["git", "show", "v7.20.2:" + whitespace_only], cwd=ROOT, text=True)
+        self.assertEqual(retained.rstrip(), historical.rstrip())
+        for path in paths:
+            if path.startswith(("lib/", "tests/")) or path == "index.js":
+                with self.subTest(path=path):
+                    assert_active_upstream_file(path)

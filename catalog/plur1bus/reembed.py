@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .embedding_text import prepare_embedding_text
 from .runtime import EmbeddingBackend
 from .validation import ValidationError, safe_agent_id
 
@@ -102,7 +103,8 @@ def reembed(data_dir: Path, agent_id: str, config: dict[str, Any], *, apply: boo
             content = str(row.get("content", "")).strip()
             if not content:
                 raise ValidationError(f"memory {row.get('id', '<unknown>')} has no content to re-embed")
-            cards.append({**row, "vector": backend.embed(content)})
+            embedding_text, _ = prepare_embedding_text(content, row.get("embeddingTextMode"))
+            cards.append({**row, "vector": backend.embed(embedding_text)})
         try:
             import lancedb
         except ImportError as error:

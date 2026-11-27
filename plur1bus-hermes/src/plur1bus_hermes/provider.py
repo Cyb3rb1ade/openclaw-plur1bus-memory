@@ -943,6 +943,9 @@ class Plur1busMemoryProvider(MemoryProvider):
             return str(recall(query=query, session_id=session_id) or "")
         if runtime is None:
             return ""
+        if isinstance(Plur1busRuntime, type) and isinstance(runtime, Plur1busRuntime):
+            return runtime.recall(query, session_id=session_id, automatic=True,
+                                  timeout_seconds=self._current_recall_wait_seconds())
         try:
             return runtime.recall(query, session_id=session_id)
         except TypeError as error:
@@ -1111,7 +1114,7 @@ class Plur1busMemoryProvider(MemoryProvider):
             seconds = float(configured)
         except (TypeError, ValueError):
             return _CURRENT_RECALL_WAIT_SECONDS
-        if seconds <= 0:
+        if not math.isfinite(seconds) or seconds <= 0:
             return _CURRENT_RECALL_WAIT_SECONDS
         return min(seconds, _MAX_CURRENT_RECALL_WAIT_SECONDS)
 

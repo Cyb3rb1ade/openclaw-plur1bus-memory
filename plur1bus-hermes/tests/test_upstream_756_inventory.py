@@ -3,6 +3,8 @@ from pathlib import Path
 import subprocess
 import unittest
 
+from test_upstream_7218_inventory import assert_active_upstream_file
+
 ROOT = Path(__file__).resolve().parents[2]
 BASE = "c53a289753ea0e5ab161bc67ee213eed2e145965"
 TARGET = "5d79fb91a907b13929e41523348b761a748e6c81"
@@ -22,15 +24,8 @@ class Upstream756InventoryTests(unittest.TestCase):
                 self.assertIn("`" + path + "`", review)
 
     def test_accepted_upstream_runtime_fixes_match_exactly(self):
-        # 7.19.0 changed the episode runtime; require the complete current
-        # release files rather than comparing to the historical 7.12.56 blob.
-        subprocess.run(["git", "diff", "--exit-code", "v7.20.2", "--",
-                        "lib/episodes.js",
-                        "tests/episodes-skip-episoded.test.js"],
-                       cwd=ROOT, check=True)
-        subprocess.run(["git", "diff", "--exit-code", "v7.20.2", "--", "lib/llm-router.js"],
-                       cwd=ROOT, check=True)
-        # .58 legitimately adds common-background-model cases to this test.
-        # Pin its updated complete contents rather than drop the parity gate.
-        subprocess.run(["git", "diff", "--exit-code", "v7.20.2", "--",
-                        "tests/llm-router.test.js"], cwd=ROOT, check=True)
+        files = ("lib/episodes.js", "tests/episodes-skip-episoded.test.js",
+                 "lib/llm-router.js", "tests/llm-router.test.js")
+        for path in files:
+            with self.subTest(path=path):
+                assert_active_upstream_file(path)

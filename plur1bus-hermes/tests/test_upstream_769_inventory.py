@@ -3,6 +3,8 @@ from pathlib import Path
 import subprocess
 import unittest
 
+from test_upstream_7218_inventory import assert_active_upstream_file
+
 ROOT = Path(__file__).resolve().parents[2]
 BASE = "039329d0c74525448190b0bd2ec3ef3551ed168f"
 TARGET = "784e900541fddb1d13a75104b6570e52051fd82c"
@@ -24,7 +26,4 @@ class Upstream769InventoryTests(unittest.TestCase):
                 if path == "tests/release-750-compat.test.js":
                     continue
                 if path.startswith(("lib/", "tests/", "scripts/")) or path == "index.js":
-                    expected = git("show", "v7.20.2:" + path)
-                    if path == "lib/memory-chunking.js":
-                        expected = git("show", "v7.20.2:" + path)
-                    self.assertEqual((ROOT / path).read_text(encoding="utf-8"), expected)
+                    assert_active_upstream_file(path)

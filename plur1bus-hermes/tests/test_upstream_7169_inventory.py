@@ -2,6 +2,8 @@
 from pathlib import Path
 import subprocess
 
+from test_upstream_7218_inventory import assert_active_upstream_file, historical_commits
+
 ROOT = Path(__file__).resolve().parents[2]
 TARGET = "f23867a1de5cd5a8b94370b5172d497fad4f2427"
 
@@ -13,7 +15,7 @@ def git(*args):
 def test_upstream_7169_inventory_and_source():
     subprocess.run(["git", "merge-base", "--is-ancestor", TARGET, "HEAD"], cwd=ROOT, check=True)
     paths = git("diff", "--name-only", "v7.15.4", TARGET).splitlines()
-    commits = git("log", "--no-merges", "--format=%h", "v7.15.4.." + TARGET).splitlines()
+    commits = historical_commits("v7.15.4", TARGET)
     assert len(paths) == 36 and len(commits) == 15
     review = (ROOT / "docs/audits/hermes-7.16.9-delta-review.md").read_text()
     assert TARGET in review
@@ -23,4 +25,4 @@ def test_upstream_7169_inventory_and_source():
         if path == "tests/release-750-compat.test.js":
             continue
         if path.startswith(("lib/", "tests/", "scripts/")) or path == "index.js":
-            assert (ROOT / path).read_text() == git("show", "v7.20.2:" + path), path
+            assert_active_upstream_file(path)

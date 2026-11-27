@@ -47,7 +47,7 @@ def test_jev_uses_env_reference_and_fixed_endpoint(monkeypatch):
 
 def test_origin_replaces_children_without_reordering_other_hits():
     part = {"id": "p", "sourceTurnId": "t", "chunkGroupId": "g", "content": "part"}
-    whole = {"id": "w", "sourceTurnId": "t", "content": "whole"}
+    whole = {"id": "w", "sourceTurnId": "t", "content": "whole part"}
     unrelated = {"id": "u", "content": "other"}
     assert prefer_whole_rows([part, unrelated, whole]) == [whole, unrelated]
     historical = dict(part, validFrom=100, validUntil=200)

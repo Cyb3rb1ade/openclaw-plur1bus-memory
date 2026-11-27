@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .valid_time import is_entry_live
+from .sensitivity import is_confidential
 
 
 def content_fingerprint(text: str, category: str, scope_key: str) -> str:
@@ -36,6 +37,8 @@ def is_eligible(metadata: dict[str, Any], cognition: dict[str, Any], minimum: fl
     except (TypeError, ValueError):
         return False
     text = str(metadata.get("text") or metadata.get("content") or "").strip()
+    if is_confidential(text, metadata.get("sensitivity")):
+        return False
     lowered = text.lower()
     if len(text) < 20 or any(marker in lowered for marker in ("temporary", "one-off", "nur heute", "ignore previous")):
         return False

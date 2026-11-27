@@ -24,6 +24,10 @@ class InvalidLlmResponse(RuntimeError):
     """A received but unusable judgment, distinct from an unavailable route."""
 
 
+class EmptyLlmResponse(InvalidLlmResponse):
+    """An empty completion can be a refusal or a failed route."""
+
+
 class InternalLlmBackend:
     """Execute explicitly configured internal JSON transformations."""
 
@@ -77,7 +81,11 @@ class InternalLlmBackend:
                            hint=fields.get("errorHint"), error_class=fields.get("errorClass"), error=error)
             # Neither callers nor traceback logging receive upstream text,
             # endpoint URLs, arbitrary exception class names or chained errors.
-            error_type = InvalidLlmResponse if isinstance(error, InvalidLlmResponse) else RuntimeError
+            error_type = RuntimeError
+            if isinstance(error, EmptyLlmResponse):
+                error_type = EmptyLlmResponse
+            elif isinstance(error, InvalidLlmResponse):
+                error_type = InvalidLlmResponse
             raise error_type(f"internal LLM failed: {fields['errorHint']}") from None
 
     def _complete_json(self, purpose: str, system: str, user: str) -> dict[str, Any]:
@@ -172,6 +180,8 @@ class InternalLlmBackend:
                 raise InvalidLlmResponse("internal LLM returned invalid JSON") from error
         try:
             content = body["choices"][0]["message"]["content"]
+            if content is None or (isinstance(content, str) and not content.strip()):
+                raise EmptyLlmResponse("internal LLM returned an empty completion")
             value = json.loads(content)
         except (TypeError, ValueError, KeyError, IndexError) as error:
             raise InvalidLlmResponse("internal LLM returned invalid JSON") from error

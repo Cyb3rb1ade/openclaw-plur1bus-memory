@@ -15,6 +15,7 @@ import logging
 import math
 import os
 import re
+from .embedding_text import prepare_embedding_text
 from . import file_lock as fcntl
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -333,7 +334,8 @@ def _apply_staged_reembed_unlocked(
             content = str(row.get("content") or "").strip()
             if not content:
                 raise ValidationError("memory has no content to re-embed")
-            cards.append({**row, "vector": _finite_vector(backend.embed(content), dimensions)})
+            embedding_text, _ = prepare_embedding_text(content, row.get("embeddingTextMode"))
+            cards.append({**row, "vector": _finite_vector(backend.embed(embedding_text), dimensions)})
     finally:
         close = getattr(backend, "close", None)
         if callable(close):

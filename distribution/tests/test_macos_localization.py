@@ -24,7 +24,7 @@ class MacLocalizationTests(unittest.TestCase):
             bundle = root / "payload"
             bundle.mkdir()
             with patch.object(packaging.subprocess, "run"):
-                app = packaging.build_app(bundle, root, "7.20.2-hermes.2")
+                app = packaging.build_app(bundle, root, "7.21.8-hermes.0")
             probe = root / "main.swift"
             probe.write_text('''
 import Foundation

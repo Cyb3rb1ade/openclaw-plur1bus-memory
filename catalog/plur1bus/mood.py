@@ -33,12 +33,19 @@ def _utcnow() -> str:
 class MoodEngine:
     """Update and persist a bounded mood vector without changing agent identity."""
 
-    def __init__(self, workspace_dir: Path) -> None:
+    def __init__(self, workspace_dir: Path, *, preset: str | None = None) -> None:
         self.workspace_dir = Path(workspace_dir)
         self.state_path = self.workspace_dir / ".emotional-state.json"
         self.text_path = self.workspace_dir / ".current-mood.txt"
+        self._preset = preset if isinstance(preset, str) and preset in PRESETS else None
 
     def state(self) -> dict[str, Any]:
+        state = self._stored_state()
+        if self._preset is not None:
+            state["preset"] = self._preset
+        return state
+
+    def _stored_state(self) -> dict[str, Any]:
         if self.state_path.is_file():
             try:
                 value = json.loads(self.state_path.read_text(encoding="utf-8"))
@@ -48,7 +55,7 @@ class MoodEngine:
                 pass
         return {
             "preset": "balanced",
-            "scores": dict(PRESETS["balanced"]["baseline"]),
+            "scores": dict(PRESETS[self._preset or "balanced"]["baseline"]),
             "dominant": "neutral",
             "intensity": 0.0,
             "updatedAt": _utcnow(),
@@ -60,7 +67,7 @@ class MoodEngine:
             raise ValueError(
                 "temperament must be ausgewogen, warm, kühl, feurig, or stoisch"
             )
-        state = self.state()
+        state = self._stored_state()
         state["preset"] = normalized
         state["scores"] = dict(PRESETS[normalized]["baseline"])
         state["updatedAt"] = _utcnow()
@@ -68,8 +75,8 @@ class MoodEngine:
         return state
 
     def update(self, emotion: dict[str, Any]) -> dict[str, Any]:
-        state = self.state()
-        preset_name = str(state.get("preset") or "balanced")
+        state = self._stored_state()
+        preset_name = self._preset or str(state.get("preset") or "balanced")
         preset = PRESETS.get(preset_name, PRESETS["balanced"])
         scores = {
             key: float(value) * float(preset["decay"])
@@ -94,7 +101,7 @@ class MoodEngine:
             "updatedAt": _utcnow(),
         })
         self._persist(state)
-        return state
+        return {**state, "preset": preset_name}
 
     def _persist(self, state: dict[str, Any]) -> None:
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
@@ -107,7 +114,7 @@ class MoodEngine:
         text = (
             f"{state.get('dominant', 'neutral')} "
             f"(intensity={state.get('intensity', 0)}, "
-            f"temperament={state.get('preset', 'balanced')})\n"
+            f"temperament={self._preset or state.get('preset', 'balanced')})\n"
         )
         temporary_text = self.text_path.with_suffix(".txt.tmp")
         temporary_text.write_text(text, encoding="utf-8")

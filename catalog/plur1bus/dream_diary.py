@@ -13,6 +13,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from .namespaces import binding_from_scope
+from .sensitivity import is_confidential
 from .validation import safe_agent_id
 
 
@@ -127,6 +128,8 @@ def append_dream_diary_entry(
         text = _normalize_narrative(narrative)
         if not text:
             return {"written": False, "code": "empty_narrative"}
+        if is_confidential(text):
+            return {"written": False, "code": "confidential_narrative"}
         workspace = _workspace_path(workspace_dir, workspace_root)
         fingerprint = narrative_fingerprint(text)
         label = "light dream" if mode == "light" else "REM dream"

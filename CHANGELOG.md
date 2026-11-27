@@ -7,6 +7,30 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.21.8-hermes.0] — 2026-11-27
+
+- In Hermes Desktop lassen sich die unterstützten PLUR1BUS-Einstellungen im
+  gewählten Profil bearbeiten. Der native Gateway-RPC bindet Lesen und Schreiben
+  an das bestätigte Profil und prüft beim Speichern die Konfigurationsrevision.
+  Das Temperament ist pro Profil wählbar.
+- Der stündliche Encoding-Job verschiebt verweigerte oder fehlgeschlagene
+  Karten sechs Stunden nach hinten. Drei neue Transportfehler lösen weiterhin
+  die Sicherung aus. Offene Karten behalten ihre bisherigen Werte.
+- Automatischer Recall begrenzt lange Eingaben, nutzt bei blockiertem Embedding
+  eine begrenzte Suchwort- und Aktualitätssuche und unterdrückt Eingabe-Echos.
+  Gebundene Fragmente können ihre Originalnachricht nachladen. Erfassungszeiten
+  werden nur bei expliziten Fragen nach der Gesprächszeit als Filter verwendet.
+  Ältere, wenig informative Assistentenantworten rücken im Auto-Recall nach hinten.
+- Die optionale Embedding-Bereinigung entfernt erkannte Transporthüllen aus
+  der Modell-Eingabe. Rohtext und der für Re-Embedding nötige Modus bleiben
+  erhalten. Beim Upgrade werden keine vorhandenen Vektoren neu berechnet.
+- Der Cohere-Reranker verwendet standardmäßig `rerank-v5.0-fast` und höchstens
+  1.400 Zeichen je Kandidat. Explizite Modell- und Provider-Einstellungen gelten weiter.
+- Vertrauliche Inhalte bleiben aus geteilten Pools, neuen Wissensvorschlägen und
+  dem automatisch gepflegten Traumtagebuch. Die nativen ACLs bleiben maßgeblich.
+
+[Abdeckung und Hermes-spezifische Unterschiede](docs/audits/hermes-7.21.8-coverage.md).
+
 ## [7.21.8] — 2026-11-27
 
 **emotion-refine bleibt nicht mehr an verweigerten Zeilen hängen.** Keine neuen Konfigurationsschlüssel, keine Datenänderung.

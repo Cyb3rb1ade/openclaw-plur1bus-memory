@@ -18,11 +18,12 @@ import weakref
 from collections.abc import Mapping
 from contextlib import contextmanager
 from concurrent.futures import Future, wait, TimeoutError as FutureTimeout
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from .cache import EmbeddingCache
+from .embedding_text import RAW, configured_text_mode, prepare_embedding_text
 from .chunking import capture_options, capture_rows
 from .credentials import profile_secret
 from .domain import Plur1busDomain
@@ -35,7 +36,8 @@ from .epistemic import (
     is_recallable_epistemic,
 )
 from .inject_budget import apply_global_inject_budget, trim_memory_items
-from .recall_origins import prefer_whole_rows, recall_text
+from .recall_origins import created_at_label, prefer_whole_rows, recall_text, relative_time_note
+from .recall_quality import apply_stale_assistant_weighting
 from .llm_cache import LlmResultCache
 from .semantic_input import prepare_semantic_input
 from .namespaces import (
@@ -48,8 +50,14 @@ from .shared_pools import (
     SharedPoolStore,
     SharedPrincipal,
 )
-from .cognition import parse_temporal_range
-from .query_refinement import refine_query
+from .query_refinement import conversation_recall_range as parse_temporal_range
+from .query_refinement import (
+    fallback_keywords,
+    fallback_rank,
+    query_echo_matcher,
+    refine_query,
+    shorten_automatic_query,
+)
 from .llm_backend import InternalLlmBackend
 from .validation import ValidationError, safe_agent_id, safe_memory_id, resolve_inside
 from .valid_time import (
@@ -537,9 +545,16 @@ class RerankerBackend:
         key = profile_secret(name, self._credential_home)
         if not key:
             raise RuntimeError("Cohere reranking API key is not configured")
+        cap = config.get("maxDocChars", 1400)
+        cap = min(100_000, cap) if type(cap) is int and cap > 0 else 1400
         request = urllib.request.Request(
             "https://api.cohere.com/v2/rerank",
-            data=json.dumps({"model": config.get("model", "rerank-v3.5"), "query": query, "documents": [str(row.get("content", "")) for row in rows], "top_n": len(rows)}).encode("utf-8"),
+            data=json.dumps({
+                "model": config.get("model") or "rerank-v5.0-fast",
+                "query": query,
+                "documents": [str(row.get("content") or "")[:cap] for row in rows],
+                "top_n": len(rows),
+            }).encode("utf-8"),
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
             method="POST",
         )
@@ -613,6 +628,7 @@ class Plur1busRuntime:
     def _initialize(self, data_dir: Path, config: dict[str, Any], agent_id: str, scope: Any) -> None:
         """Initialize under the generation lease; constructor failures release it."""
         from .generation import effective_generation_config
+        self._embedding_text_mode = configured_text_mode(config)
         config = effective_generation_config(data_dir, safe_agent_id(agent_id), config)
         self.data_dir = data_dir
         self.config = config
@@ -717,6 +733,10 @@ class Plur1busRuntime:
             max_queue=queue_depth,
             queue_timeout_ms=queue_timeout_ms,
             thread_name_prefix="plur1bus-capture",
+        )
+        self._recall_embedding_executor = BoundedExecutor(
+            max_workers=1, max_queue=0, queue_timeout_ms=7_000,
+            thread_name_prefix="plur1bus-query-embedding",
         )
         self._booster_executor = BoundedExecutor(
             max_workers=1, max_queue=0, queue_timeout_ms=50,
@@ -1149,7 +1169,8 @@ class Plur1busRuntime:
             return rows
 
     def recall(self, query: str, limit: int | None = None, explain: bool = False, *, valid_at: Any = None,
-               session_id: str = "", full_text: bool = False) -> str:
+               session_id: str = "", full_text: bool = False, automatic: bool = False,
+               timeout_seconds: float = 7.0) -> str:
         """Pin storage for the whole synchronous read, including late host prefetches."""
         if self._closing or self._closed:
             return ""
@@ -1158,22 +1179,53 @@ class Plur1busRuntime:
         try:
             if self._closing or self._closed:
                 return ""
-            return self._recall(query, limit, explain, valid_at=valid_at, session_id=session_id, full_text=full_text)
+            return self._recall(query, limit, explain, valid_at=valid_at, session_id=session_id,
+                                full_text=full_text, automatic=automatic, timeout_seconds=timeout_seconds)
         finally:
             lease.close()
 
+    def _automatic_embedding(self, query: str, deadline: float) -> list[float] | None:
+        """Reserve an embedding slot only while automatic recall has time left."""
+        if deadline <= time.monotonic():
+            return None
+        try:
+            future = self._recall_embedding_executor.submit(self._embedding.embed, query, purpose="query")
+        except AdmissionRejected:
+            return None
+        try:
+            return future.result(timeout=max(0.0, deadline - time.monotonic()))
+        except FutureTimeout:
+            future.cancel()
+            return None
+        except Exception as error:
+            LOGGER.debug("automatic recall embedding unavailable (%s)", type(error).__name__)
+            return None
+
     def _recall(self, query: str, limit: int | None = None, explain: bool = False, *, valid_at: Any = None,
-                session_id: str = "", full_text: bool = False) -> str:
+                session_id: str = "", full_text: bool = False, automatic: bool = False,
+                timeout_seconds: float = 7.0) -> str:
         """Recall active, unexpired memories, optionally at an asserted valid time."""
         parsed_valid_at = None
         if valid_at is not None:
             parsed_valid_at = normalize_timestamp(valid_at)
             if not parsed_valid_at:
                 raise ValueError("validAt must be an absolute ISO-8601 or epoch-ms timestamp")
-        prepared = prepare_semantic_input(query)
-        if prepared["requiresSource"]:
-            return str(prepared["message"])
-        semantic_query = str(prepared["text"])
+        embedding_deadline = None
+        if automatic:
+            raw_query = str(query or "").strip()
+            semantic_query = shorten_automatic_query(raw_query)
+            original_length = len(raw_query)
+            timeout = min(7.0, timeout_seconds) if math.isfinite(timeout_seconds) and timeout_seconds > 0 else 7.0
+            reserve = min(timeout / 2, max(1.5, min(3.0, timeout / 4)))
+            embedding_deadline = time.monotonic() + timeout - reserve
+            is_echo = query_echo_matcher(raw_query)
+        else:
+            prepared = prepare_semantic_input(query)
+            if prepared["requiresSource"]:
+                return str(prepared["message"])
+            semantic_query = str(prepared["text"])
+            original_length = prepared["originalLength"]
+            is_echo = None
         recall_config = self.config.get("recall")
         recall_config = recall_config if isinstance(recall_config, dict) else {}
         def bounded(value, default):
@@ -1181,9 +1233,19 @@ class Plur1busRuntime:
         prompt_limit = bounded(recall_config.get("maxPromptMemories"), 12)
         adaptive_limit = min(prompt_limit, bounded(limit, prompt_limit))
         candidate_limit = bounded(recall_config.get("candidateTopK"), 40)
-        vector = self._embedding.embed(semantic_query, purpose="query")
+        embedding_query = (prepare_embedding_text(semantic_query, self._embedding_text_mode)[0]
+                           if automatic else semantic_query)
+        vector = (self._automatic_embedding(embedding_query, embedding_deadline)
+                  if embedding_deadline is not None else self._embedding.embed(embedding_query, purpose="query"))
+        use_fallback = vector is None
+        fallback_cfg = recall_config.get("keywordFallback")
+        if use_fallback and (
+            fallback_cfg is False
+            or (isinstance(fallback_cfg, Mapping) and fallback_cfg.get("enabled") is False)
+        ):
+            return ""
         recall_tables = self._recall_tables()
-        temporal_range = parse_temporal_range(semantic_query)
+        temporal_range = parse_temporal_range(str(query or ""))
         base_legacy_where = f"{scope_where_clause(self.scope_binding)} AND status = 'active'"
         heuristic_legacy_where = base_legacy_where
         if temporal_range is not None:
@@ -1205,14 +1267,17 @@ class Plur1busRuntime:
             return where, expiry_where, scoped_where
 
         def search_namespaces(
-            search_vector: list[float],
+            search_vector: list[float] | None,
             legacy_where: str,
             candidate_limit: int,
             *,
             query_variant: str = "",
+            only_namespace: str | None = None,
         ) -> list[dict[str, Any]]:
             found_rows: list[dict[str, Any]] = []
             for namespace, recall_table in recall_tables:
+                if only_namespace is not None and namespace != only_namespace:
+                    continue
                 include_epistemic = "epistemicStatus" in self._schema_names(recall_table)
                 where, expiry_where, scoped_where = predicate_set(
                     legacy_where, include_epistemic=include_epistemic,
@@ -1239,6 +1304,7 @@ class Plur1busRuntime:
                 and is_entry_live(row, now_ms)
                 and is_entry_valid_at(row, parsed_valid_at)
                 and is_recallable_epistemic(row)
+                and (is_echo is None or not is_echo(row))
             ]
 
         def heuristic_rows(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1254,18 +1320,38 @@ class Plur1busRuntime:
                 )
             ]
 
-        private_rows = search_namespaces(vector, heuristic_legacy_where, candidate_limit)
         shared_rows: list[dict[str, Any]] = []
-        try:
-            shared_rows = self._shared_pools.recall_rows(
-                vector, candidate_limit, valid_at=parsed_valid_at, now_ms=now_ms,
-            )
-        except TypeError as error:
-            # Compatibility for externally injected pre-7.10 pool adapters;
-            # native SharedPoolStore always receives the lifecycle predicates.
-            if "valid_at" not in str(error) and "now_ms" not in str(error):
-                raise
-            shared_rows = self._shared_pools.recall_rows(vector, candidate_limit)
+        if use_fallback:
+            keywords = fallback_keywords(semantic_query)
+            recent = (datetime.fromtimestamp(now_ms / 1000, tz=timezone.utc) - timedelta(days=7)).isoformat()
+
+            def fallback_rows(legacy_where: str) -> list[dict[str, Any]]:
+                candidates: list[dict[str, Any]] = []
+                predicates = [(f"createdAt >= '{recent}'", 600)]
+                if keywords:
+                    # fallback_keywords permits only letters and digits.
+                    match = " OR ".join(f"lower(content) LIKE '%{word}%'" for word in keywords)
+                    predicates.insert(0, (f"({match})", 300))
+                for predicate, cap in predicates:
+                    try:
+                        candidates.extend(search_namespaces(None, f"{legacy_where} AND {predicate}", cap))
+                    except Exception as error:
+                        LOGGER.debug("automatic recall fallback read failed (%s)", type(error).__name__)
+                return sorted(candidates, key=lambda row: fallback_rank(row, keywords, now_ms), reverse=True)
+
+            private_rows = fallback_rows(heuristic_legacy_where)
+        else:
+            private_rows = search_namespaces(vector, heuristic_legacy_where, candidate_limit)
+            try:
+                shared_rows = self._shared_pools.recall_rows(
+                    vector, candidate_limit, valid_at=parsed_valid_at, now_ms=now_ms,
+                )
+            except TypeError as error:
+                # Compatibility for externally injected pre-7.10 pool adapters;
+                # native SharedPoolStore always receives the lifecycle predicates.
+                if "valid_at" not in str(error) and "now_ms" not in str(error):
+                    raise
+                shared_rows = self._shared_pools.recall_rows(vector, candidate_limit)
 
         selected_legacy_where = heuristic_legacy_where
         using_heuristic = temporal_range is not None
@@ -1277,7 +1363,8 @@ class Plur1busRuntime:
             )
             selected_legacy_where = base_legacy_where
             using_heuristic = False
-            private_rows = search_namespaces(vector, base_legacy_where, candidate_limit)
+            private_rows = (fallback_rows(base_legacy_where) if use_fallback
+                            else search_namespaces(vector, base_legacy_where, candidate_limit))
             rows = lifecycle_rows(private_rows + shared_rows)
         if not rows and not recall_tables:
             return ""
@@ -1290,25 +1377,55 @@ class Plur1busRuntime:
         refinement_enabled = refinement is not False and not (
             isinstance(refinement, dict) and refinement.get("enabled") is False
         )
-        refined_query = self._refine_query(semantic_query, refinement) if refinement_enabled else ""
-        if poor_first_pass and refined_query and refined_query != semantic_query.lower():
-            refined_vector = self._embedding.embed(refined_query, purpose="query")
-            refined_rows = search_namespaces(
-                refined_vector, selected_legacy_where, candidate_limit,
-                query_variant="refined",
-            )
-            if using_heuristic:
-                refined_rows = heuristic_rows(refined_rows)
-            rows.extend(lifecycle_rows(refined_rows))
+        if poor_first_pass and refinement_enabled and not use_fallback:
+            refined_query = (shorten_automatic_query(refine_query(embedding_query)) if automatic
+                             else self._refine_query(semantic_query, refinement))
+            if refined_query and refined_query != semantic_query.lower():
+                refined_vector = (self._automatic_embedding(refined_query, embedding_deadline)
+                                  if embedding_deadline is not None
+                                  else self._embedding.embed(refined_query, purpose="query"))
+                if refined_vector is not None:
+                    refined_rows = search_namespaces(
+                        refined_vector, selected_legacy_where, candidate_limit,
+                        query_variant="refined",
+                    )
+                    if using_heuristic:
+                        refined_rows = heuristic_rows(refined_rows)
+                    rows.extend(lifecycle_rows(refined_rows))
         rerank_config = self.config.get("reranker")
         rerank_limit = rerank_config.get("candidates", candidate_limit) if isinstance(rerank_config, dict) else candidate_limit
-        if (isinstance(rerank_config, dict) and rerank_config.get("provider", "disabled") != "disabled"
-                and type(rerank_limit) is int and rerank_limit > 0):
-            rows = self._reranker.rerank(semantic_query, rows, candidate_limit=min(rerank_limit, 100),
-                                         minimum=adaptive_limit)
-        else:
-            rows = self._reranker.rerank(semantic_query, rows)
-        rows = prefer_whole_rows(rows)
+        if not use_fallback:
+            if (isinstance(rerank_config, dict) and rerank_config.get("provider", "disabled") != "disabled"
+                    and type(rerank_limit) is int and rerank_limit > 0):
+                rows = self._reranker.rerank(semantic_query, rows, candidate_limit=min(rerank_limit, 100),
+                                             minimum=adaptive_limit)
+            else:
+                rows = self._reranker.rerank(semantic_query, rows)
+        if automatic:
+            rows = apply_stale_assistant_weighting(rows, now_ms, recall_config.get("qualityWeighting"))
+        hydrated: list[dict[str, Any]] = []
+        turns_by_namespace: dict[str, set[str]] = {}
+        for row in rows:
+            namespace = row.get("_namespace")
+            if row.get("chunkGroupId") and isinstance(namespace, str):
+                try:
+                    origin = safe_memory_id(row.get("sourceTurnId"))
+                except ValidationError:
+                    continue
+                turns_by_namespace.setdefault(namespace, set()).add(origin)
+        for namespace, turns in turns_by_namespace.items():
+            ids = ", ".join(f"'{turn}'" for turn in sorted(turns)[:candidate_limit])
+            whole_where = (
+                f"{selected_legacy_where} AND sourceTurnId IN ({ids}) "
+                "AND (chunkGroupId IS NULL OR chunkGroupId = '')"
+            )
+            try:
+                wholes = search_namespaces(None, whole_where, candidate_limit, only_namespace=namespace)
+            except Exception as error:
+                LOGGER.debug("recall whole-message read failed (%s)", type(error).__name__)
+                continue
+            hydrated.extend(lifecycle_rows(wholes))
+        rows = prefer_whole_rows(rows, hydrated)
         deduplicated = []
         groups: dict[str, int] = {}
         seen_content: dict[str, list[dict[str, Any]]] = {}
@@ -1321,7 +1438,7 @@ class Plur1busRuntime:
             # they describe non-overlapping periods.
             if not canonical or any(not has_disjoint_validity_windows(row, old) for old in prior):
                 continue
-            group = str(row.get("chunkGroupId") or row.get("sourceTurnId") or "").strip()
+            group = str(row.get("chunkGroupId") or "").strip()
             if group and groups.get(group, 0) >= 2:
                 continue
             if group:
@@ -1335,7 +1452,7 @@ class Plur1busRuntime:
             self._boost_recall_with_deadline(
                 deduplicated, recall_tables[0][1], adaptive_limit + 3, session_options,
             )
-            if recall_tables
+            if recall_tables and not use_fallback
             else []
         )
         # SQL and shared-pool recall already authorized the primary rows.
@@ -1349,11 +1466,14 @@ class Plur1busRuntime:
         rows = [
             row for row in rows
             if (is_entry_live(row, now_ms) and is_entry_valid_at(row, parsed_valid_at)
-                and is_recallable_epistemic(row))
+                and is_recallable_epistemic(row) and (is_echo is None or not is_echo(row)))
         ]
         rows = rows[:adaptive_limit]
         memory_items = [
-            f"- {escape(recall_text(row, position, full_text))} {validity_label(row)}".rstrip()
+            " ".join(part for part in (
+                f"- {escape(recall_text(row, position, full_text))}",
+                validity_label(row), created_at_label(row),
+            ) if part)
             for position, row in enumerate(rows)
             if row.get("content")
         ]
@@ -1367,9 +1487,9 @@ class Plur1busRuntime:
         ))
         compression = (
             "<memory-input-compression>"
-            f"original={prepared['originalLength']} compressed={len(semantic_query)}"
+            f"original={original_length} compressed={len(semantic_query)}"
             "</memory-input-compression>"
-            if prepared["compressed"]
+            if original_length > len(semantic_query)
             else ""
         )
         # Global inject budget (upstream 7.4.0 `recall.globalInjectMaxChars`,
@@ -1386,6 +1506,12 @@ class Plur1busRuntime:
             max_chars = 17_000
         output = apply_global_inject_budget(
             blocks=[
+                {"name": "relative-time", "text": relative_time_note() if recalled else "", "droppable": True},
+                {"name": "retrieval", "text": (
+                    '<memory-retrieval retrieval="keyword-recent-fallback">'
+                    'The query embedding was unavailable. These are keyword or recent matches.'
+                    '</memory-retrieval>' if use_fallback and recalled else ""
+                ), "droppable": False},
                 {"name": "memories", "text": recalled, "items": memory_items, "droppable": True},
                 {"name": "overlay", "text": overlay, "droppable": True},
                 {"name": "explanation", "text": explanation, "droppable": True},
@@ -1399,7 +1525,8 @@ class Plur1busRuntime:
         eligible = [row for position, row in enumerate(deduplicated) if row.get("content") and
                     escape(recall_text(row, position, full_text)) in output]
         metadata_path = getattr(self._domain, "_metadata_path", None)
-        if eligible and isinstance(metadata_path, Path) and (metadata_path / "metadata.lance").is_dir():
+        if (eligible and not use_fallback and isinstance(metadata_path, Path)
+                and (metadata_path / "metadata.lance").is_dir()):
             try:
                 self._executor.submit(self._reinforce_recall, eligible)
             except Exception as error:
@@ -1407,14 +1534,19 @@ class Plur1busRuntime:
         return output
 
     @staticmethod
-    def _search_recall_rows(table: Any, vector: list[float], where_clause: str,
+    def _search_recall_rows(table: Any, vector: list[float] | None, where_clause: str,
                             expiry_where_clause: str, legacy_where_clause: str, limit: int,
                             valid_at: int | None,
                             epistemic_fallback: tuple[str, str, str] | None = None,
                             retried_columns: frozenset[str] = frozenset()) -> list[dict[str, Any]]:
         """Search with only narrow legacy validity/expiry-column retries."""
         try:
-            return table.search(vector).where(where_clause).limit(limit).to_list()
+            search = table.search(vector).where(where_clause)
+            if vector is None:
+                columns = sorted(Plur1busRuntime._schema_names(table) - {"vector"})
+                if columns:
+                    search = search.select(columns)
+            return search.limit(limit).to_list()
         except Exception as error:
             if ("epistemic" not in retried_columns and epistemic_fallback is not None
                     and is_missing_epistemic_status_column_error(error)):
@@ -1842,7 +1974,7 @@ class Plur1busRuntime:
         table, _ = self._table(create=False)
         if table is None:
             return None
-        vector = self._embedding.embed(text)
+        vector = self._embedding.embed(prepare_embedding_text(text, self._embedding_text_mode)[0])
         rows = table.search(vector).where(
             f"{scope_where_clause(self.scope_binding, include_legacy_private=False)} AND status = 'active'"
         ).limit(1).to_list()
@@ -1874,6 +2006,7 @@ class Plur1busRuntime:
             return
         self._closing = True
         self._booster_executor.shutdown(wait=False, cancel_futures=True)
+        self._recall_embedding_executor.shutdown(wait=False, cancel_futures=True)
         self.flush(timeout_seconds)
         self._executor.shutdown(wait=False, cancel_futures=False)
 
@@ -1883,6 +2016,7 @@ class Plur1busRuntime:
             # and therefore blocks activation even after shutdown's time budget.
             self._executor.shutdown(wait=True, cancel_futures=False)
             self._booster_executor.shutdown(wait=True, cancel_futures=True)
+            self._recall_embedding_executor.shutdown(wait=True, cancel_futures=True)
             with writer_lock(self.data_dir):
                 self._closed = True
                 try:
@@ -1897,6 +2031,7 @@ class Plur1busRuntime:
 
         pending = getattr(self._executor, "metrics", {}).get("pending", 0)
         pending += self._booster_executor.metrics.get("pending", 0)
+        pending += self._recall_embedding_executor.metrics.get("pending", 0)
         if pending:
             threading.Thread(target=finalize, name="plur1bus-drain", daemon=True).start()
         else:
@@ -2076,7 +2211,8 @@ class Plur1busRuntime:
                     if not repaired.get("complete"):
                         raise ValueError("stable memory materialization requires review")
                     return record_id
-        vector = self._embedding.embed(content)
+        embedding_text, embedding_mode = prepare_embedding_text(content, self._embedding_text_mode)
+        vector = self._embedding.embed(embedding_text)
         if record_id is None and merged_from is None and importance is None and not chunk_group_id:
             from .automatic_merge import try_store_merge
             replacement = try_store_merge(self, {
@@ -2120,9 +2256,16 @@ class Plur1busRuntime:
                 cutoff_failed=force_untrusted or not self._epistemic_cutoff["ok"],
             ),
         }
+        if self._embedding_text_mode != RAW:
+            record["embeddingTextMode"] = embedding_mode
         table, inserted = self._table(create=True, first_record=record)
         if table is not None and not inserted:
             self._ensure_capture_columns(table)
+            names = self._schema_names(table)
+            if "embeddingTextMode" in names:
+                record.setdefault("embeddingTextMode", RAW)
+            elif "embeddingTextMode" in record:
+                table.add_columns({"embeddingTextMode": "'raw'"})
             table.add([record])
         if table is not None:
             if importance is None:

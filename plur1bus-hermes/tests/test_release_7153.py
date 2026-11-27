@@ -78,6 +78,45 @@ def test_reviewed_settings_are_scoped_backed_up_and_not_reported_active(tmp_path
         save_setting(view, "autoCapture", False, public["revision"])
 
 
+def test_temperament_options_use_saved_preset_only_for_the_selected_profile(tmp_path):
+    from plur1bus_hermes.domain import Plur1busDomain
+    from plur1bus_hermes.provider import Plur1busMemoryProvider
+    from plur1bus_hermes.retrieval_admin import config_path
+
+    root = tmp_path / "plugins/plur1bus/config.json"
+    root.parent.mkdir(parents=True)
+    (tmp_path / "profiles/beta").mkdir(parents=True)
+    original = {"emotion": {"t3": {"enabled": True}}}
+    root.write_text(json.dumps(original))
+    provider = Plur1busMemoryProvider.__new__(Plur1busMemoryProvider)
+    provider._hermes_home = tmp_path
+    provider._supplied_config = {}
+    view = SimpleNamespace(hermes_home=tmp_path, profile="beta", agent_id="beta",
+        data_dir=tmp_path / "data", config=provider._runtime_config("beta"), scope_binding=binding_from_scope("beta"),
+        _writer_route=SimpleNamespace(path=tmp_path / "data/lancedb/beta"))
+
+    def setting():
+        return next(option for option in public_settings(view, language="de")["settings"]
+                    if option["id"] == "emotion.temperament")
+
+    control = setting()
+    assert control["value"] == "" and control["choiceLabels"]["cool"] == "Kühl"
+    with pytest.raises(ValueError):
+        validate_change(view, "emotion.temperament", "__proto__")
+    save_setting(view, "emotion.temperament", "cool", public_settings(view)["revision"])
+    view.config = provider._runtime_config("beta")
+    assert setting()["value"] == "cool"
+    assert view.config["emotion"] == {"t3": {"enabled": True}, "temperament": "cool"}
+    assert Plur1busDomain(view.data_dir, "beta", view.config).mood_state()["preset"] == "cool"
+    assert provider._runtime_config("default")["emotion"] == original["emotion"]
+    assert json.loads(root.read_text()) == original
+    save_setting(view, "emotion.temperament", "", public_settings(view)["revision"])
+    view.config = provider._runtime_config("beta")
+    assert setting()["value"] == ""
+    assert Plur1busDomain(view.data_dir, "beta", view.config).mood_state()["preset"] == "balanced"
+    assert json.loads(config_path(view).read_text())["profileSettings"]["beta"]["emotion"]["temperament"] == ""
+
+
 def test_default_parity_uses_effective_profile_config_without_writing(tmp_path):
     from plur1bus_hermes.provider import Plur1busMemoryProvider
 

@@ -34,7 +34,7 @@ export async function checkDesktopCompatibility(runtime, rest, current) {
   const [connection, profile] = JSON.parse(identity);
   const missing = [];
   if (typeof runtime.profileRoutes !== 'function') missing.push(tr('profile routing API', 'Profilrouting-API'));
-  if (typeof rest !== 'function') missing.push('Plugin REST API');
+  if (typeof rest !== 'function' && typeof runtime.requestProfile !== 'function') missing.push('Plugin REST API');
   const base = { identity, sidebar: 'unknown', profileBinding: false, enabled: null };
   if (missing.length) return { ...base, status: 'unsupported',
     message: tr("Hermes Desktop needs an update: {0} is missing.", "Hermes Desktop benötigt ein Update: {0} fehlt. Es wurde nichts verändert.", missing.join(', ')) };
@@ -177,6 +177,32 @@ export function createProfileTransport(rest, runtime, owner, current, identity) 
       throw unavailable(tr('No unambiguous Hermes connection is available for this profile.', 'Für dieses Profil ist keine eindeutige Hermes-Verbindung verfügbar.'));
     }
     const route = matches[0];
+    const localSettingsRpc = route.mode === 'local' && typeof runtime.requestProfile === 'function';
+    const settingsRpc = async change => {
+      check();
+      const result = await runtime.requestProfile(route, 'plugin.plur1bus.settings',
+        { ...change, expectedProfile: route.targetProfile }, 10000);
+      check();
+      return result;
+    };
+    const verified = result => result?.profileBinding === 1 && result.profile === route.targetProfile;
+    const settingsEndpoint = path.split('?')[0] === '/desktop/settings';
+    if (localSettingsRpc && settingsEndpoint && options.method === 'PUT') {
+      const { identifier, value, revision } = options.body || {};
+      return settingsRpc({ identifier, value, revision });
+    }
+    if (localSettingsRpc && settingsEndpoint && !options.method) {
+      const language = new URLSearchParams(path.split('?')[1]).get('language') === 'de' ? 'de' : 'en';
+      try {
+        const result = await settingsRpc({ language });
+        if (verified(result) && result.writable === true && result.memoryProviderEnabled === true
+            && Array.isArray(result.settings) && /^[a-f0-9]{64}$/.test(result.revision)) {
+          return { ...result, readOnly: false, settingsRpcWrite: true };
+        }
+      } catch {
+        check();
+      }
+    }
     const send = async (suffix, opts = {}, assertProfile = true) => {
       check();
       if (!suffix.startsWith('/') || suffix.startsWith('//') || suffix.includes('#')
@@ -199,39 +225,37 @@ export function createProfileTransport(rest, runtime, owner, current, identity) 
       check();
       return result;
     };
-    const capabilities = await send('/desktop/capabilities', {}, false);
-    if (capabilities?.profileBinding !== 1 || capabilities.profile !== route.targetProfile) {
+    let capabilities;
+    try {
+      capabilities = await send('/desktop/capabilities', {}, false);
+    } catch (error) {
+      if (!localSettingsRpc || path !== '/desktop/capabilities') throw error;
+      try {
+        capabilities = await settingsRpc({});
+        if (!verified(capabilities)) throw error;
+      } catch {
+        check();
+        throw error;
+      }
+    }
+    if (!verified(capabilities)) {
       throw unavailable(tr('The backend did not confirm the selected profile. Update PLUR1BUS and restart that backend.', 'Das Backend hat das gewählte Profil nicht bestätigt. Aktualisiere PLUR1BUS und starte das Backend neu.'));
     }
     if (path === '/desktop/capabilities') return capabilities;
     if (capabilities.memoryProviderEnabled !== true) {
       throw unavailable(tr('PLUR1BUS is not the active memory provider in this profile.', 'PLUR1BUS ist in diesem Profil nicht der aktive Memory-Provider.'));
     }
-    if (path.split('?')[0] === '/desktop/settings' && route.mode === 'local' && capabilities.hostedReadOnly === true
-        && typeof runtime.requestProfile === 'function') {
-      const call = async change => {
-        check();
-        const result = await runtime.requestProfile(route, 'plugin.plur1bus.settings',
-          { ...change, expectedProfile: route.targetProfile }, 10000);
-        check();
-        return result;
-      };
-      if (options.method === 'PUT') {
-        const { identifier, value, revision } = options.body || {};
-        return call({ identifier, value, revision });
-      }
-      if (!options.method) {
-        const settings = await send(path);
-        try {
-          const access = await call({});
-          if (access?.writable === true && access.profile === route.targetProfile) {
-            return { ...settings, readOnly: false, settingsRpcWrite: true };
-          }
-        } catch {
-          check();
+    if (localSettingsRpc && settingsEndpoint && capabilities.hostedReadOnly === true && !options.method) {
+      const settings = await send(path);
+      try {
+        const access = await settingsRpc({});
+        if (access?.writable === true && access.profile === route.targetProfile) {
+          return { ...settings, readOnly: false, settingsRpcWrite: true };
         }
-        return settings;
+      } catch {
+        check();
       }
+      return settings;
     }
     return send(path, options);
   };
@@ -491,7 +515,7 @@ export function retrievalDefaults(provider, kind) {
 }
 
 async function writeFeatureSetting(request, settings, change) {
-  const body = { identifier: change.identifier, value: change.value, revision: settings.revision };
+  const body = { identifier: change.identifier, value: change.value, revision: change.revision };
   if (settings.settingsRpcWrite) return request.run('/desktop/settings', { method: 'PUT', body });
   let nonce = change.nonce;
   if (!nonce) {
@@ -549,7 +573,6 @@ function FeatureSettings({ rest }) {
   async function save() {
     if (!review || busy) return;
     setBusy(true);
-    const body = { identifier: review.identifier, value: review.value, revision: review.revision };
     const result = request.current && await writeFeatureSetting(request.current, settings, review);
     setBusy(false); setReview(null);
     if (!result || result.stale) return;
@@ -558,7 +581,7 @@ function FeatureSettings({ rest }) {
       return;
     }
     const latest = await load();
-    if (latest) setNotice(latest.settings?.find(item => item.id === body.identifier)?.value === body.value
+    if (latest) setNotice(latest.settings?.find(item => item.id === review.identifier)?.value === review.value
       ? tr("Saved. Restart the Hermes gateway to apply.", "Gespeichert. Hermes-Gateway zum Aktivieren neu starten.")
       : tr("The new value could not be confirmed after reloading.", "Der neue Wert konnte beim Neuladen nicht bestätigt werden."));
   }
@@ -788,7 +811,7 @@ function Partition({ rest, profile, sdkRest }) {
     s && panel === 'models' ? h(React.Fragment, null,
       h('p', { className: 'pb-intro' }, `Embeddings: ${embedding.model || tr("Not configured", "Nicht konfiguriert")} (${embedding.dimensions || '—'} Dimensionen). Reranking: ${reranker.model || tr("Not configured", "Nicht konfiguriert")}.`),
       h(RetrievalSettings, { rest })) : null,
-    s && panel === 'settings' ? h(FeatureSettings, { rest }) : null,
+    panel === 'settings' ? h(FeatureSettings, { rest }) : null,
     s && panel === 'memories' ? h(MemoryBrowser, { rest }) : null,
     s && panel === 'memories' ? h(Obsidian, { rest, refresh: () => { void reader.current?.load(); } }) : null,
     s && panel === 'memories' ? h(Workshop, { rest, proposals: view.proposals, error: view.workshopError, loading: view.loading,

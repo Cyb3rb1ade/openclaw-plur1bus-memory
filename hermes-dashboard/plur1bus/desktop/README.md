@@ -100,13 +100,20 @@ configuration. After creating a profile, repeat this option or install with
 `--desktop --hermes-home /absolute/root/home/profiles/name` for that profile.
 
 The plugin matches the selected connection and profile with
-`host.profileRoutes()`. The plugin’s REST endpoint must confirm the routed
-profile, and subsequent requests include `expectedProfile` as an assertion.
-The backend derives the actual home from the host and never selects it from
-a client-supplied value. On hosts with plugin RPC support, regular settings
-can also use the session-controlled `host.requestProfile()` route for an
-authenticated local secondary profile. Otherwise hosted profiles with no
-write identity stay read-only.
+`host.profileRoutes()`. REST endpoints confirm the routed profile, and
+subsequent requests include `expectedProfile` as an assertion. The backend
+derives the actual home from the host.
+
+The Settings page uses the session-controlled `host.requestProfile()` route
+for local profiles with plugin RPC support. It remains available when a shared
+gateway has no dashboard REST route. A confirmed edit is checked against the
+revision displayed for the active profile. Hosted endpoints that supply only
+read admission stay read-only.
+
+Choose one of the five native mood presets under **Settings → Emotion**. The
+selection applies to that profile after its gateway restarts. The new preset
+changes future mood updates and preserves the existing mood scores. Clearing
+the choice restores the agent's previously saved preset or Balanced.
 
 Save an optional Jev API key in **Hermes Settings → Memory → PLUR1BUS**. To
 enable Jev, select **Automatic (Jev)** under **Storage mode** on the PLUR1BUS

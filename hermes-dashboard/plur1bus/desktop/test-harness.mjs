@@ -20,7 +20,7 @@ const react = new vm.SyntheticModule(['default'], function () {
 });
 // Execute the actual distributed ESM, with only its documented host imports injected.
 const source = await readFile(new URL('./plugin.js', import.meta.url), 'utf8');
-const plugin = new vm.SourceTextModule(source + '\nexport { FeatureSettings, Partition, HealthWatch };');
+const plugin = new vm.SourceTextModule(source + '\nexport { FeatureSettings, Partition, HealthWatch, writeFeatureSetting };');
 await plugin.link(name => {
   if (name === 'react') return react;
   if (name === '@hermes/plugin-sdk') return sdk;
@@ -122,7 +122,63 @@ assert.ok(settingsCalls.every(({ path }) => path.startsWith('/desktop/')), 'SDK 
 const remote = { ...compatibleHost, profileRoutes: async () => [{ ...profileRoute, mode: 'remote' }] };
 const remoteTransport = createProfileTransport(compatibilityRest, remote, owner, identityAlpha, identityAlpha());
 assert.equal((await remoteTransport('/desktop/settings')).readOnly, true);
-assert.equal(profileCalls.length, 2);
+assert.deepEqual(profileCalls.map(({ body }) => body.language || body.identifier || 'capability'),
+  ['en', 'capability', 'capture.mode'], 'older local backends can use REST reads and the narrower RPC write');
+const folders = {
+  alpha: [{ id: 'autoCapture', value: true }],
+  beta: [{ id: 'autoCapture', value: false }],
+};
+const useSharedGateway = {
+  profileRoutes: async () => ['alpha', 'beta'].map(profile => ({ ...profileRoute, profile, targetProfile: profile })),
+  async requestProfile(route, method, body) {
+    assert.equal(method, 'plugin.plur1bus.settings');
+    assert.equal(route.targetProfile, body.expectedProfile);
+    const activation = { profileBinding: 1, profile: body.expectedProfile, memoryProviderEnabled: true, writable: true };
+    if (body.language) return { ...activation, settings: folders[body.expectedProfile], revision: 'b'.repeat(64) };
+    if (body.identifier) {
+      assert.deepEqual(JSON.parse(JSON.stringify(body)), {
+        identifier: 'autoCapture', value: true, expectedProfile: 'beta', revision: 'b'.repeat(64),
+      });
+      return { saved: true, restartRequired: true };
+    }
+    return activation;
+  },
+};
+const missingSharedRest = async () => { throw Object.assign(new Error('not found'), { status: 404 }); };
+const identityBeta = () => '["local","beta"]';
+const sharedSettings = createProfileTransport(missingSharedRest, useSharedGateway,
+  { connection: 'local', profile: 'beta' }, identityBeta, identityBeta());
+const betaSettings = await sharedSettings('/desktop/settings?language=de');
+assert.equal(betaSettings.profile, 'beta');
+assert.equal(betaSettings.settings[0].value, false);
+assert.equal(betaSettings.readOnly, false);
+assert.equal(betaSettings.settingsRpcWrite, true);
+assert.equal((await sharedSettings('/desktop/settings', {
+  method: 'PUT', body: { identifier: 'autoCapture', value: true, revision: betaSettings.revision },
+})).saved, true);
+const reviewedChanges = [];
+await plugin.namespace.writeFeatureSetting({
+  run(path, options) {
+    reviewedChanges.push({ path, method: options.method, revision: options.body.revision });
+    return { value: { saved: true } };
+  },
+}, { settingsRpcWrite: true, revision: 'newer-view' }, {
+  identifier: 'autoCapture', value: true, revision: 'reviewed-view',
+});
+assert.deepEqual(reviewedChanges, [{ path: '/desktop/settings', method: 'PUT', revision: 'reviewed-view' }]);
+assert.equal((await checkDesktopCompatibility(useSharedGateway, missingSharedRest, identityBeta)).enabled, true);
+const wrongRpcProfile = { ...useSharedGateway, requestProfile: async () => ({
+  profileBinding: 1, profile: 'alpha', memoryProviderEnabled: true, writable: true,
+  settings: folders.alpha, revision: 'a'.repeat(64),
+}) };
+const wrongSettings = createProfileTransport(missingSharedRest, wrongRpcProfile,
+  { connection: 'local', profile: 'beta' }, identityBeta, identityBeta());
+await assert.rejects(wrongSettings('/desktop/settings?language=en'), /unavailable/i);
+hookValues = ['settings', { status: null, error: 'Not found' }];
+hookCursor = 0;
+const partition = plugin.namespace.Partition({ rest: sharedSettings, profile: 'beta', sdkRest: missingSharedRest });
+assert.equal(elements(partition, plugin.namespace.FeatureSettings).length, 1,
+  'settings are available independently of dashboard status');
 const compatibility = await checkDesktopCompatibility(compatibleHost, compatibilityRest, identityAlpha);
 assert.equal(compatibility.status, 'verified');
 assert.equal((await checkDesktopCompatibility({ profileRoutes: compatibleHost.profileRoutes }, compatibilityRest,

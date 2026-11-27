@@ -113,6 +113,10 @@ def _card_from_legacy(row: dict[str, Any], target_agent: str) -> dict[str, Any]:
         "createdAt": str(row.get("createdAt", row.get("created_at", _utcnow()))),
         "vector": vector,
     }
+    # The source vector is copied, so carry the source preprocessing with it.
+    source_mode = row.get("embeddingTextMode")
+    if isinstance(source_mode, str) and source_mode.strip():
+        card["embeddingTextMode"] = source_mode
     # Legacy rows keep an explicitly stored trust state; nothing invents one
     # for rows that never carried it ("" stays legacy, upstream 7.4.0).
     source_epistemic = str(row.get("epistemicStatus") or "").strip()
@@ -146,6 +150,9 @@ def _copy_agent_cards(snapshot: Path, target: Path, source_agent: str, target_ag
     target_dir.mkdir(parents=True, exist_ok=False)
     target_db = lancedb.connect(str(target_dir))
     if cards:
+        if any("embeddingTextMode" in card for card in cards):
+            for card in cards:
+                card.setdefault("embeddingTextMode", "raw")
         target_db.create_table("memories", data=cards)
     return {
         "sourceAgent": source_agent,
