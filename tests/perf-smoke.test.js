@@ -16,7 +16,7 @@ import { createEmbeddingCache } from "../lib/embedding-cache.js";
 import { buildGraphIndex, queryGraphIndex } from "../lib/graph-index.js";
 import { createMetricsDebouncer } from "../lib/metrics-debounce.js";
 import { atomicJsonUpdate } from "../lib/atomic-json.js";
-import { measureCpuMilliseconds } from "./helpers/benchmark-clock.js";
+import { measureAverageCpuMilliseconds, measureCpuMilliseconds } from "./helpers/benchmark-clock.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
@@ -114,45 +114,59 @@ describe("Benchmark 1: Embedding-Cache cold vs. warm", () => {
     assert.ok(perCall < 1, `Warm-Hit pro Call ${perCall.toFixed(3)}ms, erwartet < 1ms`);
   });
 
-  it("warm ist schneller als cold", () => {
-    const M = 1000; // mehr Iterationen für stabileren Vergleich
-    const warmCache = createEmbeddingCache({ maxEntries: M });
-    const coldCaches = [];
+  it("warm ist schneller als cold", async () => {
+    // Proved by work, not by milliseconds: a warm lookup must do none of the
+    // embedder work a cold lookup does. The old CPU-time comparison measured
+    // 1000 in-memory lookups (well under 1 ms) with a clock whose resolution
+    // is one scheduler tick on Windows (~15.6 ms): both sides read 0.00 ms
+    // and `warm < cold` failed on windows-2025 (tc6). Counting the embedder
+    // calls and the cache's own hit/miss accounting is exact on every host.
+    const M = 1000;
     const queries = Array.from({ length: M }, (_, i) => `query ${i}`);
+    const options = { agentId, model, persist: false };
+    let embedderTexts = 0;
+    let embedderCalls = 0;
+    const embedder = async (texts) => {
+      embedderCalls++;
+      embedderTexts += texts.length;
+      return texts.map(() => vector.slice());
+    };
 
-    // Warm: alle M Einträge müssen gleichzeitig resident sein. Die bisherige
-    // Default-Kapazität 128 machte 872/1000 vermeintliche Hits zu Misses und
-    // belastete die Messung zusätzlich mit der GC-Arbeit der Vorbefüllung.
-    for (const q of queries) warmCache.set(agentId, q, model, vector);
-    for (const q of queries) warmCache.get(agentId, q, model);
-    const warmSamples = [];
-    const coldSamples = [];
-    for (let sample = 0; sample < 5; sample++) {
-      warmSamples.push(measureCpuMilliseconds(() => {
-        for (const q of queries) warmCache.get(agentId, q, model);
-      }));
-      const coldCache = createEmbeddingCache({ maxEntries: M });
-      coldCaches.push(coldCache);
-      coldSamples.push(measureCpuMilliseconds(() => {
-        for (const q of queries) {
-          const cached = coldCache.get(agentId, q, model);
-          if (!cached) coldCache.set(agentId, q, model, vector.slice());
-        }
-      }));
-    }
-    const warmMs = median(warmSamples);
-    const coldMs = median(coldSamples);
-    warmCache.clear();
-    warmCache.close();
-    for (const cache of coldCaches) {
+    const cache = createEmbeddingCache({ maxEntries: M });
+    try {
+      const coldVectors = await cache.getMany(queries, options, embedder);
+      const cold = { ...cache.getMetrics(), embedderCalls, embedderTexts };
+
+      const warmVectors = await cache.getMany(queries, options, embedder);
+      const total = cache.getMetrics();
+      const warm = {
+        hits: total.hits - cold.hits,
+        misses: total.misses - cold.misses,
+        embedderCalls: embedderCalls - cold.embedderCalls,
+        embedderTexts: embedderTexts - cold.embedderTexts,
+      };
+
+      // Cold: every query misses and is embedded (once, batched).
+      assert.equal(cold.misses, M, "cold: every query must miss");
+      assert.equal(cold.hits, 0, "cold: nothing may be served from the cache");
+      assert.equal(cold.embedderTexts, M, "cold: every query must reach the embedder");
+      // Warm: every query is a memory hit and the embedder is not called at all.
+      assert.equal(warm.hits, M, "warm: every query must be a cache hit");
+      assert.equal(warm.misses, 0, "warm: no query may miss");
+      assert.equal(warm.embedderCalls, 0, "warm: the embedder must not be called");
+      assert.equal(total.memoryHits, M, "warm hits must come from the memory tier");
+      // Same answers, served from the cached vectors (identity, not a recompute).
+      assert.equal(warmVectors.length, M);
+      for (let i = 0; i < M; i++) assert.equal(warmVectors[i], coldVectors[i]);
+      // Strictly less work: warm does lookups only, cold does lookups + embeds.
+      assert.ok(
+        warm.embedderTexts < cold.embedderTexts,
+        `Warm (${warm.embedderTexts} embeds) war nicht schneller als Cold (${cold.embedderTexts} embeds)`
+      );
+    } finally {
       cache.clear();
       cache.close();
     }
-
-    assert.ok(
-      warmMs < coldMs,
-      `Warm (${warmMs.toFixed(2)}ms) war nicht schneller als Cold (${coldMs.toFixed(2)}ms)`
-    );
   });
 });
 
@@ -194,12 +208,18 @@ describe("Benchmark 2: Graph Traversal mit/ohne Index (10k Edges)", () => {
     assert.ok(Number.isFinite(scanMs), `Array-Scan lieferte keine valide Dauer: ${scanMs}`);
   });
 
+  // 1000 index queries take well under one Windows CPU-clock tick (~15.6 ms),
+  // so a single interval reads 0 or a whole tick. Average over RUNS intervals
+  // (see measureAverageCpuMilliseconds) so the 10 ms budget and the 10x
+  // ratio compare real cost, not tick placement.
+  const RUNS = 50;
+
   it("mit Index: queryGraphIndex ist schnell", () => {
-    const idxMs = measureCpuMilliseconds(() => {
+    const idxMs = measureAverageCpuMilliseconds(() => {
       for (let i = 0; i < ITERATIONS; i++) {
         queryGraphIndex(index, INDEX_FILTER);
       }
-    });
+    }, RUNS);
 
     assert.ok(idxMs < 10, `Index-Query dauerte ${idxMs.toFixed(2)}ms, erwartet < 10ms`);
   });
@@ -209,9 +229,9 @@ describe("Benchmark 2: Graph Traversal mit/ohne Index (10k Edges)", () => {
       for (let i = 0; i < ITERATIONS; i++) scanArray("type0", "tgt0");
     });
 
-    const idxMs = measureCpuMilliseconds(() => {
+    const idxMs = measureAverageCpuMilliseconds(() => {
       for (let i = 0; i < ITERATIONS; i++) queryGraphIndex(index, INDEX_FILTER);
-    });
+    }, RUNS);
 
     assert.ok(
       idxMs * 10 < scanMs,
@@ -233,11 +253,13 @@ describe("Benchmark 3: Metrics accumulate vs. direct atomicJsonUpdate", () => {
     debouncer.accumulate("/warmup", { latencyMs: 0 });
     await debouncer.flush();
 
-    const accMs = measureCpuMilliseconds(() => {
+    // Sub-tick on Windows: average over 50 runs of 100 calls (see
+    // measureAverageCpuMilliseconds).
+    const accMs = measureAverageCpuMilliseconds(() => {
       for (let i = 0; i < N; i++) {
         debouncer.accumulate("/ws", { latencyMs: i });
       }
-    });
+    }, 50);
     await debouncer.stop(); // Timer aufräumen, sonst hält er den Prozess offen
 
     assert.ok(accMs < 10, `100x accumulate dauerte ${accMs.toFixed(3)}ms, erwartet < 10ms`);

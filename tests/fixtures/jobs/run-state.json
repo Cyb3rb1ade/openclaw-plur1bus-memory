@@ -1,0 +1,12 @@
+{
+  "completed": {
+    "rem:workspace:v1:main:agent-a:private:2026-W01": { "completedAt": "2026-01-06T00:20:11.000Z", "patternsFound": 4, "memoriesProcessed": 212, "durationMs": 58100 },
+    "rem:workspace:v1:main:agent-a:workspace:2026-W01": { "completedAt": "2026-01-06T00:21:40.000Z", "patternsFound": 1, "memoriesProcessed": 37, "durationMs": 9100 },
+    "rem:workspace:v1:main:agent-b:private:2026-W01": { "completedAt": "2026-01-06T00:25:00.000Z", "patternsFound": 2, "memoriesProcessed": 90, "durationMs": 20100 },
+    "reflect:agent-a:2026-01-05": { "reflectedAt": "2026-01-05T03:00:00.000Z" }
+  },
+  "memoryDynamics": {
+    "agent-a:workspace:v1:main": { "lastRetrievalLedgerProcessedAt": "2026-01-06T04:00:00.000Z" }
+  },
+  "compaction": { "lastRunAt": "2026-01-06T04:05:00.000Z" }
+}

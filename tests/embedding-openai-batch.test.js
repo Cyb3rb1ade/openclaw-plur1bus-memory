@@ -191,4 +191,33 @@ describe("OpenAIEmbeddingProvider embedBatch", () => {
     assert.strictEqual(calls, 1, "no additional API call for cached text");
     assert.strictEqual(vectors.length, 1);
   });
+
+  it("one caller's abort does not cancel a concurrent caller sharing the coalesced cache request (PR-05 fix round 1)", async () => {
+    const provider = new OpenAIEmbeddingProvider({ model: "text-embedding-3-small", dimensions: 3, apiKey: "test-key" });
+    let calls = 0;
+    let resolveCreate;
+    const createGate = new Promise((resolve) => { resolveCreate = resolve; });
+    provider._client = {
+      embeddings: {
+        create: async () => {
+          calls++;
+          await createGate;
+          return { data: [{ embedding: [0.1, 0.2, 0.3] }] };
+        },
+      },
+    };
+
+    const controllerA = new AbortController();
+    const controllerB = new AbortController();
+    const first = provider.embedBatch(["shared text"], 3, { signal: controllerA.signal });
+    const second = provider.embedBatch(["shared text"], 3, { signal: controllerB.signal });
+    await new Promise((resolve) => setImmediate(resolve));
+    controllerA.abort();
+    await assert.rejects(first, (error) => error.name === "AbortError");
+
+    resolveCreate();
+    const secondResult = await second;
+    assert.deepStrictEqual(secondResult, [[0.1, 0.2, 0.3]]);
+    assert.strictEqual(calls, 1, "the coalesced request must be made exactly once for both callers");
+  });
 });

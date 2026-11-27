@@ -824,17 +824,17 @@ describe("deriveAgentDelivery", () => {
 
   it("derives channel+to when all candidate targets agree (no plur1bus-prefixed jobs, accountId included)", () => {
     const jobs = [
-      { agentId: "main", name: "disk-space-monitor", delivery: { mode: "announce", channel: "telegram", to: "55736530", accountId: "default" } },
-      { agentId: "main", name: "morning-gas-weather-briefing", delivery: { mode: "announce", channel: "telegram", to: "55736530", accountId: "default" } },
+      { agentId: "main", name: "disk-space-monitor", delivery: { mode: "announce", channel: "telegram", to: "10000002", accountId: "default" } },
+      { agentId: "main", name: "morning-gas-weather-briefing", delivery: { mode: "announce", channel: "telegram", to: "10000002", accountId: "default" } },
     ];
     const result = deriveAgentDelivery("main", jobs);
-    assert.deepStrictEqual(result, { channel: "telegram", to: "55736530", accountId: "default" });
+    assert.deepStrictEqual(result, { channel: "telegram", to: "10000002", accountId: "default" });
   });
 
   it("fails closed when candidates disagree on accountId despite agreeing on channel+to", () => {
     const jobs = [
-      { agentId: "main", name: "plur1bus-morning-review-main", delivery: { mode: "announce", channel: "telegram", to: "55736530" } },
-      { agentId: "main", name: "plur1bus-evening-review-main", delivery: { mode: "announce", channel: "telegram", to: "55736530", accountId: "default" } },
+      { agentId: "main", name: "plur1bus-morning-review-main", delivery: { mode: "announce", channel: "telegram", to: "10000002" } },
+      { agentId: "main", name: "plur1bus-evening-review-main", delivery: { mode: "announce", channel: "telegram", to: "10000002", accountId: "default" } },
     ];
     const result = deriveAgentDelivery("main", jobs);
     assert.strictEqual(result, null);
@@ -842,7 +842,7 @@ describe("deriveAgentDelivery", () => {
 
   it("returns null on conflicting targets among PLUR1BUS jobs", () => {
     const jobs = [
-      { agentId: "heisenberg", name: "plur1bus-morning-review-heisenberg", delivery: { mode: "announce", channel: "telegram", to: "2048378590" } },
+      { agentId: "heisenberg", name: "plur1bus-morning-review-heisenberg", delivery: { mode: "announce", channel: "telegram", to: "10000004" } },
       { agentId: "heisenberg", name: "plur1bus-evening-review-heisenberg", delivery: { mode: "announce", channel: "telegram", to: "9999999" } },
     ];
     assert.strictEqual(deriveAgentDelivery("heisenberg", jobs), null);
@@ -850,7 +850,7 @@ describe("deriveAgentDelivery", () => {
 
   it("returns null on conflicting targets among unrelated jobs", () => {
     const jobs = [
-      { agentId: "heisenberg", name: "some-cron", delivery: { mode: "announce", channel: "telegram", to: "2048378590" } },
+      { agentId: "heisenberg", name: "some-cron", delivery: { mode: "announce", channel: "telegram", to: "10000004" } },
       { agentId: "heisenberg", name: "other-cron", delivery: { mode: "announce", channel: "telegram", to: "9999999" } },
     ];
     assert.strictEqual(deriveAgentDelivery("heisenberg", jobs), null);
@@ -859,19 +859,19 @@ describe("deriveAgentDelivery", () => {
   it("requires unanimity across PLUR1BUS and unrelated safe delivery candidates", () => {
     const jobs = [
       { agentId: "bernhardine", name: "Erik BZ Check", delivery: { mode: "announce", channel: "telegram", to: "1111111" } },
-      { agentId: "bernhardine", name: "plur1bus-morning-review-bernhardine", delivery: { mode: "announce", channel: "telegram", to: "1211667028" } },
+      { agentId: "bernhardine", name: "plur1bus-morning-review-bernhardine", delivery: { mode: "announce", channel: "telegram", to: "10000003" } },
     ];
     assert.strictEqual(deriveAgentDelivery("bernhardine", jobs), null);
   });
 
   it("ignores jobs belonging to other agents", () => {
-    const jobs = [{ agentId: "main", name: "plur1bus-x", delivery: { mode: "announce", channel: "telegram", to: "55736530" } }];
+    const jobs = [{ agentId: "main", name: "plur1bus-x", delivery: { mode: "announce", channel: "telegram", to: "10000002" } }];
     assert.strictEqual(deriveAgentDelivery("bernhardine", jobs), null);
   });
 
   it("ignores candidates with mode 'none' or missing 'to'", () => {
     const jobs = [
-      { agentId: "main", name: "plur1bus-a", delivery: { mode: "none", channel: "telegram", to: "55736530" } },
+      { agentId: "main", name: "plur1bus-a", delivery: { mode: "none", channel: "telegram", to: "10000002" } },
       { agentId: "main", name: "plur1bus-b", delivery: { mode: "announce", channel: "telegram" } },
     ];
     assert.strictEqual(deriveAgentDelivery("main", jobs), null);
@@ -880,10 +880,10 @@ describe("deriveAgentDelivery", () => {
   it("ignores a disabled plur1bus job's stale delivery target, falling back to an enabled candidate", () => {
     const jobs = [
       { agentId: "main", name: "plur1bus-decommissioned-main", enabled: false, delivery: { mode: "announce", channel: "telegram", to: "99999999" } },
-      { agentId: "main", name: "disk-space-monitor", enabled: true, delivery: { mode: "announce", channel: "telegram", to: "55736530" } },
+      { agentId: "main", name: "disk-space-monitor", enabled: true, delivery: { mode: "announce", channel: "telegram", to: "10000002" } },
     ];
     const result = deriveAgentDelivery("main", jobs);
-    assert.deepStrictEqual(result, { channel: "telegram", to: "55736530" });
+    assert.deepStrictEqual(result, { channel: "telegram", to: "10000002" });
   });
 
   it("returns null when the only candidates are disabled jobs (afterthought falls back to created-but-disabled)", () => {
@@ -894,9 +894,9 @@ describe("deriveAgentDelivery", () => {
   });
 
   it("treats a missing 'enabled' field as enabled (older cron-list shapes without the field)", () => {
-    const jobs = [{ agentId: "main", name: "plur1bus-a", delivery: { mode: "announce", channel: "telegram", to: "55736530" } }];
+    const jobs = [{ agentId: "main", name: "plur1bus-a", delivery: { mode: "announce", channel: "telegram", to: "10000002" } }];
     const result = deriveAgentDelivery("main", jobs);
-    assert.deepStrictEqual(result, { channel: "telegram", to: "55736530" });
+    assert.deepStrictEqual(result, { channel: "telegram", to: "10000002" });
   });
 
   it("rejects unsafe modes, channels, wildcard targets, and placeholders", () => {
@@ -912,7 +912,7 @@ describe("deriveAgentDelivery", () => {
     assert.strictEqual(deriveAgentDelivery("main", [job({
       mode: "announce",
       channel: "telegram",
-      to: "55736530",
+      to: "10000002",
       accountId: "***",
     })]), null);
   });
@@ -1074,7 +1074,7 @@ describe("planFeatureCrons — multi-agent mode (opts.agents)", () => {
       {
         agentId: "main",
         name: "plur1bus-morning-review-main",
-        delivery: { mode: "announce", channel: "telegram", to: "55736530", accountId: "telegram-main" },
+        delivery: { mode: "announce", channel: "telegram", to: "10000002", accountId: "telegram-main" },
       },
     ];
     const plan = planFeatureCrons(existing, LEGACY_TWO_FEATURE_CRONS, { agents: twoAgents });
@@ -1082,7 +1082,7 @@ describe("planFeatureCrons — multi-agent mode (opts.agents)", () => {
     assert.strictEqual(mainAfterthought.enabled, true);
     assert.deepStrictEqual(mainAfterthought.delivery, {
       channel: "telegram",
-      to: "55736530",
+      to: "10000002",
       accountId: "telegram-main",
     });
     assert.strictEqual(mainAfterthought.account, "telegram-main");
@@ -1227,12 +1227,12 @@ describe("planFeatureCrons — multi-agent mode (opts.agents)", () => {
     assert.strictEqual(deriveAgentDelivery("main", [{
       agentId: "Main",
       name: "case-collision",
-      delivery: { mode: "announce", channel: "telegram", to: "55736530" },
+      delivery: { mode: "announce", channel: "telegram", to: "10000002" },
     }]), null);
     assert.strictEqual(deriveDeliveryFromChannelConfig("main", {
       bindings: [{
         agentId: "Main",
-        match: { channel: "telegram", accountId: "default", peer: { kind: "direct", id: "55736530" } },
+        match: { channel: "telegram", accountId: "default", peer: { kind: "direct", id: "10000002" } },
       }],
       channels: { telegram: { accounts: { default: { enabled: true } } } },
     }), null);
@@ -1280,7 +1280,7 @@ describe("Message-Contract-Migration bestehender Jobs", () => {
       name: "plur1bus afterthought main",
       agentId: "main",
       payload: { message: CURRENT_AFTERTHOUGHT_CONTRACT },
-      delivery: { mode: "announce", channel: "telegram", to: "55736530" },
+      delivery: { mode: "announce", channel: "telegram", to: "10000002" },
     }];
     const plan = planFeatureCrons(existing, LEGACY_TWO_FEATURE_CRONS, { agents });
     assert.ok(Array.isArray(plan.update), "plan.update existiert");
@@ -1327,8 +1327,8 @@ describe("deriveDeliveryFromChannelConfig", () => {
     channels: {
       telegram: {
         accounts: {
-          default: { enabled: true, defaultTo: 55736530, allowFrom: ["*"] },
-          bernhardine: { enabled: true, defaultTo: "1211667028" },
+          default: { enabled: true, defaultTo: 10000002, allowFrom: ["*"] },
+          bernhardine: { enabled: true, defaultTo: "10000003" },
           ambiguous: { enabled: true },
         },
       },
@@ -1338,12 +1338,12 @@ describe("deriveDeliveryFromChannelConfig", () => {
   it("leitet das Ziel aus dem expliziten defaultTo ab (Zahl wird zu String)", () => {
     assert.deepStrictEqual(deriveDeliveryFromChannelConfig("main", config), {
       channel: "telegram",
-      to: "55736530",
+      to: "10000002",
       accountId: "default",
     });
     assert.deepStrictEqual(deriveDeliveryFromChannelConfig("bernhardine", config), {
       channel: "telegram",
-      to: "1211667028",
+      to: "10000003",
       accountId: "bernhardine",
     });
   });
@@ -1376,7 +1376,7 @@ describe("deriveDeliveryFromChannelConfig", () => {
     const afterthought = plan.create.find((c) => c.name === "plur1bus afterthought main");
     assert.ok(afterthought);
     assert.strictEqual(afterthought.enabled, true);
-    assert.deepStrictEqual(afterthought.delivery, { channel: "telegram", to: "55736530", accountId: "default" });
+    assert.deepStrictEqual(afterthought.delivery, { channel: "telegram", to: "10000002", accountId: "default" });
   });
 
   it("Cron-Ableitung hat Vorrang vor der Config", () => {
@@ -1408,7 +1408,7 @@ describe("deriveDeliveryFromChannelConfig", () => {
       channels: {
         telegram: {
           accounts: {
-            default: { enabled: true, allowFrom: [55736530] },
+            default: { enabled: true, allowFrom: [10000002] },
           },
         },
       },
@@ -1467,7 +1467,7 @@ describe("deriveDeliveryFromChannelConfig", () => {
       channels: {
         telegram: {
           enabled: true,
-          defaultTo: "55736530",
+          defaultTo: "10000002",
         },
       },
     };
@@ -1482,7 +1482,7 @@ describe("deriveDeliveryFromChannelConfig", () => {
         telegram: {
           enabled: true,
           botToken: "***",
-          defaultTo: "55736530",
+          defaultTo: "10000002",
           accounts: {
             alpha: { enabled: true },
             beta: { enabled: true },
@@ -1493,7 +1493,7 @@ describe("deriveDeliveryFromChannelConfig", () => {
 
     assert.deepStrictEqual(deriveDeliveryFromChannelConfig("main", cfg), {
       channel: "telegram",
-      to: "55736530",
+      to: "10000002",
       accountId: "default",
     });
     assert.deepStrictEqual(deriveDeliveryFromChannelConfig("main", {
@@ -1506,7 +1506,7 @@ describe("deriveDeliveryFromChannelConfig", () => {
       },
     }), {
       channel: "telegram",
-      to: "55736530",
+      to: "10000002",
       accountId: "default",
     });
   });
@@ -1525,14 +1525,14 @@ describe("deriveDeliveryFromChannelConfig", () => {
         channels: {
           telegram: {
             enabled: true,
-            defaultTo: "55736530",
+            defaultTo: "10000002",
             ...credential,
           },
         },
       };
       assert.deepStrictEqual(deriveDeliveryFromChannelConfig("main", cfg), {
         channel: "telegram",
-        to: "55736530",
+        to: "10000002",
         accountId: "default",
       });
     }
@@ -1555,7 +1555,7 @@ describe("deriveDeliveryFromChannelConfig", () => {
           telegram: {
             enabled: true,
             botToken,
-            defaultTo: "55736530",
+            defaultTo: "10000002",
             accounts: {
               alpha: { enabled: true },
               beta: { enabled: true },
@@ -1585,7 +1585,7 @@ describe("deriveDeliveryFromChannelConfig", () => {
         channels: {
           telegram: {
             defaultAccount: "default",
-            defaultTo: "55736530",
+            defaultTo: "10000002",
             accounts: { default: { enabled: true } },
           },
         },
@@ -1604,7 +1604,7 @@ describe("deriveDeliveryFromChannelConfig", () => {
       channels: {
         telegram: {
           defaultAccount: "*",
-          defaultTo: "55736530",
+          defaultTo: "10000002",
           accounts: { primary: { enabled: true } },
         },
       },
@@ -1613,7 +1613,7 @@ describe("deriveDeliveryFromChannelConfig", () => {
 
     const missingNamedAccount = {
       bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "missing" } }],
-      channels: { telegram: { defaultTo: "55736530", accounts: {} } },
+      channels: { telegram: { defaultTo: "10000002", accounts: {} } },
     };
     assert.strictEqual(deriveDeliveryFromChannelConfig("main", missingNamedAccount), null);
   });
@@ -1625,7 +1625,7 @@ describe("deriveDeliveryFromChannelConfig", () => {
     });
 
     assert.strictEqual(
-      deriveDeliveryFromChannelConfig("main", configWith({ enabled: true, allowFrom: [55736530] })),
+      deriveDeliveryFromChannelConfig("main", configWith({ enabled: true, allowFrom: [10000002] })),
       null,
     );
     assert.strictEqual(
@@ -1675,19 +1675,19 @@ describe("deriveDeliveryFromChannelConfig", () => {
       agentId: "main",
       match: { channel: "telegram", accountId, ...(peer ? { peer } : {}) },
     });
-    const baseTelegram = { accounts: { default: { enabled: true, defaultTo: "55736530" } } };
+    const baseTelegram = { accounts: { default: { enabled: true, defaultTo: "10000002" } } };
 
     assert.strictEqual(deriveDeliveryFromChannelConfig("main", runtimeConfig([
       binding({ kind: "group", id: "-1001" }),
       binding({ kind: "group", id: "-1002" }),
     ], baseTelegram)), null);
     assert.strictEqual(deriveDeliveryFromChannelConfig("main", runtimeConfig([
-      binding({ kind: "direct", id: "55736530" }),
+      binding({ kind: "direct", id: "10000002" }),
       binding({ kind: "group", id: "-1001" }),
     ], baseTelegram)), null);
     assert.strictEqual(deriveDeliveryFromChannelConfig("main", runtimeConfig([
       binding(null),
-    ], { accounts: { default: { enabled: false, defaultTo: "55736530" } } })), null);
+    ], { accounts: { default: { enabled: false, defaultTo: "10000002" } } })), null);
     assert.strictEqual(deriveDeliveryFromChannelConfig("main", runtimeConfig([
       binding({ kind: "group", id: "${GROUP_ID}" }),
     ], baseTelegram)), null);
@@ -1744,14 +1744,14 @@ describe("Delivery-Migration bestehender Jobs (announce -> last ohne Ziel)", () 
         name: "plur1bus persona-evolve main",
         agentId: "main",
         payload: { message: "/plur1bus internal persona-evolve" },
-        delivery: { mode: "announce", channel: "telegram", to: "55736530" },
+        delivery: { mode: "announce", channel: "telegram", to: "10000002" },
       },
       {
         id: "job-a1",
         name: "plur1bus afterthought main",
         agentId: "main",
         payload: { message: "/plur1bus internal afterthought" },
-        delivery: { mode: "announce", channel: "telegram", to: "55736530" },
+        delivery: { mode: "announce", channel: "telegram", to: "10000002" },
       },
     ];
     const plan = planFeatureCrons(existing, LEGACY_TWO_FEATURE_CRONS, { agents });
@@ -1778,7 +1778,7 @@ describe("Delivery-Migration bestehender Jobs (announce -> last ohne Ziel)", () 
       name: "plur1bus persona-evolve main",
       agentId: "main",
       payload: { message: "/plur1bus internal persona-evolve" },
-      delivery: { channel: "telegram", to: "55736530" },
+      delivery: { channel: "telegram", to: "10000002" },
     }];
     const plan = planFeatureCrons(existing, LEGACY_TWO_FEATURE_CRONS, { agents });
     assert.deepStrictEqual(plan.update, [{
@@ -1815,7 +1815,7 @@ describe("Delivery-Migration bestehender Jobs (announce -> last ohne Ziel)", () 
         agentId: "main",
         enabled: true,
         payload: { message: "/plur1bus internal afterthought" },
-        delivery: { mode: "announce", channel: "telegram", to: "55736530" },
+        delivery: { mode: "announce", channel: "telegram", to: "10000002" },
       },
       {
         id: "job-unsafe-duplicate",

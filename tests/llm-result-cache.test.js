@@ -453,7 +453,7 @@ test("persistent cache survives instances without storing prompt or API key", as
   const bytes = readFileSync(dbPath);
   assert.equal(bytes.includes(Buffer.from("PRIVATE-PROMPT-123")), false);
   assert.equal(bytes.includes(Buffer.from("API-SECRET-456")), false);
-  assert.equal(statSync(dbPath).mode & 0o777, 0o600);
+  if (process.platform !== "win32") assert.equal(statSync(dbPath).mode & 0o777, 0o600); // POSIX mode only
 });
 
 test("persistent cache initializes an absent configured base and isolates agents", async (t) => {
@@ -493,7 +493,7 @@ test("persistent cache initializes an absent configured base and isolates agents
   assert.equal(firstMetrics.persistActive, true);
   const agentADbPath = join(baseDbPath, "llm-result-cache-v1", "agent-a.db");
   assert.equal(existsSync(agentADbPath), true);
-  assert.equal(statSync(agentADbPath).mode & 0o777, 0o600);
+  if (process.platform !== "win32") assert.equal(statSync(agentADbPath).mode & 0o777, 0o600); // POSIX mode only
   await first.close();
 
   reopened = createLlmResultCache({ persist: true, baseDbPath });
@@ -515,7 +515,7 @@ test("persistent cache initializes an absent configured base and isolates agents
   assert.equal(reopened.getMetrics("agent-b").persistWrites, 1);
   const agentBDbPath = join(baseDbPath, "llm-result-cache-v1", "agent-b.db");
   assert.equal(existsSync(agentBDbPath), true);
-  assert.equal(statSync(agentBDbPath).mode & 0o777, 0o600);
+  if (process.platform !== "win32") assert.equal(statSync(agentBDbPath).mode & 0o777, 0o600); // POSIX mode only
 });
 
 test("persistent TTL is absolute across instances", async (t) => {
@@ -845,7 +845,7 @@ test("WAL-heavy hard-limit cleanup reclaims space and persists the new result", 
   assert.equal(recovered.count, 1);
 });
 
-test("persistent cache directory is created with owner-only permissions", async (t) => {
+test("persistent cache directory is created with owner-only permissions", { skip: process.platform === "win32" && "POSIX directory modes (0700) are not represented on win32" }, async (t) => {
   if (!(await hasNodeSqlite())) return t.skip("node:sqlite unavailable");
   const dir = makeTempDir("plur1bus-llm-cache-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));

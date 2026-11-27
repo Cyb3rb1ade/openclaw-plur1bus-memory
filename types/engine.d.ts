@@ -1,0 +1,1285 @@
+/**
+ * types/engine.d.ts — the frozen PLUR1BUS engine contract.
+ *
+ * Contract version 1.16.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
+ * amended sixteen times under the policy below — see the changelog at the end
+ * of this header).
+ *
+ * This file reconciles the four places Phase 0 sketched the same API
+ * differently (review-report finding S4). Where ADR-002 and
+ * engine-extraction.md §b.2 disagreed, B8 chose:
+ *   - `Principal.trust: "proved" | "inferred"`   (not `proof: "transport"`)
+ *   - `TurnOrigin` as a string union plus a separate `AgentContext`
+ *     (not one `TurnOrigin` object)
+ *   - `capture()` returns a non-blocking `CaptureHandle`
+ *     (not `Promise<CaptureResult>`)
+ *   - `RecallResult.degraded` is a structured object or null
+ *     (not a boolean)
+ *
+ * `createEngine` (engine/create-engine.js) implements it from M1b-1 on. It is
+ * the shape both the OpenClaw adapter and the harness are written against,
+ * and it is checked by `npm run typecheck`.
+ *
+ * Amendment policy: "frozen" means 1.0.0 is never edited in place. Any change
+ * to an exported member's shape that an existing adapter could observe — a new
+ * required property, a removed or renamed member, a narrowed or widened union,
+ * a changed parameter or return type — forces a `ContractVersion` bump; only
+ * additions no adapter can observe (a comment, a new optional property on a
+ * type the engine alone constructs) may land without one.
+ * `ContractVersion`, the assertions in `types/engine.conformance.ts` and both
+ * adapters move together in a single PR, so the contract, its gate and its two
+ * consumers are never in disagreement at any commit.
+ *
+ * Changelog: 1.1.0 — SecurePathResult.reason gains "acl-tool-unavailable" (Task 5).
+ *            1.2.0 — HostServices.workspaceDir becomes async (Task 6).
+ *            1.3.0 — HostServices.configPath(), HostServices.routing?, HostServices.pathOverrides? (G1 closure, M1b-1 Task 11).
+ *            1.4.0 — Engine surface of createEngine (M1b-1): ContextBlock.chars; RecallResult.timing (replaces timings) and .deferrals; RecallQuery.budget optional; JobRun/JobRegistry/JobSpec per spec 3.3 (outcome gains "abandoned"); CheckpointReason gains "session-end"; Engine.close({ budgetMs }); Engine.channels; HostServices.capabilities?; EngineEventName gains recall.block-clipped/-dropped, recall.completed; createEngine testOptions.
+ *            1.4.1 — JobTrigger gains "unknown" (a crash row recovered from a corrupt, unreadable start marker; M1b-1 final review m2).
+ *            1.5.0 — MemoryOps types, Engine.memory (E1 Task 2); runCommand deprecated; MemoryState.tombstones number | null (E1-R11); HostCapabilities.memoryArchiveDir? (E1 Task 8).
+ *            1.6.0 — AdminOps.share/forget alias Engine.memory (deprecated); ObsidianOps with explicit paths; migrate over a store schema marker; MemoryOps.propose/proposals (D31); MemoryCard.sharedBy/sourceId; MemoryOpError.detail; "memory.proposal" event; EngineStatus.storeSchema (E2).
+ *            1.7.0 — EmbeddingService.probe(opts?) → EmbeddingProbeResult (identity, readiness, memoized); serve(address?: IpcAddress | null) → EmbeddingServeResult (real scoped IPC, in-process owner, no claim listener); HostCapabilities.pushCriticalButtons? typed (E3).
+ *            1.8.0 — EngineStatus.jobs/models/journal/sharedMemory, degraded derived from model readiness; Engine.models (status, warm); HostCapabilities.journalBacklog?; MemoryOpErrorCode "unsupported"; CaptureResult.reason "duplicate-turn" (E4).
+ *            1.9.0 — engine-config.schema.json with readAt/x-tier/x-sensitive and its types (EngineConfigSchema, EngineConfigKey, EngineConfigReadAt); RecallQuery.warmOnly; RecallTiming.totalMs covers queue wait and prelude (E5).
+ *            1.10.0 — additive engine-config keys from the 7.18.5–7.18.20 port (runtime.deferPostTurnLlm, diaryFromUserChats, captureChunkingJev, recall.fullTextTopRecords/fullTextMaxChars) and JobName "post-turn-refine"; adapter-only keys stay on the OpenClaw manifest; no breaking change to existing callers.
+ *            1.11.0 — MemoryOps.import (finished-card ingest with deterministic ids) and Engine.stores.adopt (copy-never-move store take-over with a sample cosine probe for legacy stores); MemoryCard.provenance/sourceRef optional; no breaking change to existing callers.
+ *            1.12.0 — MemoryOps.rebind / MemoryOps.unbind (manual N:1 channel-identity link; user-scope owner metadata only) and ADOPT_PROBE_MIN_ROWS = min(8, available); UserPrincipal accepts user:v1 and user:v2; MemoryOpErrorCode "identity-already-bound" | "ledger-corrupt" | "lock-lost"; no breaking change to existing callers.
+ *            1.13.0 — MemoryOps.unimport (roll back the cards one import run created; archive-first soft delete without a registry tombstone, key freed for re-import); MemoryImportRequest.importRunId optional; MemoryOpErrorCode "lock-busy"; no breaking change to existing callers.
+ *            1.14.0 — additive complete vector-space identities, routes and degraded notes.
+ *            1.15.0 — HostServices.fetch? (HostFetch: every outbound engine HTTP request goes through it when set); SecretStore becomes resolve(ref, purpose) (lease() kept optional and deprecated; it was never called) for provider `apiKeyRef`; ProviderCredentialConfig, RemoteRerankerConfig and the reranker providers jina | voyage | remote with baseUrl/protocol; no breaking change to existing callers (the engine called no SecretStore member before 1.15.0). Also: MemoryImportRequest without importRunId attributes each card to the run its sourceRef names (`;run=<id>`); MemoryUnimportRequest.importRunId also selects such lines; MemoryUnimportResult.derived.graphEdgesRemoved? / mirrorsArchived? / cleanupErrors? (unimport drops the undone cards' graph edges and archives their Obsidian mirrors).
+ *            1.16.0 — MemoryOps.link(id, req, p, a) (owner decision 2026-10-19: attach an imported duplicate to an existing card as an additional source instead of storing a duplicate; sidecar `_links/`, the card row is never written; idempotent per sourceRef); MemoryCard.links? (show/list); MemoryUnimportResult.links? (unimport of a run unlinks that run's links, the card stays); Engine.capabilities (EngineCapabilities, `memoryLink: true`); no breaking change to existing callers.
+ */
+
+// 1.16.0: MemoryOps.link, MemoryCard.links?, MemoryUnimportResult.links?, Engine.capabilities.
+export type ContractVersion = "1.16.0";
+
+/* ------------------------------------------------------------------ */
+/* Primitives                                                          */
+/* ------------------------------------------------------------------ */
+
+/** Matches /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/ (memory-host-runtime.js:30). */
+export type AgentId = string;
+
+export type WorkspacePrincipal = `workspace:v1:${string}` | `workspace-dir:v1:${string}`;
+
+/** `user:v1:` + sha256(JSON.stringify([channel, accountId, userId])), or
+ *  from 1.12.0 `user:v2:` + sha256(harnessUserId). The v1 hash is the
+ *  on-disk pool directory name and must not change
+ *  (memory-request-context.js). */
+export type UserPrincipal = `user:v1:${string}` | `user:v2:${string}`;
+
+export type ChatKind = "direct" | "dm" | "group" | "channel";
+
+/** Open vocabulary, host-declared. Replaces the closed four-value set at
+ *  memory-request-context.js:24-25. */
+export type ChannelRef = string;
+
+export type TurnOrigin = "user" | "cron" | "subagent" | "heartbeat" | "system";
+
+export type SchemaVersion = string;
+
+export interface Disposable {
+  dispose(): void;
+}
+
+export interface Logger {
+  info(message: string, ...rest: unknown[]): void;
+  warn(message: string, ...rest: unknown[]): void;
+  error(message: string, ...rest: unknown[]): void;
+  debug(message: string, ...rest: unknown[]): void;
+}
+
+export interface Message {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Identity                                                            */
+/* ------------------------------------------------------------------ */
+
+export interface Principal {
+  agentId: AgentId;
+  workspace: WorkspacePrincipal;
+  /** Absent means the `user` ACL scope is unreachable
+   *  (acl-middleware.js:139-159). Never accepted from an untrusted host. */
+  user?: UserPrincipal;
+  channel: ChannelRef;
+  accountId: string;
+  chat: { id: string; kind: ChatKind };
+  /** "inferred" degrades every read and write to agent-private and never
+   *  throws (memory-request-context.js:1405-1417). */
+  trust: "proved" | "inferred";
+}
+
+export interface AgentContext {
+  origin: TurnOrigin;
+  /** Fail-closed: unknown means true. */
+  background: boolean;
+  jobId?: string;
+  parentRunId?: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* What the host gives the engine                                      */
+/* ------------------------------------------------------------------ */
+
+/** 1.15.0: what a resolved secret is for; passed as `purpose` to SecretStore.resolve. */
+export type SecretPurpose = "embedding" | "reranker" | "llm" | (string & {});
+
+/** 1.15.0: the host's secret store. The engine calls `resolve` for every provider config that
+ *  sets `apiKeyRef` — before `apiKeyEnv`/`apiKey`; with `apiKeyRef` set and no store (or a failed /
+ *  empty resolution) the provider fails closed, it never falls back to the environment. The value
+ *  is never logged, persisted or put into a cache key in clear (only hashed, as before); providers
+ *  keep it at most 60 s (embedding, reranker) or not at all (LLM: per call) and drop it on HTTP
+ *  401/403, so a rotated key applies without a restart. */
+export interface SecretStore {
+  /** Resolve `ref` (the configured `apiKeyRef`, a name, never the value). Reject or return "" when unknown. */
+  resolve(ref: string, purpose: SecretPurpose): Promise<string>;
+  /** @deprecated 1.15.0 — never called before 1.15.0; still honoured when `resolve` is absent. */
+  lease?(ref: string): Promise<string>;
+}
+
+/** 1.15.0: WHATWG-fetch-compatible function. The engine passes `input` as a URL string and `init` with
+ *  at least method, headers (plain object), body (string) and signal; it reads `ok`, `status`,
+ *  `headers.get()`, `text()`/`json()` and `body` (ReadableStream, for size-capped reads) of the result. */
+export type HostFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+
+/** 1.15.0: credential fields every remote provider config (embedding, embedding.routes[].provider,
+ *  reranker, feature LLM overrides) accepts. Order: apiKeyRef → apiKeyEnv → apiKey → provider default env. */
+export interface ProviderCredentialConfig {
+  /** Name in the host's secret store (HostServices.secrets). 1–256 chars of [A-Za-z0-9._:/@-]. */
+  apiKeyRef?: string;
+  /** Name of an environment variable holding the key. */
+  apiKeyEnv?: string;
+  /** Literal key, `${ENV}` reference or OpenClaw SecretInput (legacy; prefer apiKeyRef). */
+  apiKey?: string | { source: "env" | "store" | "file" | "exec"; provider: string; id: string };
+}
+
+/** 1.15.0: reranker wire formats. "cohere"/"jina": {model, query, documents, top_n} → {results}; "voyage":
+ *  {model, query, documents, top_k} → {data}; "tei": {query, texts} → [{index, score}]. All are normalised
+ *  to `[{index, relevance_score}]`. */
+export type RerankProtocol = "cohere" | "jina" | "voyage" | "tei";
+
+/** 1.15.0: `config.reranker` for the HTTP providers. Presets (default baseUrl / protocol / model / env):
+ *  cohere — https://api.cohere.com/v2, cohere, rerank-v5.0-fast (until 7.21.0 rerank-v3.5), COHERE_API_KEY;
+ *  jina — https://api.jina.ai/v1, jina, jina-reranker-v2-base-multilingual, JINA_API_KEY;
+ *  voyage — https://api.voyageai.com/v1, voyage, rerank-2.5, VOYAGE_API_KEY;
+ *  remote — no defaults: baseUrl required, protocol "cohere", key optional (keyless self-hosted servers).
+ *  The endpoint is `{baseUrl}/rerank` unless baseUrl already ends in /rerank. A failed rerank never switches
+ *  to another model unless `fallbackProvider: "local-transformers"` is set; otherwise recall runs unreranked. */
+export interface RemoteRerankerConfig extends ProviderCredentialConfig {
+  enabled?: boolean;
+  provider: "cohere" | "jina" | "voyage" | "remote";
+  baseUrl?: string;
+  protocol?: RerankProtocol;
+  model?: string;
+  candidates?: number;
+  /** Own timer only when the caller passes no signal (the recall pipeline always does). Default 5000. */
+  timeoutMs?: number;
+  /** Refuse requests with more documents. Default 1000. */
+  maxDocuments?: number;
+  /** Refuse request bodies above this size. Default 4 MiB. */
+  maxRequestBytes?: number;
+  /** Abort and fail on response bodies above this size. Default 1 MiB. */
+  maxResponseBytes?: number;
+  fallbackOnError?: boolean;
+  fallbackProvider?: "local-transformers" | "disabled";
+  fallbackModel?: string;
+  fallbackRevision?: string;
+  fallbackCacheDir?: string;
+}
+
+export interface LlmParams {
+  messages: Message[];
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+  signal?: AbortSignal;
+}
+
+export interface LlmResult {
+  text: string;
+  model?: string;
+  usage?: { inputTokens?: number; outputTokens?: number };
+}
+
+export interface PlatformCapabilities {
+  securePath(path: string, options?: { mode?: number }): SecurePathResult;
+  ipcAddress(stateRoot: string): IpcAddress;
+  isUnsafeLink(path: string): boolean;
+  canonicalIdentityPath(path: string): string;
+}
+
+export interface SecurePathResult {
+  applied: boolean;
+  reason?: "not-a-filesystem-path" | "missing" | "unsupported-platform" | "acl-tool-unavailable";
+  mechanism?: "chmod" | "acl";
+}
+
+export interface IpcAddress {
+  kind: "abstract-socket" | "unix-socket" | "named-pipe";
+  address: string;
+}
+
+/** `HostServices` is the name used in engine-extraction.md §b.2; ADR-002
+ *  calls the same interface `Host`. They are one type. */
+export interface HostServices {
+  logger: Logger;
+  /** Replaces OPENCLAW_HOME (index.js:12425). */
+  stateDir: string;
+  /** The host's config file. Replaces OPENCLAW_CONFIG_PATH reads in engine code. */
+  configPath(): string;
+  /** Loads the host's routing capability (four session/channel parsers).
+   *  Absent: turn identity degrades to the agent's own context. */
+  routing?(): Promise<unknown>;
+  /** Raw path overrides lib/ defaults honour (lib/host-paths.js); absent: ~/.openclaw. */
+  pathOverrides?: HostPathOverrides;
+  /** Host-specific construction inputs (registration mode, path resolver,
+   *  optional host features). Every one has an inert default. */
+  capabilities?: HostCapabilities;
+  /** Replaces memory-host-runtime.js:104-111. A harness agent without a real
+   *  workspace gets a synthetic one under `stateDir` (engine-extraction R7). */
+  workspaceDir(agentId: AgentId): Promise<string | undefined>;
+  config(): EngineConfig;
+  mutateConfig?(patch: Record<string, unknown>): Promise<void>;
+  llm?: { complete(params: LlmParams): Promise<LlmResult> };
+  /** 1.15.0: provider keys named by `apiKeyRef`. Absent: `apiKeyRef` fails closed. */
+  secrets?: SecretStore;
+  /** 1.15.0: carries every outbound HTTP request of the engine (embedding clients, rerankers, the engine's
+   *  own LLM calls, webhooks, model downloads). Absent: the global fetch, as before. Bound once per process
+   *  by createEngine (last engine wins, like pathOverrides). */
+  fetch?: HostFetch;
+  events?: { emit(name: string, payload: unknown): void };
+  /** Test seam; defaults to Date.now. */
+  clock?: () => number;
+  platform: PlatformCapabilities;
+  /** Host runtime escape hatch; `null` when the host exposes none. Replaces
+   *  runtimeIfUsable(api) (runtime-shutdown.js:35). */
+  runtime: HostRuntime | null;
+}
+
+export interface HostPathOverrides {
+  openclawHome?(): string | undefined;
+  configPathOverride?(): string | undefined;
+  stateDirOverride?(): string | undefined;
+}
+
+/** 1.7.0: argument of HostCapabilities.pushCriticalButtons (engine/jobs/internal-job-bodies.js). */
+export interface CriticalButtonPushArgs {
+  agentId: AgentId;
+  /** The classify-recent classifier result (pushMessages, errors, …); host-opaque. */
+  result: unknown;
+  /** The host's own command context, passed back unchanged; host-opaque. Revisited with HostRuntime in 2.0 (E6). */
+  commandCtx: unknown;
+  /** Partial-failure note for the last card; "" when there is none. */
+  warning: string;
+}
+/** `sent` cards went out with buttons; `unsentTexts` go out as plain cron text; `reason` is host-defined. */
+export interface CriticalButtonPushResult { sent: number; unsentTexts: string[]; reason?: string }
+
+/** 1.8.0: what the host knows about turns it journaled while the engine was unavailable. */
+export interface JournalBacklog { entries: number; oldestAt: number | null }
+
+export interface HostCapabilities {
+  resolvePath?(path: string): string;
+  registrationMode?: string;
+  /** 1.5.0: where MemoryOps forget/correct write archive-first backups; read per call. Default `<stateDir>/memory/_archive`. */
+  memoryArchiveDir?(): string;
+  /** 1.7.0: deliver Critical Push cards with accept/reject buttons. `null`, `sent === 0`, or no `unsentTexts`
+   *  array → the engine replies with the plain cron text (as it does when the capability is absent or throws);
+   *  `unsentTexts: []` with `sent > 0` → NO_REPLY (every card went out with buttons). */
+  pushCriticalButtons?(args: CriticalButtonPushArgs): Promise<CriticalButtonPushResult | null>;
+  /** 1.8.0: read by Engine.status(); absent, throwing, invalid or slower than 50 ms → `EngineStatus.journal: null`. */
+  journalBacklog?(): JournalBacklog | null | Promise<JournalBacklog | null>;
+  /** 1.10.0: host has scheduled the post-turn-refine drain. Absent or false → capture runs light-dream/episodes inline. */
+  postTurnRefineScheduled?: boolean;
+  [capability: string]: unknown;
+}
+
+export interface HostRuntime {
+  config?: { current?(): unknown; mutateConfigFile?(...args: unknown[]): unknown };
+  agent?: {
+    resolveAgentWorkspaceDir?(config: unknown, agentId: AgentId): Promise<string> | string;
+    session?: { getSessionEntry?(query: unknown): unknown };
+  };
+  llm?: { complete?(params: unknown): Promise<unknown> };
+}
+
+/** The keys of openclaw.plugin.json configSchema. Kept open in 1.0.0 so
+ *  the contract does not have to move every time a key is added; see
+ *  engine/config/engine-config.schema.json for the current shape. */
+export interface EngineConfig {
+  [key: string]: unknown;
+}
+
+/* ------------------------------------------------------------------ */
+/* Engine config schema (1.9.0)                                       */
+/* ------------------------------------------------------------------ */
+
+/** 1.9.0: when the engine reads a config value. construction: from createEngine's `config` argument, once — a change
+ *  needs a new engine. live: per operation through HostServices.config() (engine/config/live-config.js). */
+export type EngineConfigReadAt = "construction" | "live";
+export type EngineConfigTier = "basic" | "advanced";
+/** A node of engine/config/engine-config.schema.json (JSON Schema 2020-12 plus three annotations). */
+export interface EngineConfigSchemaNode {
+  type?: string | string[];
+  default?: unknown;
+  description?: string;
+  /** Required on every top-level key; a nested node may override its parent. */
+  readAt?: EngineConfigReadAt;
+  "x-tier"?: EngineConfigTier;
+  /** true on values every surface must mask/redact (credentials, `*.headers`, `reminders.webhookUrl`). Not the
+   *  manifest's secretInputs: those are the nodes whose `$ref` is `#/$defs/secretInput` (a subset). */
+  "x-sensitive"?: boolean;
+  properties?: Record<string, EngineConfigSchemaNode>;
+  [keyword: string]: unknown;
+}
+export interface EngineConfigSchema extends EngineConfigSchemaNode {
+  $schema: "https://json-schema.org/draft/2020-12/schema";
+  $id: "plur1bus-engine-config";
+  "x-contract": ContractVersion;
+  properties: Record<string, EngineConfigSchemaNode & { description: string; readAt: EngineConfigReadAt; "x-tier": EngineConfigTier }>;
+}
+/** One top-level key as engineConfigKeys() reports it. */
+export interface EngineConfigKey {
+  key: string;
+  type: string | string[] | null;
+  default?: unknown;
+  description: string;
+  readAt: EngineConfigReadAt;
+  /** Paths below this key whose readAt differs from the key's own (none in 1.9.0; hosts re-read HOST_REREAD_PATHS separately). */
+  liveOverrides: string[];
+  tier: EngineConfigTier;
+  /** true when the key or any path below it is x-sensitive. */
+  sensitive: boolean;
+}
+
+/* ------------------------------------------------------------------ */
+/* Recall                                                              */
+/* ------------------------------------------------------------------ */
+
+export type ContextBlockName = "neo" | "start" | "memories" | "time" | "temporal" | "reminder" | (string & {});
+
+export interface ContextBlock {
+  name: ContextBlockName;
+  text: string;
+  droppable: boolean;
+  /** `text.length`. */
+  chars: number;
+  tokensEstimate?: number;
+}
+
+export interface RecallBudget {
+  softMs: number;
+  hardMs: number;
+  capChars: number;
+}
+
+/** Call-local overrides. Omitted settings use the configured engine behavior. */
+export interface RecallOptions {
+  /** "on" uses the configured provider; if absent, recall continues with a diagnostic. */
+  reranker?: "on" | "off";
+}
+
+/** Non-fatal, closed-code explanation of an unavailable requested option. */
+export type PerCallDiagnostic =
+  | { feature: "reranker"; reason: "reranker-not-configured"; fallback: "unreranked" }
+  | { feature: "postTurnLlm"; reason: "post-turn-refine-unscheduled"; fallback: "inline" };
+
+export interface RecallQuery {
+  query: string;
+  principal: Principal;
+  agent: AgentContext;
+  budget?: Partial<RecallBudget>;
+  /** MANDATORY from PR-05. Fixes host-contract §f.1. */
+  signal: AbortSignal;
+  compactedAt?: number | null;
+  previousUserTurnAt?: number | null;
+  validAt?: string;
+  /** 1.9.0: run only the read-only heavy path (neo prelude reads, query embedding, read-only store open, vector search,
+   *  rerank) and answer { blocks: [], degraded: null, timing } on success. Writes no memory data, no store, no file and
+   *  no persistent embedding-cache row (embeds are memory-only, E5-R26), emits no event, never uses or fills the recall
+   *  cache, never calls an LLM, runs at background (low, evictable) priority. It warms in-memory caches (the provider's
+   *  embedding cache, loaded models, the neo worker); a cold local model cache still downloads model files, as any
+   *  first model load does. A warm recall can also answer blocks [] with degraded "warm-failed" (the warm path failed),
+   *  "aborted", "timeout", "queue-full" or "pressure" (shed at background priority), or "engine-closed"; a workspace
+   *  whose policy disables memory answers an empty success. */
+  warmOnly?: boolean;
+}
+
+/** Canonical vector-space identity; credentials and transport are excluded. */
+export interface VectorSpaceIdentity {
+  provider: string;
+  model: string;
+  revision: string;
+  dimension: number;
+  normalization: string;
+  prefixScheme: string;
+  instruction: string;
+  dtype: string;
+  artifacts?: readonly { path: string; sha256: string }[];
+  tokenCap?: number | null;
+  pooling?: string;
+}
+
+export interface Degraded {
+  reason: string;
+  capability: string;
+  detail?: string;
+  identities?: { identityId: string; code: string }[];
+}
+
+export interface DecisionTrace {
+  [key: string]: unknown;
+}
+
+/** A block the host's joiner clipped or dropped to fit `capChars`. */
+export interface Deferral {
+  block: ContextBlockName;
+  kind: "clipped" | "dropped";
+  from: number;
+  to: number;
+  reason: "global-cap" | "memories-cap";
+}
+
+/** 1.9.0: `totalMs` runs from `Engine.recall` entry (for the OpenClaw hook path: assembler entry); `phases.completed`
+ *  begins with `entry` (Engine.recall only), `queue` and `prelude`. */
+export interface RecallTiming {
+  phases: Record<string, unknown> | null;
+  totalMs: number;
+  namespacePhases?: Array<{ namespace: string; phase: string; ms: number }>;
+}
+
+export interface RecallResult {
+  diagnostics?: PerCallDiagnostic[];
+  blocks: ContextBlock[];
+  /** Non-finite (Infinity) on the exits that inject an uncapped join. */
+  capChars: number;
+  /** null means not degraded. Structured, never a bare boolean (B8). */
+  degraded: Degraded | null;
+  trace?: DecisionTrace;
+  timing: RecallTiming;
+  deferrals: Deferral[];
+}
+
+/* ------------------------------------------------------------------ */
+/* Capture and checkpoint                                              */
+/* ------------------------------------------------------------------ */
+
+export interface TurnRecord {
+  agentId: AgentId;
+  principal: Principal;
+  agent: AgentContext;
+  messages: Message[];
+  runId?: string;
+  sessionKey?: string;
+  /** Classified by the host, fail-closed. */
+  incognito: boolean;
+  signal: AbortSignal;
+}
+
+/** Call-local refinement scheduling; true requires postTurnRefineScheduled, otherwise inline + diagnostic. */
+export interface CaptureOptions {
+  deferPostTurnLlm?: boolean;
+}
+
+export interface CaptureResult {
+  diagnostics?: PerCallDiagnostic[];
+  stored: number;
+  skipped: number;
+  /** "duplicate-turn": the same turn was already captured (Q3, E4). */
+  reason?: string;
+}
+
+/** Non-blocking by contract (B8, ADR-002 "capture returns in < 5 ms"): the
+ *  caller gets the handle immediately and may await `done` or abandon it. */
+export interface CaptureHandle {
+  id: string;
+  acceptedAt: number;
+  done: Promise<CaptureResult>;
+  abort(reason?: string): void;
+}
+
+export type CheckpointReason = "compaction" | "session-end" | "shutdown" | "manual";
+
+export interface CheckpointResult {
+  agentId: AgentId;
+  reason: CheckpointReason;
+  /** Idempotency key over the transcript digest. */
+  digest: string;
+  written: boolean;
+}
+
+/* ------------------------------------------------------------------ */
+/* Jobs                                                                */
+/* ------------------------------------------------------------------ */
+
+export type JobName =
+  | "persona-evolve" | "afterthought" | "consolidate-daily" | "auto-accept-stale"
+  | "embedding-drain" | "emotion-refine" | "post-turn-refine" | "classify-recent" | "rem-dream"
+  | "skill-miner" | "discover-semantic-links" | "gc-run"
+  | "reminder-dispatch" | "feedback-report" | "proactive-check" | "meta-reflect"
+  | "skill-benefit-backfill" | "episodes-rebuild"
+  | "light-dream";
+
+export interface JobSpec {
+  name: JobName;
+  needsLlm: boolean;
+  singleton: boolean;
+  defaultSchedule?: { kind: "cron" | "every"; expr: string; timezone?: string };
+  phase?: "light" | "rem" | "deep";
+}
+
+export type JobOutcome = "completed" | "skipped" | "incomplete" | "failed" | "abandoned";
+
+/** "unknown" only on a crash row recovered from a corrupt start marker (1.4.1). */
+export type JobTrigger = "cron" | "manual" | "harness" | "capture" | "unknown";
+
+export interface JobCost {
+  ms: number;
+  provider?: string;
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+}
+
+export interface JobRun {
+  runId: string;
+  job: JobName;
+  phase: "light" | "rem" | "deep" | null;
+  agentId: AgentId;
+  trigger: JobTrigger;
+  startedAt: number;
+  finishedAt: number;
+  durationMs: number;
+  outcome: JobOutcome;
+  reason?: string;
+  attempt: number;
+  cost: JobCost;
+  counts: Record<string, number>;
+  idempotencyKey?: string;
+  keys?: string[];
+  pendingKeys?: string[];
+  diary?: { written: boolean; reason?: string };
+  migrated?: boolean;
+}
+
+export interface JobRegistry {
+  list(): JobSpec[];
+  /** `signal` is observed before start only (an already-aborted call is a
+   *  recorded skip, reason "aborted"). `dryRun` is not supported in M1b-1:
+   *  it resolves skipped/"dry_run_unsupported" without running or writing a
+   *  ledger row. */
+  run(job: JobName, agentId: AgentId, opts?: { signal?: AbortSignal; trigger?: JobTrigger; dryRun?: boolean }): Promise<JobRun>;
+  history(agentId: AgentId, opts?: { job?: JobName; since?: number; limit?: number }): Promise<JobRun[]>;
+}
+
+/* ------------------------------------------------------------------ */
+/* Embedding                                                           */
+/* ------------------------------------------------------------------ */
+
+export interface EmbeddingIdentity {
+  fingerprintId: string;
+  provider: string;
+  model: string;
+  dimensions: number;
+  /** 1.14.0: full vector-space identity for routing and cache isolation. */
+  space?: VectorSpaceIdentity;
+}
+
+export interface RerankHit {
+  index: number;
+  score: number;
+}
+
+export type EmbeddingProbeError = "aborted" | "provider-failed" | "invalid-vector" | "dimension-mismatch";
+export interface EmbeddingProbeResult {
+  /** The provider returned a finite vector of `identity.dimensions`: the model is loaded and ready. */
+  ok: boolean;
+  error?: EmbeddingProbeError;
+  /** true: the memoized result of an earlier successful probe of this engine; no provider call was made. */
+  cached: boolean;
+  identity: EmbeddingIdentity;
+  /** Provider call time of the probe that produced this result. */
+  durationMs: number;
+  /** Clock time (host.clock) when that probe finished. */
+  checkedAt: number;
+}
+/** The values a client must put into the IPC envelope next to the token. */
+export interface EmbeddingEnvelopeIdentity { model: string; dimensions: number; fingerprintId: string }
+export interface EmbeddingServeResult extends Disposable {
+  /** The bound address; null after serve(null) (in-process only). */
+  address: IpcAddress | null;
+  /** Where the 0600 token file lives; null when not serving. The token itself is never returned. */
+  tokenPath: string | null;
+  identity: EmbeddingEnvelopeIdentity | null;
+}
+
+/**
+ * probe(): exercises the provider once (a query embed of a fixed probe text with a per-engine nonce, so a
+ * persisted embedding cache cannot answer it) and memoizes a successful result; concurrent calls share one
+ * provider call; `refresh: true` forces a new provider call (queued behind a call already in flight, never
+ * answered by it). Never rejects for a provider failure (the result says `ok: false`) and has no timeout of its
+ * own: callers should pass a `signal` (the harness warm-up does); rejects with MemoryOpError `storage`
+ * ("engine is closed") after close().
+ * serve(address): starts the engine's scoped-embedding IPC server on `address` (omitted → the platform default,
+ * `host.platform.ipcAddress(<baseDbPath>/control/embedding-ipc)`), without the loopback claim listener
+ * (ADR-001 C1). Idempotent for the address already served (same result object); `null` stops serving and resolves
+ * `{ address: null, tokenPath: null, identity: null }` (in-process only). `dispose()` stops that server if it is
+ * still the served one (fire and forget). close() stops serving. Rejects with MemoryOpError: `invalid-input`
+ * (malformed address, a kind the platform does not use, an unsafe socket directory), `conflict` (another address
+ * already served, the address in use, the host lifecycle owns the IPC, the engine is an IPC client),
+ * `storage` (closed, or the listener failed to start).
+ */
+export interface EmbeddingService {
+  embed(texts: string[], o: { kind: "query" | "passage"; identity: EmbeddingIdentity; signal: AbortSignal }): Promise<Float32Array[]>;
+  rerank(query: string, docs: string[], o: { topN: number; signal: AbortSignal }): Promise<RerankHit[]>;
+  probe(opts?: { signal?: AbortSignal; refresh?: boolean }): Promise<EmbeddingProbeResult>;
+  identities(): EmbeddingIdentity[];
+  serve(address?: IpcAddress | null): Promise<EmbeddingServeResult>;
+}
+
+/* ------------------------------------------------------------------ */
+/* Models (1.8.0)                                                      */
+/* ------------------------------------------------------------------ */
+
+export type ModelState = "loading" | "ready" | "failed" | "disabled";
+export type RerankerProbeError = "aborted" | "provider-failed" | "invalid-result";
+export interface ModelReadiness {
+  /** loading: not confirmed yet (checkedAt null) or first probe running; the embedder is never "disabled". */
+  state: ModelState;
+  /** true while a probe is in flight. */
+  warming: boolean;
+  /** Clock time of the completed probe that set `state`; null before any, and when disabled. */
+  checkedAt: number | null;
+  /** Only when state === "failed". */
+  error?: EmbeddingProbeError | RerankerProbeError;
+}
+export interface ModelsStatus {
+  embedder: ModelReadiness & { identity: EmbeddingIdentity };
+  reranker: ModelReadiness & { provider: string | null };
+}
+/** warm(): probes embedder and reranker concurrently (embedding.probe semantics: coalesced, memoized on success,
+ *  `refresh` forces new provider calls, `signal` ends only this caller's wait) and resolves the status afterwards.
+ *  Never rejects for a provider failure; rejects MemoryOpError `storage` ("engine is closed") after close(). */
+export interface ModelsService {
+  status(): ModelsStatus;
+  warm(opts?: { signal?: AbortSignal; refresh?: boolean }): Promise<ModelsStatus>;
+}
+
+/* ------------------------------------------------------------------ */
+/* Tools, commands, admin, events                                      */
+/* ------------------------------------------------------------------ */
+
+export interface ToolSpec {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+}
+
+export interface CommandSpec {
+  name: string;
+  description: string;
+  acceptsArgs: boolean;
+}
+
+export interface CommandResult {
+  text?: string;
+  details?: Record<string, unknown>;
+}
+
+/** @deprecated 1.6.0: `ShareResult`/`ForgetResult` are the MemoryOps result types; removed with 2.0 (E6). */
+export type ShareResult = MemoryShareResult;
+export type ForgetResult = MemoryForgetResult;
+/** `applied` is false when `from === to`. Both are decimal strings ("0" = a store written before any marker existed). */
+export interface MigrationResult { from: SchemaVersion; to: SchemaVersion; applied: boolean }
+
+export interface ObsidianVaultCandidate {
+  /** Absolute, normalised path. Input may be `~/…` or home-relative; the engine expands it. */
+  path: string;
+  /** `.obsidian/workspace.json` or `.obsidian/app.json` exists. */
+  isVault: boolean;
+  /** A confirmation receipt for this agent, workspace and vault exists (lib/obsidian-vault-authority.js). */
+  confirmed: boolean;
+  source: "config" | "workspace" | "candidate";
+}
+export interface ObsidianDetectResult { agentId: AgentId; vaults: ObsidianVaultCandidate[] }
+export interface ObsidianPrepareResult { nonce: string; expiresAt: number; vaultPath: string; vaultDigest: string }
+export interface ObsidianConfirmResult { confirmed: true; vaultPath: string; vaultDigest: string; alreadyConfirmed: boolean }
+
+/**
+ * Host-neutral Obsidian setup: explicit paths, no host runtime. `prepare` and `confirm` are
+ * user-originated (`a.origin === "user"`, `a.background === false`) and need a proved principal
+ * with a user; the nonce expires after 10 minutes and is consumed by the first `confirm`.
+ * Every member rejects with MemoryOpError (`not-found`, `denied`, `invalid-input`, `storage`).
+ */
+export interface ObsidianOps {
+  detect(p: Principal, a: AgentContext, opts?: { candidates?: string[] }): Promise<ObsidianDetectResult>;
+  prepare(vaultPath: string, p: Principal, a: AgentContext): Promise<ObsidianPrepareResult>;
+  confirm(nonce: string, p: Principal, a: AgentContext): Promise<ObsidianConfirmResult>;
+}
+
+export interface AdminOps {
+  /** @deprecated 1.6.0: alias of `Engine.memory.share`; removed with 2.0 (E6). */
+  share(id: string, target: "workspace" | "user", p: Principal, a: AgentContext, opts?: { allowSensitive?: boolean }): Promise<MemoryShareResult>;
+  /** @deprecated 1.6.0: alias of `Engine.memory.forget`; removed with 2.0 (E6). */
+  forget(id: string, p: Principal, a: AgentContext): Promise<MemoryForgetResult>;
+  reembedding: {
+    plan(): Promise<unknown>; apply(): Promise<unknown>; resume(): Promise<unknown>;
+    rollback(): Promise<unknown>; status(): Promise<unknown>; switch(): Promise<unknown>;
+  };
+  workspacePolicy: { get(): Promise<unknown>; list(): Promise<unknown>; set(patch: unknown): Promise<unknown> };
+  obsidian: ObsidianOps;
+  /** Store schema migration (E2, variant a). Rejects with MemoryOpError: `conflict` when `from` is not the store's
+   *  current version, `invalid-input` for an unknown or downgrading `to`, `storage` when the marker is unreadable. */
+  migrate(from: SchemaVersion, to: SchemaVersion): Promise<MigrationResult>;
+}
+
+/** Reason codes a MemoryOps call can fail with. `not-found` also covers
+ *  "exists but you may not see it" and "tombstoned" (anti-oracle). */
+export type MemoryOpErrorCode =
+  | "not-found" | "denied" | "invalid-input" | "approval-required"
+  | "conflict" | "storage"
+  /** 1.8.0: the operation needs a capability this engine does not have on this platform (e.g. shared memory). */
+  | "unsupported"
+  /** 1.12.0: rebind of a channel identity that is already mapped to a different user. */
+  | "identity-already-bound"
+  /** 1.12.0: the `_rebinds/<id>.jsonl` sidecar has no complete line and was quarantined. */
+  | "ledger-corrupt"
+  /** 1.12.0: the exclusive `_rebinds/.lock` no longer carries our nonce; finish later via the sidecar.
+   *  1.13.0: also `unimport` when the per-agent import lock no longer carries our nonce; a rerun converges. */
+  | "lock-lost"
+  /** 1.13.0: `unimport` apply could not take the per-agent import lock in time (an import or unimport of that agent is running). Nothing was written. */
+  | "lock-busy"
+  | "EMBEDDER_UNAVAILABLE"
+  | "EMBEDDING_IDENTITY_MISMATCH";
+
+/** Thrown by every MemoryOps member on failure; `code` is stable, `message` is English and log-safe. */
+export interface MemoryOpError extends Error {
+  readonly code: MemoryOpErrorCode;
+  /** 1.6.0: non-secret ids a caller needs to recover (e.g. a half-finished shared-copy refresh). */
+  readonly detail?: Readonly<Record<string, string>>;
+}
+
+export type MemoryScope = "agent-private" | "workspace" | "user";
+
+export interface MemoryCard {
+  id: string;
+  scope: MemoryScope;
+  text: string;
+  summary: string;
+  createdAt: number | null;
+  origin: string | null;
+  epistemicStatus: string | null;
+  /** Present on list results from a topic query; absent on show. */
+  score?: number;
+  /** 1.6.0, only on workspace/user copies: the sharing agent and its original card. */
+  sharedBy?: AgentId;
+  sourceId?: string;
+  /** 1.11.0: set when the card was written by `memory.import`. */
+  provenance?: "imported";
+  /** 1.11.0: import source reference, truncated to ≤ 500 characters before store. */
+  sourceRef?: string;
+  /** 1.16.0: additional sources attached by `memory.link` (oldest first); absent when there are none.
+   *  Recorded per agent: only the linking agent's show/list report them. */
+  links?: MemoryLink[];
+}
+
+/** 1.16.0: one additional source of a card, attached by `memory.link`. */
+export interface MemoryLink {
+  /** Deterministic over (agentId, card id, sourceRef); 32 hex characters. */
+  linkId: string;
+  sourceRef: string;
+  provenance: MemoryImportProvenance;
+  /** The import run the link belongs to (explicit, or named in the sourceRef as `;run=<id>`); null when none. */
+  importRunId: string | null;
+  /** Epoch ms. */
+  linkedAt: number;
+}
+
+/** 1.16.0: argument of `MemoryOps.link`. */
+export interface MemoryLinkRequest {
+  /** 1–500 characters after trim (longer is `invalid-input`, never truncated: it is the idempotency key). */
+  sourceRef: string;
+  provenance: MemoryImportProvenance;
+  /** `/^[A-Za-z0-9_-]{1,64}$/`. Absent: the run named in `sourceRef` (`;run=<id>`, rules as for import), else none. */
+  importRunId?: string;
+  /** The importer's key for the duplicate card (1–256); `unimport`'s `idempotencyKeys` filter matches it. */
+  idempotencyKey?: string;
+  /** Default false. True: checks and classifies, writes nothing, takes no lock. */
+  dryRun?: boolean;
+}
+
+/** `linked`: a new link was written. `already-linked`: this sourceRef is already linked (no-op; `importRunId` is the
+ *  existing link's run). `already-source`: the card was itself imported from this sourceRef (no-op, `importRunId` null). */
+export type MemoryLinkOutcome = "linked" | "already-linked" | "already-source";
+
+export interface MemoryLinkResult {
+  id: string;
+  linkId: string;
+  outcome: MemoryLinkOutcome;
+  importRunId: string | null;
+  dryRun: boolean;
+}
+
+export interface MemoryListQuery {
+  /** Topic query (vector search, best first). Exactly one of `topic` and `since` is required. */
+  topic?: string;
+  /** Epoch ms lower bound for a time listing (newest first). */
+  since?: number;
+  /** Epoch ms upper bound; only with `since`, and not before it. Default: now. */
+  until?: number;
+  /** Default 20, maximum 100. */
+  limit?: number;
+}
+
+export interface MemoryListResult { agentId: AgentId; items: MemoryCard[]; truncated: boolean }
+export interface MemoryForgetResult { id: string; archived: boolean; tombstoneId: string | null; alreadyForgotten: boolean }
+/** `id` is the id of the corrected (new, live) version — `correct` supersedes the old row, and the caller's old id is no longer live (fix round 1, E1-R8). */
+export interface MemoryCorrectResult { id: string; archived: true }
+export interface MemoryShareResult { sourceId: string; sharedId: string; target: "workspace" | "user" }
+export interface MemoryState {
+  agentId: AgentId;
+  cards: { agentPrivate: number | null; workspace: number | null; user: number | null };
+  /** `null` means the tombstone registry was unreadable, never "zero tombstones". */
+  tombstones: number | null;
+  /** The archive root (e.g. `<stateDir>/memory/_archive`); per-agent archives land in `<archiveDir>/<agentId>/`. */
+  archiveDir: string;
+}
+
+export type MemoryProposalStatus = "pending" | "accepted" | "rejected" | "stale";
+export interface MemoryProposal {
+  id: string;
+  /** The shared copy the proposal was filed against and the sharer's original behind it. */
+  sharedId: string;
+  sourceId: string;
+  target: "workspace" | "user";
+  sharerAgentId: AgentId;
+  proposerAgentId: AgentId;
+  oldText: string;
+  newText: string;
+  note: string | null;
+  createdAt: number;
+  status: MemoryProposalStatus;
+  resolvedAt: number | null;
+  /** accepted: the id of the refreshed shared copy. */
+  resultId: string | null;
+  resolutionNote: string | null;
+}
+export interface MemoryProposeResult { proposalId: string; sharedId: string; sharerAgentId: AgentId }
+export interface MemoryProposalListQuery { status?: MemoryProposalStatus; /** Default 20, maximum 100. */ limit?: number }
+export interface MemoryProposalListResult {
+  agentId: AgentId;
+  /** Proposals the agent filed or received, newest first. */
+  items: MemoryProposal[];
+  truncated: boolean;
+  /** Proposal files that could not be parsed; never silently dropped. */
+  unreadable: number;
+}
+/** `id` is the refreshed shared copy, `sourceId` the corrected original (both new ids). */
+export interface MemoryProposalAcceptResult { proposalId: string; id: string; sourceId: string }
+export interface MemoryProposalRejectResult { proposalId: string; status: "rejected" }
+
+export interface MemoryProposalEvent {
+  proposalId: string;
+  status: MemoryProposalStatus;
+  sharerAgentId: AgentId;
+  proposerAgentId: AgentId;
+  sharedId: string;
+}
+
+/**
+ * Every member rejects with MemoryOpError `storage` ("engine is closed") after `Engine.close()`.
+ * `list` and `show` read the agent-private pool plus the workspace and user pools the principal can reach.
+ * `forget`, `correct` and `share` act on the caller's own agent-private cards. On a shared (workspace/user)
+ * copy (D31): `forget` by the sharing agent retracts the copy (archive-first, soft delete; `tombstoneId` is
+ * null because the original stays live); `correct` by the sharing agent refreshes it (corrects the original,
+ * shares the new version, then retracts the old copy; the result id is the new copy); any other agent answers
+ * `denied` and files `propose` instead; `share` of a copy is always `denied`. Proposals never change a memory
+ * until the sharer calls `proposals.accept`. A proposal belongs to the shared pool of its copy: `proposals.*`
+ * reach it only through a principal that can reach that pool (otherwise `list` omits it and `accept`/`reject`
+ * answer `not-found`).
+ */
+export interface MemoryOps {
+  list(q: MemoryListQuery, p: Principal, a: AgentContext): Promise<MemoryListResult>;
+  show(id: string, p: Principal, a: AgentContext): Promise<MemoryCard>;
+  forget(id: string, p: Principal, a: AgentContext): Promise<MemoryForgetResult>;
+  correct(id: string, newText: string, p: Principal, a: AgentContext): Promise<MemoryCorrectResult>;
+  /** `allowSensitive` is the caller's explicit confirmation after an `approval-required` refusal. */
+  share(id: string, target: "workspace" | "user", p: Principal, a: AgentContext, opts?: { allowSensitive?: boolean }): Promise<MemoryShareResult>;
+  state(p: Principal, a: AgentContext): Promise<MemoryState>;
+  /** File a change proposal against a shared copy the caller can read but does not own (`a.origin === "user"`). */
+  propose(sharedId: string, newText: string, p: Principal, a: AgentContext, opts?: { note?: string }): Promise<MemoryProposeResult>;
+  proposals: {
+    list(q: MemoryProposalListQuery, p: Principal, a: AgentContext): Promise<MemoryProposalListResult>;
+    /** Sharer only (anyone else: `not-found`). Refreshes the copy with the proposal's text. */
+    accept(proposalId: string, p: Principal, a: AgentContext): Promise<MemoryProposalAcceptResult>;
+    reject(proposalId: string, p: Principal, a: AgentContext, opts?: { note?: string }): Promise<MemoryProposalRejectResult>;
+  };
+  /**
+   * 1.11.0: ingest finished cards (text + provenance + source timestamp) without
+   * the live-store LLM merge. `p` is the operator; `req.principal` is the card
+   * ACL binding. Requires `a.origin === "system"` and `a.background === false`.
+   * At most 500 cards per call.
+   */
+  import(req: MemoryImportRequest, p: Principal, a: AgentContext): Promise<MemoryImportResult>;
+  /**
+   * 1.12.0: attach user-scope cards of one channel identity to a harness user.
+   * `dryRun` defaults to true. Requires `a.origin === "system"` and
+   * `a.background === false`. Counters only; no card text or raw identity keys.
+   */
+  rebind(req: MemoryRebindRequest, p: Principal, a: AgentContext): Promise<MemoryRebindResult>;
+  /**
+   * 1.12.0: restore the owner bindings recorded under `req.rebindId`.
+   * Cards written after that rebind are left alone. `dryRun` defaults to false.
+   */
+  unbind(req: MemoryUnbindRequest, p: Principal, a: AgentContext): Promise<MemoryUnbindResult>;
+  /**
+   * 1.13.0: roll back the cards `import` created under `req.importRunId` for
+   * `req.agentId`. `dryRun` defaults to true. Requires `a.origin === "system"`
+   * and `a.background === false`. Ids, keys, counters and reason codes only.
+   */
+  unimport(req: MemoryUnimportRequest, p: Principal, a: AgentContext): Promise<MemoryUnimportResult>;
+  /**
+   * 1.16.0: attach an additional source to the existing card `id` (an imported
+   * card that duplicates it) without changing its text, vector or row.
+   * Requires `a.origin === "system"` and `a.background === false` (`denied`).
+   * The card must be one the caller can `show`; otherwise `not-found` (also
+   * for an unknown id). Idempotent per sourceRef. Apply takes the per-agent
+   * import lock (`lock-busy` / `lock-lost`); more than 100 links on one card is
+   * `conflict`. Audit line `memory.linked`.
+   */
+  link(id: string, req: MemoryLinkRequest, p: Principal, a: AgentContext): Promise<MemoryLinkResult>;
+}
+
+export interface MemoryRebindFromIdentity {
+  /** Channel name, e.g. "telegram". */
+  channel: ChannelRef;
+  /** Opaque channel user id (the third v1-hash tuple member). */
+  identityKey: string;
+  /** Bot account id; omitted → `"default"`, matching live capture. */
+  accountId?: string;
+}
+
+export interface MemoryRebindRequest {
+  agentId: AgentId;
+  fromIdentity: MemoryRebindFromIdentity;
+  /** Harness user id; hashed to `user:v2:` by the engine. */
+  toUser: string;
+  /** Defaults to true. Writes only when explicitly `false`. */
+  dryRun?: boolean;
+  signal?: AbortSignal;
+}
+
+export interface MemoryRebindResult {
+  rebindId: string;
+  matched: number;
+  rebound: number;
+  skipped: number;
+  dryRun: boolean;
+}
+
+export interface MemoryUnbindRequest {
+  rebindId: string;
+  dryRun?: boolean;
+  signal?: AbortSignal;
+}
+
+export interface MemoryUnbindResult {
+  rebindId: string;
+  matched: number;
+  unbound: number;
+  skipped: number;
+  skippedModified: number;
+  dryRun: boolean;
+}
+
+export type MemoryImportProvenance = "imported";
+export type MemoryImportOutcome = "created" | "matched-existing" | "rejected";
+
+export interface MemoryImportCardInput {
+  /** Stable caller key; a second call with the same key and agent is a resume. */
+  idempotencyKey: string;
+  text: string;
+  /** Mapped onto `MemoryCard` category; omitted → auto-categorise. */
+  kind?: string;
+  createdAt?: number;
+  provenance: MemoryImportProvenance;
+  /** Truncated to ≤ 500 characters before store. */
+  sourceRef?: string;
+  scope?: MemoryScope;
+}
+
+export interface MemoryImportRequest {
+  agentId: AgentId;
+  /** Card ACL binding (A1). Must share `agentId` with `p` and `req.agentId`. */
+  principal: Principal;
+  cards: MemoryImportCardInput[];
+  dryRun?: boolean;
+  signal?: AbortSignal;
+  /** 1.13.0: `/^[A-Za-z0-9_-]{1,64}$/`. Recorded on every ledger line this call writes; `unimport` selects by it.
+   *  1.15.0: when absent, a card whose `sourceRef` carries exactly one segment `;run=<id>` (same pattern,
+   *  sourceRef shorter than the 500-char cap) is recorded under that run, with its digest. */
+  importRunId?: string;
+}
+
+export type MemoryImportRejectReason =
+  | "invalid-input"
+  | "tombstone-blocked"
+  | "principal-unresolved"
+  | "empty-text"
+  | "provenance-not-imported"
+  | "previously-imported-deleted"
+  | "aborted"
+  | "storage";
+
+export interface MemoryImportCardResult {
+  idempotencyKey: string;
+  outcome: MemoryImportOutcome;
+  /** Set on created and matched-existing. Omitted on dry-run created. */
+  id?: string;
+  /**
+   * Machine-stable; never card text.
+   * `already-imported` / `duplicate-in-batch` only with matched-existing.
+   */
+  reason?: MemoryImportRejectReason | "already-imported" | "duplicate-in-batch";
+}
+
+export interface MemoryImportResult {
+  agentId: AgentId;
+  dryRun: boolean;
+  created: number;
+  matchedExisting: number;
+  rejected: number;
+  cards: MemoryImportCardResult[];
+}
+
+/* ------------------------------------------------------------------ */
+/* Import rollback (1.13.0)                                            */
+/* ------------------------------------------------------------------ */
+
+export interface MemoryUnimportRequest {
+  agentId: AgentId;
+  /** Required; selects the `_imports/` ledger lines of this run: written with this `importRunId`, or
+   *  (1.15.0) without one but with a `sourceRef` carrying the segment `;run=<importRunId>`. */
+  importRunId: string;
+  /** Optional narrowing filter (≤ 500); never widens the selection. */
+  idempotencyKeys?: string[];
+  /** Defaults to true. Writes only when explicitly `false`. */
+  dryRun?: boolean;
+  /** Also undo cards kept as `content-changed`, `metadata-changed` or `edited`. Never `superseded`, `shared`, `rebound`, `binding-changed`, `other-run`, forgotten or missing cards. */
+  force?: boolean;
+  /** Optional card ACL binding used at import; its workspace/user pools are searched for shared copies too. Must share `agentId`. */
+  principal?: Principal;
+  signal?: AbortSignal;
+}
+
+export type MemoryUnimportOutcome =
+  | "unimported"
+  | "kept-modified"
+  | "already-forgotten"
+  | "already-unimported"
+  | "missing"
+  | "failed";
+
+export type MemoryUnimportKeptReason =
+  | "superseded"
+  | "content-changed"
+  | "binding-changed"
+  | "metadata-changed"
+  | "edited"
+  | "shared"
+  | "rebound"
+  /** The key's latest import line belongs to another run (re-imported after this run's rollback); never forceable. */
+  | "other-run";
+
+export interface MemoryUnimportCardResult {
+  idempotencyKey: string;
+  id: string;
+  outcome: MemoryUnimportOutcome;
+  /** `kept-modified`: the kept reason. `failed`: "storage" | "aborted". */
+  reason?: MemoryUnimportKeptReason | "storage" | "aborted";
+}
+
+export interface MemoryUnimportResult {
+  agentId: AgentId;
+  importRunId: string;
+  dryRun: boolean;
+  /** Cards attributed to this run (after the key filter). */
+  selected: number;
+  unimported: number;
+  keptModified: number;
+  alreadyForgotten: number;
+  alreadyUnimported: number;
+  missing: number;
+  failed: number;
+  /** Selected cards not visited in this call (abort). A rerun visits them. */
+  remaining: number;
+  cards: MemoryUnimportCardResult[];
+  /** Derivation-capable jobs with a run that finished after the earliest selected import.
+   *  1.15.0, apply only (absent on dryRun or when nothing was undone): graph edges of the undone
+   *  cards removed from the canonical neo journal, their Obsidian mirror notes moved into the
+   *  archive (`{archiveDir}/obsidian-mirrors/`), and best-effort cleanup failures (logged, the
+   *  cards stay undone; a rerun retries the cleanup). */
+  derived: { jobsSinceImport: JobName[]; graphEdgesRemoved?: number; mirrorsArchived?: number; cleanupErrors?: number };
+  /** 1.16.0: present when the run made links (`memory.link`). Unlinking never writes the linked card. */
+  links?: MemoryUnimportLinksResult;
+}
+
+export type MemoryUnimportLinkOutcome = "unlinked" | "already-unlinked";
+
+export interface MemoryUnimportLinksResult {
+  /** Links this run made (after the key filter; a link without a key is not selected when a filter is set). */
+  selected: number;
+  unlinked: number;
+  alreadyUnlinked: number;
+  /** One entry per handled link; empty after an abort (a rerun handles them). */
+  items: Array<{ linkId: string; id: string; outcome: MemoryUnimportLinkOutcome }>;
+}
+
+/* ------------------------------------------------------------------ */
+/* Store take-over (1.11.0)                                            */
+/* ------------------------------------------------------------------ */
+
+export interface StoreAdoptRequest {
+  /** Absolute store root (the path `createEngine` would use as `baseDbPath`). */
+  path: string;
+  expectedIdentity: EmbeddingIdentity;
+  dryRun?: boolean;
+}
+
+export type StoreAdoptIncompatibleReason =
+  | "path-unreadable"
+  | "not-a-store"
+  | "schema-unreadable"
+  | "schema-mismatch"
+  | "identity-unreadable"
+  | "identity-mismatch"
+  | "identity-unverifiable"
+  | "dimension-mismatch"
+  | "target-running";
+
+export type StoreAdoptIdentitySource = "manifest" | "probe";
+
+export interface StoreAdoptResult {
+  verdict: "ok" | "incompatible";
+  dryRun: boolean;
+  reason?: StoreAdoptIncompatibleReason;
+  storeSchema?: { current: SchemaVersion | null; expected: SchemaVersion };
+  identity?: EmbeddingIdentity | null;
+  /** How identity was established when a check ran. */
+  identitySource?: StoreAdoptIdentitySource;
+}
+
+export interface StoreOps {
+  /**
+   * 1.11.0: inspect a copied store (copy-never-move). Does not migrate, does
+   * not re-embed, and does not take `state/core.lock` — the host holds that
+   * lock before `createEngine`. `incompatible` is a result, not a throw.
+   */
+  adopt(req: StoreAdoptRequest): Promise<StoreAdoptResult>;
+}
+
+export type EngineEventName =
+  | "dream.completed" | "job.run" | "acl.denied" | "recall.degraded" | "embedding.identity.changed"
+  | "recall.block-clipped" | "recall.block-dropped" | "recall.completed" | "memory.proposal";
+
+export interface EngineEvents {
+  on(event: EngineEventName, handler: (payload: unknown) => void): Disposable;
+}
+
+export interface JobLastRun {
+  runId: string; outcome: JobOutcome; reason?: string; trigger: JobTrigger;
+  startedAt: number; finishedAt: number; attempt: number;
+}
+export interface BreakerState { sweep: string; sessions: number; limit: number; open: boolean }
+export interface AgentJobHealth {
+  agentId: AgentId;
+  /** Latest finished run per job (by finishedAt); jobs that never ran are absent. */
+  lastRuns: Partial<Record<JobName, JobLastRun>>;
+  /** Jobs with a run in flight in this process, sorted. */
+  running: JobName[];
+  /** rem/deep LLM-session breaker for the current UTC sweep, in-flight sessions included. */
+  breaker: BreakerState;
+  /** Ledger lines that could not be parsed. */
+  unreadableLines: number;
+}
+export interface JobsHealth { ledger: "ok" | "unavailable"; agents: AgentJobHealth[] }
+export type SharedMemoryMode = "fd-capability" | "verified-path" | "unavailable";
+export interface SharedMemorySupport {
+  supported: boolean;
+  mode: SharedMemoryMode;
+  /** Why it is unsupported: the platform lacks a mode, the shared root failed its safety check, the Windows ACL
+   *  reader is missing, or the root's identity changed during a lease (pool refuses until restart). */
+  reason?: "platform" | "unsafe-root" | "acl-tool-unavailable" | "identity-changed";
+}
+export interface EngineStatus {
+  ready: boolean;
+  /** 1.8.0: derived from models — embedder failed → {reason:"model-failed",capability:"embedding"}; embedder loading →
+   *  {reason:"models-warming",capability:"embedding"}; reranker failed → model-failed/"reranker"; reranker loading →
+   *  models-warming/"reranker"; first match wins; otherwise null. */
+  degraded: Degraded | null;
+  agents: number;
+  contract: ContractVersion;
+  storeSchema: { current: SchemaVersion | null; expected: SchemaVersion };
+  /** 1.8.0 */ jobs: JobsHealth;
+  /** 1.8.0 */ models: ModelsStatus;
+  /** 1.8.0: null when the host reports none. */ journal: JournalBacklog | null;
+  /** 1.8.0 */ sharedMemory: SharedMemorySupport;
+}
+
+export interface AgentStore {
+  agentId: AgentId;
+  close(): Promise<void>;
+}
+
+/* ------------------------------------------------------------------ */
+/* The engine                                                          */
+/* ------------------------------------------------------------------ */
+
+/** 1.16.0: additive feature flags a host can test before calling an optional surface. */
+export interface EngineCapabilities {
+  /** `MemoryOps.link`, `MemoryCard.links`, unimport unlinks by run. */
+  readonly memoryLink: boolean;
+}
+
+export interface Engine {
+  readonly contract: ContractVersion;
+  /** 1.16.0: frozen. */
+  readonly capabilities: EngineCapabilities;
+
+  open(agentId: AgentId): Promise<AgentStore>;
+  /** Idempotent: every call returns the same promise. Resolves within
+   *  `budgetMs` (default 30 000) even if resources are still closing. */
+  close(opts?: { budgetMs?: number }): Promise<void>;
+  status(): Promise<EngineStatus>;
+
+  /** Stable, cached prefix (index.js:7073-7088). */
+  systemSupplement(): string[];
+  /** Never throws; a failure comes back as `degraded`. */
+  recall(q: RecallQuery, opts?: RecallOptions): Promise<RecallResult>;
+  /** Non-blocking. */
+  capture(t: TurnRecord, opts?: CaptureOptions): CaptureHandle;
+  checkpoint(agentId: AgentId, reason: CheckpointReason): Promise<CheckpointResult>;
+  memory: MemoryOps;
+
+  tools: ToolSpec[];
+  commands: CommandSpec[];
+  /** @deprecated since 1.5.0; string commands are adapter-internal. Removed in contract 2.0 (E6). Use Engine.memory. */
+  runCommand(name: string, args: string, principal: Principal, agent: AgentContext): Promise<CommandResult>;
+
+  jobs: JobRegistry;
+  embedding: EmbeddingService;
+  /** 1.8.0 */
+  models: ModelsService;
+  admin: AdminOps;
+  /** 1.11.0: inspect a copied store before the host points `baseDbPath` at it. */
+  stores: StoreOps;
+  events: EngineEvents;
+  /** The open channel vocabulary (ChannelRef): a host declares its channels. */
+  channels: { register(name: ChannelRef): string; has(name: ChannelRef): boolean; list(): ChannelRef[] };
+}
+
+/** `testOptions` is test-only: `internals` overrides members of the engine's
+ *  internal object after construction (e.g. a stub embedder). */
+export declare function createEngine(host: HostServices, config: EngineConfig, testOptions?: { internals?: Record<string, unknown> }): Engine;

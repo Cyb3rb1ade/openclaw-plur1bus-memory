@@ -17,13 +17,14 @@
  */
 
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSyncBounded } from "./helpers/run-sync.js";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 import { makeTempDir } from "./helpers/temp-dir.js";
+import { runtimeSourcePath } from "./helpers/runtime-sources.js";
 
 const REPAIR_SCRIPT = fileURLToPath(new URL("../scripts/repair-tombstones.mjs", import.meta.url));
 
@@ -38,13 +39,14 @@ function tempDir(t) {
 describe("K4 repair-tombstones — fail-closed wie reapply", () => {
   function runRepair(home, extraArgs = []) {
     try {
-      const stdout = execFileSync(process.execPath, [REPAIR_SCRIPT, ...extraArgs], {
+      const stdout = execFileSyncBounded(process.execPath, [REPAIR_SCRIPT, ...extraArgs], {
         encoding: "utf8",
         env: { ...process.env, OPENCLAW_HOME: home },
         timeout: 60_000,
       });
       return { code: 0, report: JSON.parse(stdout) };
     } catch (err) {
+      if (err.code === "ETIMEDOUT") throw err; // bounded child timed out: fail loudly
       return { code: err.status ?? 1, report: JSON.parse(String(err.stdout || "{}")) };
     }
   }
@@ -79,11 +81,15 @@ describe("K3/K6 — statische Prüfung am Quelltext", () => {
   // Einzeiler, deren Regression sich am zuverlässigsten am Quelltext festhalten
   // lässt. Der Verhaltenstest für die Liste liegt in
   // tests/critical-review-command.test.js.
-  const indexSource = fileURLToPath(new URL("../index.js", import.meta.url));
+  // PR-03g (engine-extraction M1a) hat runCriticalCommand mitsamt der
+  // Kommando-Registrierung nach adapter/openclaw/register-commands.js
+  // verschoben; beide Anker stehen jetzt dort (`critical.failed`: 4 Treffer in
+  // der Adapter-Datei, 0 in index.js), sonst wäre das doesNotMatch leer.
+  const commandsSource = runtimeSourcePath("adapter/openclaw/register-commands.js");
 
   it("K3: `list` nimmt denselben Pfad wie der leere subKey", async () => {
     const { readFileSync } = await import("node:fs");
-    const src = readFileSync(indexSource, "utf8");
+    const src = readFileSync(commandsSource, "utf8");
     assert.match(
       src,
       /if \(!subKey \|\| subKey === "list"\) \{/,
@@ -93,7 +99,7 @@ describe("K3/K6 — statische Prüfung am Quelltext", () => {
 
   it("K6: critical.failed bekommt die Ursache mitgegeben", async () => {
     const { readFileSync } = await import("node:fs");
-    const src = readFileSync(indexSource, "utf8");
+    const src = readFileSync(commandsSource, "utf8");
     assert.doesNotMatch(
       src,
       /t\("critical\.failed", \{ lang, tone \}\)/,

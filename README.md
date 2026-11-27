@@ -2,16 +2,25 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.20.2-hermes.2 — Hermes port**
+**PLUR1BUS 7.21.0 — OpenClaw 2026.8.1 or newer**
 
-Python distributions: **7.20.2.post2**. This port includes the complete
-[OpenClaw v7.20.2 source](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/v7.20.2)
-and the native Hermes payload. See the [catalog and Neo retention review](docs/audits/hermes-7.19.3-catalog-review.md),
-the [previous delta and parity review](docs/audits/hermes-7.19.2-delta-review.md)
-and [installation guide](distribution/INSTALLATION.de.md).
-The bundled OpenClaw plugin requires the same Node as its host:
-`>=24.16.0 <25 || >=26.1.0`. That floor does not apply to the native Python
-memory provider.
+Latest release: **7.21.0** ([GitHub Release](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/v7.21.0),
+ClawHub, npm). Releases come from `main`: a release is a tag `vX.Y.Z` on a
+merge commit of `main`, and deployments install that tag. 7.21.0 is the first
+release in the engine/adapter layout (`engine/`, `adapter/openclaw/`, with
+`index.js` as the entry point); the separate release line (`release/*`,
+tags up to v7.20.10) is retired. The declared compatibility floor is
+`openclaw@2026.8.1` and plugin API `>=2026.8.1` (`openclaw.compat` in
+`package.json`); that floor is the only compatibility claim. The package is
+built against the build baseline `openclaw@2026.8.2` (release metadata), and
+CI runs the packed plugin against the floor and against the latest published
+OpenClaw. Which version means what, and the dated evidence behind it, is in
+the [compatibility contract](docs/compatibility-openclaw.md). Each host release is checked against the full patch set
+before it is installed, so a host change that breaks an internal anchor is
+caught before the Gateway restarts rather than after. The upstream source base is the immutable official tag `v7.4.10`,
+commit `c0a8a4c28ff1cb9c632e185f21f4502d67d1b605`. PLUR1BUS runs inside the
+Gateway process, so it requires the same Node as its host:
+`>=24.16.0 <25 || >=26.1.0`.
 
 ### Web interface
 
@@ -25,6 +34,212 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.21.6 — id map for the origin backfill
+
+- `scripts/neo-origin-backfill.mjs --id-map <tsv>` adds a verified id → session
+  key map as a resolution source, for old Neo entries that neither the run id
+  nor the turn-id hash can resolve (index-only rows need `--include-index-only`).
+
+### New in v7.21.5 — origin backfill, GitHub Packages from the workflow
+
+- `scripts/neo-origin-backfill.mjs` adds the chat session key (and the rules
+  sensitivity) to Neo candidates captured before 7.20.10, as appended
+  revisions; run it with the gateway stopped and a snapshot.
+- Global Neo hits now carry their sensitivity (candidate index fields).
+- The release workflow publishes the release tarball to GitHub Packages
+  itself (`github-packages` job).
+
+### New in v7.21.4 — less main-thread work after each turn
+
+- The Neo embedding drain skips an unchanged queue and reads only appended
+  lines (before: about a second per turn even with nothing to embed).
+- The graph dedupe in the capture path uses an incremental edge index instead
+  of re-reading 10,000 graph lines per turn.
+
+### New in v7.21.3 — background turns and long prompts
+
+- Heartbeat, cron and subagent completions in the owner's direct chat count
+  as the owner's chat (no proved sender needed for these turns only).
+- The automatic recall embeds at most 6,000 characters of a long prompt
+  (head and tail) instead of waiting for an LLM summary; the warm path has
+  the same Neo prelude budget as the per-turn recall.
+
+### New in v7.21.2 — memories stay in their chat, confidential ones never leave it
+
+- **Origin weighting** (`recall.contextWeighting`): the same chat (whole
+  group or whole direct chat) counts fully; group knowledge in a direct chat
+  ×0.85, another group ×0.5, unknown ×0.5, a direct chat's memory elsewhere
+  ×0.35; at most 5 foreign memories per block.
+- **Confidentiality**: new columns `sensitivity`/`sensitivitySource`
+  (banal, personal, confidential), set by rules at capture and by the hourly
+  emotion refine. Foreign confidential or unclassified memories never appear;
+  in groups a foreign memory also needs an LLM verdict (queued in the
+  background). `scripts/sensitivity-backfill.mjs` classifies legacy rows.
+- **ACL fixes**: Neo `workspace_shared` records are visible to their own
+  workspace again; Telegram DM threads keep the sender proof.
+
+### New in v7.21.1 — the recall keeps its budget, and the block gets leaner
+
+- **Hard budget for the Neo prelude.** It may use at most
+  `min(neo.recall.global.embedTimeoutMs, runtime.recallTimeoutMs / 4)` from
+  the start of the recall; past that it skips the global search and the lanes.
+- **Keyword/recent fallback.** If the query vector does not arrive in time or
+  the embedding fails, the automatic recall searches by the prompt's words and
+  the last 7 days instead of returning nothing. The block is marked
+  `retrieval="keyword-recent-fallback"` (`recall.keywordFallback.enabled`).
+- **Warm start.** `runtime.recallPrewarm`: 20 s after `gateway_start` one
+  read-only warm recall per chat agent (reranker off, nothing written).
+- **Leaner selection** (automatic recall only, nothing deleted): old assistant
+  replies without new information and content-free pleasantries sink
+  (`recall.qualityWeighting.staleAssistant`); records of the same turn and
+  speaker are joined, and Neo entries already shown as memories are left out
+  (`recall.mergeTurnParts`).
+- **Cohere default `rerank-v5.0-fast`** instead of `rerank-v3.5`. Rerank 5 is
+  billed per input token instead of per search; to keep v3.5, set
+  `reranker.model: "rerank-v3.5"`.
+- **Fixes:** a bare system word in quoted text ("Cron" in a table) is no
+  longer marked `operational-risk="high"`; light dreams are bound to a user
+  only when the recall proved that user (`acl.user.missing_principal`); CRR
+  timeout 250 ms instead of 50; no Python bytecode in the release tarball.
+
+### New in v7.21.0 — releases come from `main` (engine/adapter layout)
+
+7.21.0 is the first release built from `main`. The plugin is now
+`adapter/openclaw/plugin.js` (registration) over `engine/create-engine.js`
+(construction); `index.js` stays the entry point. It contains everything up to
+7.20.10 plus the engine work that so far only lived on `main`: the engine
+contracts 1.5–1.16 (typed memory operations, admin operations, embedding
+probe/serve, status and models, link/import/unimport/rebind), the job ledger
+under `{baseDbPath}/_jobs` (REM completions from the Neo `run-state.json` are
+imported once, the file keeps a `.migrated` copy), full embedding identities
+per store (stores without identity metadata stay legacy), bounded in-process
+LanceDB fragment compaction (`runtime.lancedbCompaction`, on by default) and
+EmbeddingGemma 2 as the default local model for newly created stores. Existing
+configurations stay valid: the config schema only gained keys. Details in the
+[CHANGELOG](CHANGELOG.md).
+
+### New in v7.20.10 — auto-recall without echoes, dated state, clean embeddings
+
+Everything stays stored; weak entries are ranked lower instead of being
+filtered. The automatic recall before each turn now
+- leaves out memories that only repeat the current message and memories of the
+  running conversation that are still in context (new column `sessionKey`, in
+  Neo `origin.sessionKey`; older records have no key and stay),
+- multiplies the score after rerank by a rule-based quality weight (host
+  envelopes, content-free agent self-introductions, filler-heavy voice
+  fragments, very short texts, assistant claims; floor 0.35,
+  `recall.qualityWeighting`),
+- dates state claims older than two days in the prompt ("aktuell
+  [Stand 14.09.2026] 7.12.2", `recall.volatileStateAnnotation`); the stored
+  text stays,
+- fills the Neo block only from lanes that match the record's category, without
+  `[visible thinking]` placeholder lines, without behavior cards and with the
+  record's date (`neo.recall.maxReflections`, `neo.recall.laneMinRelevance`).
+
+`memory_recall` and `memory_search` still reach everything in the 7.20.9 order.
+New memories keep their text verbatim but are embedded from a cleaned copy
+without timestamps, transcript envelopes, stage directions and filler words
+(`embedding.cleanText`, column `embeddingTextMode`); `scripts/reembed-clean.mjs`
+re-embeds the existing rows (dry-run first, gateway stopped, snapshot
+required). Capture no longer files "noch immer …" or pure questions as
+preferences, tags subagent, helper and inter-session turns in `origin` and drops
+only content-free host envelopes. The Cohere reranker sends the v2 request
+(model from `reranker.model`, e.g. `rerank-v5.0-fast`) and cuts each document
+to `reranker.maxDocChars` (default 1400) so query plus document stay under the
+500-token billing unit.
+
+### New in v7.20.9 — the Neo prelude keeps its vectors in memory
+
+Before every auto-recall the Neo prelude compares the question with all
+candidate vectors of the workspace. Until 7.20.8 it read each of them from
+disk, one call per vector; once the page cache was dropped that took seconds
+on the main thread and could push the whole recall over its time limit. The
+vectors now stay in a process-wide cache (512 MiB for all workspaces,
+`PLUR1BUS_NEO_VECTOR_CACHE_MAX_BYTES`, `0` turns it off). New vectors,
+re-embeddings, compaction and replaced or shortened files are detected; after
+every change of the vector file a few cached vectors are compared with the
+disk. A cold start reads the vectors in a few large blocks, and a working set
+above the limit keeps a stable part cached and logs one warning instead of
+churning. Results are bit-identical to 7.20.8; on the production data the
+search takes 25–70 ms instead of 1–2.6 s after a page-cache drop.
+
+### New in v7.20.8 — the time filter only answers "when did we talk"
+
+The recall used to drop every candidate whose `createdAt` fell outside a time
+phrase in the question. `createdAt` is when something was said, so that only
+fits questions about the conversation itself ("what did I tell you last
+week", "was haben wir gestern besprochen", "Weißt du noch, was wir gestern
+besprochen haben?"); the time phrase has to belong to the speech act, not to
+what was said ("I told you he's coming on Thursday" does not filter). For
+"where was Calvin in the last week of October" or "which shoes did I clean
+last month" it threw away the evidence and kept fragments of the current day.
+Now only such conversation-time questions filter (window widened by 2 h, since
+auto-capture writes after the turn); event time, casual mentions, calendar dates and
+"after the X" anchors leave the recall unchanged. The parser also stops
+reading UUID fragments, line numbers and names like "Cyberpunk 2077" as years,
+and "last week of October 2026" is October. Without the filter the bench lost
+nothing and gained evidence for three LOCOMO and two LongMemEval questions.
+
+### New in v7.20.7 — "yesterday" means the memory's yesterday
+
+A memory that says "yesterday we went hiking" was written on its own date.
+Models answering from recalled memories tended to read "yesterday" relative
+to today. The recall block now states once that relative time words inside a
+record refer to that record's created-at. In the LOCOMO bench this raised
+multi-hop and temporal questions from 56.8 to 59.8 % (+3.0 points, three
+repeats on identical recall).
+
+### New in v7.20.6 — graph links across conversations, recall without reranker
+
+- **Entity edges across conversations.** The memory graph linked two
+  memories about the same person or thing only when they were captured in
+  the same turn: topics are not stored in LanceDB, and the "recent" rows the
+  graph compares against were the oldest rows of the table. Topics are now
+  derived from the stored text and the recent rows are the newest.
+- **Recall without reranker orders by relevance.** When the reranker fails
+  (error, timeout, quota), memories are ordered by vector relevance; decay
+  and the epistemic adjustment only break ties.
+- **Canonical knowledge no longer takes memory slots** in the automatic
+  recall; it comes on top of `maxPromptMemories`, capped by
+  `canonicalMaxItems`. Tools with an explicit `limit` are unchanged.
+- The query time parser uses the recall's `now`.
+
+### New in v7.20.3 – v7.20.5 — Semantic Lens writer, chunked recall
+
+- **7.20.5:** a list item found by the search is replaced by its whole
+  message too; the comparison applies the split's list-marker rule. On 100
+  LongMemEval questions with Jev-split stores: 89 % (unsplit: 90 %).
+- **7.20.4:** split messages reach the prompt whole. The recall projection
+  dropped the fields that link a part to its message, so the chunk dedup rules
+  never ran; a part found by the search is now replaced by its whole message
+  (small-to-big).
+- **7.20.3:** the Semantic Lens index (`.plur1bus/semantic-lens-index.json`)
+  is written every night from the neighbour lists in `link-index.json`; it
+  never had a writer. Nightly semantic discovery works again: since June it
+  skipped every memory because the scan dropped LanceDB's vectors.
+
+### New in v7.19.1 – v7.20.2 — fixes and operator settings
+
+- **7.20.2:** the group reasoning filter no longer swallows messages from
+  humans. Senders listed in any channel's `allowFrom`/`groupAllowFrom`
+  (wildcards excluded) always pass, so explicit mentions in a group reach the
+  agent again.
+- **7.20.1:** the Neo worker starts from the installed extension instead of a
+  deleted plugin capture copy (OpenClaw 2026.11.5 and newer).
+- **7.20.0:** dashboard card **Conversation compaction model** sets, per chat
+  agent, the model OpenClaw uses to summarize the chat context
+  (`agents.entries.<id>.compaction.model`). It needs a host that knows that key.
+- **7.19.4:** critical pushes no longer wait for a gateway restart; the db
+  adapter reads with `readConsistencyInterval: 0`.
+- **7.19.3:** Neo journals keep at least 90 days instead of the newest 5000
+  lines; trimmed lines are archived as `archive/<file>.<YYYY-MM>.jsonl.gz`, and
+  the daily consolidation now prunes the store the hooks write to.
+- **7.19.2 / 7.19.1:** `autoApplyLowRisk` applies note proposals again, note
+  import skips prompt files and generated notes (`noteImportExclude`), and the
+  morning review message is shorter.
+
+Details for each version are in [CHANGELOG.md](CHANGELOG.md).
 
 ### New in v7.19.0 — independent emotion and bilingual Telegram speech
 
@@ -983,7 +1198,7 @@ The index is written to `.plur1bus/code-index.json` and contains normalized file
 
 - **ACL / Access Control** — Agent- and workspace-scoped memory access. `searchByTopic`, `getCard`, and recall pipeline filter by ACL. Unauthorized access is logged.
 - **Feedback loop (`/mf`)** — Thumbs-up/down/neutral feedback on any memory result. Persisted per workspace.
-- **Temporal reasoning** — Queries like "last month", "3 days ago", "Q2 2026" parsed to concrete date ranges before boost/rerank.
+- **Temporal reasoning** — Queries like "last month" or "3 days ago" parsed to concrete date ranges before boost/rerank. Since 7.20.8 only questions about the conversation time ("what did I tell you last week") filter by them.
 - **Collaborative memory (`/share`)** — Copy any card into a workspace-shared pool with ACL protection.
 - **Query refinement** — Automatic query rewrite on poor first results, merged and deduplicated.
 
@@ -1025,7 +1240,7 @@ MVP reactivation hook that appends a `<memory-reactivation>` block when a conver
 - Default: `enabled: false` in schema; `visibleHints: false`.
 - Triggers: idle threshold (45 min), continuation signal, first substantive message, or post-compaction gap.
 - Caps: `maxReactivationMemories: 3`, `maxFadedReactivationMemories: 1`, `maxOpenThreads: 3`, `maxCommunities: 2`.
-- Hard timeout: 50 ms; silent fallback on error.
+- Hard timeout: 250 ms since 7.21.1 (`timeoutMs`, was 50 ms); silent fallback on error.
 - State is module-level in-memory only; no writes to cards, tags, graph links, records, or quarantine.
 
 ### Graph-link managed blocks / semanticDiscovery
@@ -1108,7 +1323,7 @@ The two configuration views have separate roles: `sourceConfig` alone controls e
 
 Every job runs with `--agent <agentId> --session isolated`. Provisioning does not set model, fallback, token, auth, API, or other credential overrides, so OpenClaw's default LLM and per-agent credentials remain authoritative. The script remains idempotent and exit-0 for install safety, so it can run from any of these channels:
 
-- **`npm install`/`npm postinstall`** — fires when the plugin is installed via `npm install` (e.g. `npm install -g @cyb3rb1ade/plur1bus-memory`).
+- **`npm install`/`npm postinstall`** — fires when the plugin is installed via `npm install` (e.g. `npm install -g @cyb3rb1ade/plur1bus-memory`). It is skipped in a development checkout: when `npm ci`/`npm install` runs in the repository itself (`INIT_CWD` is the package root and a `.git` entry exists there, so also in worktrees) the script prints `[setup-feature-crons] skipped: development checkout` and never calls `openclaw`. It is also skipped when `CI=true`. Set `PLUR1BUS_SETUP_CRONS=1` to run it anyway (manual tests). Installs as a dependency or from the unpacked package are unaffected, as are gateway startup and `/plur1bus setup crons`. When working on the repo, still prefer `npm ci --ignore-scripts`.
 - **Gateway startup (deferred bootstrap)** — runtime registration verifies the
   public Gateway method, CLI, and command dispatcher exactly once. A
   `gateway_start` handler schedules a bounded reconciliation after the gateway
@@ -1127,29 +1342,41 @@ The `/plur1bus doctor` and `/plur1bus status` feature-cron hint is **condition-d
 
 ## Installation
 
-PLUR1BUS 7.7.1 requires Node.js 22.22 or newer and OpenClaw 2026.8.1 or newer.
-On an older host the installer refuses the package instead of deploying it:
+PLUR1BUS requires Node.js `>=24.16.0 <25 || >=26.1.0` (the Node that OpenClaw
+runs on) and OpenClaw 2026.8.1 or newer (`openclaw.compat`). On an older host
+OpenClaw refuses the package instead of deploying it:
 `requires plugin API >=2026.8.1, but this OpenClaw runtime exposes <version>`.
+Supported targets: Linux x64 and arm64 (glibc 2.27 or newer), macOS on Apple
+silicon, and Windows x64 and arm64.
+
+### Installers
+
+Installers, bootstraps and the install feed live in [PLUR1BUS-Host-Addons](https://github.com/Cyb3rb1ade/PLUR1BUS-Host-Addons).
+The plugin itself ships the `openclaw plur1bus selftest` command they use to
+verify an install, see [docs/selftest.md](docs/selftest.md).
+
+### Manual installation
 
 Install the published release through OpenClaw's package installer:
 
 ```bash
-openclaw plugins install clawhub:@cyb3rb1ade/plur1bus-memory@7.5.3 \
-  --acknowledge-clawhub-risk --pin
+openclaw plugins install clawhub:@cyb3rb1ade/plur1bus-memory@7.21.0
 ```
 
-The same release is on the npm-compatible registry, if your `@cyb3rb1ade`
-scope already points there:
+The same release is on npmjs.org (publishing steps in
+`docs/release-checklist.md`):
 
 ```bash
-openclaw plugins install @cyb3rb1ade/plur1bus-memory@7.5.3 --pin
+openclaw plugins install npm:@cyb3rb1ade/plur1bus-memory@7.21.0 --pin
 ```
 
-Or install the immutable GitHub Release tarball:
+Or install the immutable GitHub Release tarball. Download it, compare its
+SHA-256 with the release's checksum, then:
 
 ```bash
 openclaw plugins install \
-  https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/download/v7.5.3/cyb3rb1ade-plur1bus-memory-7.5.3.tgz
+  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.21.0.tgz \
+  --force --accept-capabilities
 ```
 
 To build from this source checkout instead, produce a tarball and install that
@@ -1161,12 +1388,18 @@ npm ci
 npm test
 npm pack
 openclaw plugins install \
-  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.5.3.tgz --force
+  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.21.0.tgz \
+  --force --accept-capabilities
 ```
 
-Record the tarball's SHA-256 before transferring it. PLUR1BUS 7.5.3 never
-patches OpenClaw runtime files. Existing release artifacts remain unchanged and
-must not be relabelled as 7.5.0.
+Record the tarball's SHA-256 before transferring it. PLUR1BUS never patches
+OpenClaw runtime files. Existing release artifacts remain unchanged and must
+not be relabelled.
+
+A manual install does not write any configuration: set
+`plugins.slots.memory` to `memory-lancedb-namespaced`, enable
+`plugins.entries["memory-lancedb-namespaced"].hooks.allowConversationAccess`
+(capture and recall do not work without it) and add the config block below.
 
 Restart the gateway after installing, so the new plugin version is loaded.
 
@@ -1297,15 +1530,23 @@ exactly what the compatibility lab showed when it measured with E5 and no
 reranker. The recommended model spreads similarities much wider:
 `jinaai/jina-embeddings-v3` (multilingual, Matryoshka dimensions from 32 to
 1024, CC BY-NC 4.0 license consent required). With it, ranking and thresholds
-do their job. Since 7.12.0 the installer's first option is Jina v5 Text Nano
-(see the lab test below); OpenAI is the hosted alternative, Jina v3 stays
-selectable for existing installs, and E5 is only the small keyless fallback. The embedding model is switched from the PLUR1BUS tab
+do their job. The provider wizard and the installer now recommend EmbeddingGemma 2 (q8,
+Apache-2.0) as their first option, the uniform local default; Jina v5 Text Nano
+stays selectable (CC BY-NC 4.0 consent required, see the lab test below), OpenAI is
+the hosted alternative, Jina v3 stays selectable for existing installs, and E5
+is only the small keyless fallback. The embedding model is switched from the PLUR1BUS tab
 as well (`controlUi.writeActions: "all"`): the button picks the target model,
 model preparation downloads and verifies it, and the re-embedding migration
 then runs from the same page with a dry run, a copy, and a separate switch.
 Unlike the reranker switch, every card is embedded again along the way, so
 it takes time and disk space, and the old generation stays available for
 rollback.
+
+The plugin exposes EmbeddingGemma 2 to OpenClaw hosts via the generic embedding provider contract
+under the ID `plur1bus-embeddinggemma-2` (`google/embeddinggemma-2`, Apache-2.0, default q8, 768d with Matryoshka
+options 128/256/512/768, 8K tokens context). It is the recommended local entry alongside `plur1bus-openai`,
+`plur1bus-openai-compatible`, and `plur1bus-e5-small`. Existing stores retain their configured adapter;
+switching to `plur1bus-embeddinggemma-2` triggers the copy-on-write re-embedding migration.
 
 *Which dimension.* Jina v3 is trained with Matryoshka representation learning,
 so the vector can be cut to 32, 64, 128, 256, 512, 768 or 1024 dimensions. The
@@ -1408,6 +1649,62 @@ Settings for both stages are described in
 [docs/configuration.md](docs/configuration.md); the installer offers the
 preparation profiles for the local models.
 
+### Cloud and self-hosted providers, host egress and secret store (contract 1.15.0)
+
+No vendor is preferred. Embeddings run against any OpenAI-compatible
+`/embeddings` endpoint (`provider: "openai-compatible"` with `baseUrl`):
+OpenAI itself, OpenRouter (for example `qwen/qwen3-embedding-8b`), Gemini's
+OpenAI endpoint, Cohere's compatibility API, vLLM, TEI, Ollama, LiteLLM and
+so on. `dimensions` must match what the model returns.
+
+The reranker is an HTTP provider with presets and a free `baseUrl`:
+
+| `reranker.provider` | default `baseUrl` | `protocol` | default `model` | default key variable |
+|---|---|---|---|---|
+| `cohere` | `https://api.cohere.com/v2` | `cohere` | `rerank-v5.0-fast` (until 7.21.0 `rerank-v3.5`) | `COHERE_API_KEY` |
+| `jina` | `https://api.jina.ai/v1` | `jina` | `jina-reranker-v2-base-multilingual` | `JINA_API_KEY` |
+| `voyage` | `https://api.voyageai.com/v1` | `voyage` | `rerank-2.5` | `VOYAGE_API_KEY` |
+| `remote` | required | `cohere` | none (server default) | none (keyless allowed) |
+
+Requests go to `{baseUrl}/rerank` (or to `baseUrl` itself when it already ends
+in `/rerank`). `protocol: "cohere"` (same as `"jina"`) is the
+`{model, query, documents, top_n}` → `results` format that Cohere, Jina, vLLM,
+Infinity and LocalAI speak; `"voyage"` uses `top_k` → `data`; `"tei"` is
+Hugging Face text-embeddings-inference (`{query, texts}` → `[{index, score}]`).
+Every answer is validated and normalised. `maxDocuments` (1000),
+`maxRequestBytes` (4 MiB) and `maxResponseBytes` (1 MiB) bound a call, and
+`timeoutMs` applies as before. A failed rerank never switches to another
+model: without `fallbackProvider: "local-transformers"` the recall simply runs
+unreranked.
+
+```json
+{
+  "embedding": { "provider": "openai-compatible", "baseUrl": "https://openrouter.ai/api/v1",
+                 "model": "qwen/qwen3-embedding-8b", "dimensions": 4096, "apiKeyRef": "openrouter" },
+  "reranker":  { "enabled": true, "provider": "voyage", "apiKeyRef": "voyage" }
+}
+```
+
+```json
+{ "reranker": { "enabled": true, "provider": "remote", "baseUrl": "http://127.0.0.1:8081", "protocol": "tei" } }
+```
+
+**Keys.** Every remote provider config (`embedding`, `embedding.routes[].provider`,
+`reranker`, and the feature LLM overrides `merging`, `schicht15`, `skillMiner`,
+`criticalPush`, `emotion.t3`) accepts `apiKeyRef`: the name of a key in the
+host's secret store (`HostServices.secrets.resolve(ref, purpose)`). Order:
+`apiKeyRef`, then `apiKeyEnv`, then `apiKey`, then the provider's default
+variable. With `apiKeyRef` set and no store, or a failed lookup, the provider
+fails closed and sends nothing. Embedding and reranker keep a resolved key at
+most 60 seconds and drop it on HTTP 401/403, LLM calls resolve it on every
+call, so a rotated key takes effect without a restart. Keys are never logged.
+OpenClaw has no such store; there `apiKeyEnv`/`apiKey` stay the way to go.
+
+**Egress.** A host can pass `HostServices.fetch` (WHATWG `fetch` signature).
+Then every outbound request of the engine goes through it: embedding clients,
+rerankers, the engine's own LLM calls, webhooks and model downloads. Without
+it the global `fetch` is used, as before. Details: [docs/engine-api.md](docs/engine-api.md#network-ports-in-1150).
+
 ### Named storage namespaces
 
 Omitting `namespaces` preserves the legacy-flat layout exactly:
@@ -1504,7 +1801,7 @@ may instead provide its own model and transport. If neither route is available,
 the classifier falls back to Tier-2 heuristics: it does **not** label cards, so
 it never poisons results by marking everything `fakt`.
 
-**`emotion.temperaments`** — per-agent emotional temperament. Ships with generic defaults only (`main` slightly more sensitive, everyone else balanced). Pick a preset via `/plur1bus temperament <preset>` (`ausgewogen`, `warm`, `kühl`, `feurig`, `stoisch`) — requires a gateway restart. Mood always derives from conversation content; the temperament only shapes how strongly and how long it swings. The current mood is written to `.emotional-state.json` (machine-readable, survives restarts) and `.current-mood.txt` (human-readable) in the agent workspace, injected as a mood line into the recall context, stamped on every memory card (`moodContextAtCapture`), and emotionally intense memories decay slower (`intensityHalfLifeFactor`).
+**`emotion.temperaments`** — per-agent emotional temperament. Ships with generic defaults only (`main` slightly more sensitive, everyone else balanced). Pick a preset via `/plur1bus temperament <preset>` (`ausgewogen`, `warm`, `kühl`, `feurig`, `stoisch`) — requires a gateway restart — or on the dashboard card **Temperament** (with `controlUi.writeActions: "all"`). The card writes the same entry through OpenClaw's config writer, so the plugin reload (about a minute) applies it without a restart; the current mood is kept. It lists the chat agents, any agent with a saved entry, and the row `default` that every other agent (subagents included) falls back to; `main` never falls back to `default`. Mood always derives from conversation content; the temperament only shapes how strongly and how long it swings. The current mood is written to `.emotional-state.json` (machine-readable, survives restarts) and `.current-mood.txt` (human-readable) in the agent workspace, injected as a mood line into the recall context, stamped on every memory card (`moodContextAtCapture`), and emotionally intense memories decay slower (`intensityHalfLifeFactor`).
 
 **`security.allowedUserIds` / `security.allowedChatIds`** — identity-aware authorization for commands and destructive flows.
 - If both lists are empty, non-destructive commands can run in private 1:1 contexts; destructive commands are denied in groups/unknown channels.

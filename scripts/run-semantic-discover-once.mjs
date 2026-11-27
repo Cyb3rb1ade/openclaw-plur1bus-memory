@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Operator tool: prints the discovery result (may contain note titles/paths) on purpose; do not ship its output to shared logs.
 // One-shot: run discoverSemanticLinks against the default workspace vault (maxPerRun=50 for safety)
 import { readRecords } from "../lib/obsidian/record-index.js";
 import { discoverSemanticLinks } from "../lib/obsidian/semantic-link-discoverer.js";

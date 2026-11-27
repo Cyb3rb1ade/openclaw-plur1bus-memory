@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix, win32 } from "node:path";
 import { describe, it } from "node:test";
 
 import {
@@ -16,6 +16,8 @@ import {
   registerObsidianVaultRuntime,
 } from "../lib/setup/obsidian-vault-plugin-runtime.js";
 import { DEFAULT_WS_SUFFIXES, detectObsidianVaults, listWorkspaceDirectories } from "../lib/setup/feature-profiles.js";
+import { bindHostPaths, resetHostPaths } from "../lib/host-paths.js";
+import { envHostPaths } from "../lib/host-services.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
 function tempDir(t) {
@@ -37,6 +39,16 @@ describe("Obsidian vault path handling", () => {
     assert.throws(() => normalizeVaultPath("   "), /vault path is required/);
     assert.throws(() => normalizeVaultPath("/"), /filesystem root/);
     assert.throws(() => normalizeVaultPath("/tmp"), /filesystem root/);
+  });
+
+  it("applies the same two-segment rule below a win32 drive or UNC root (path.win32)", () => {
+    assert.throws(() => normalizeVaultPath("C:\\", win32), /filesystem root/);
+    assert.throws(() => normalizeVaultPath("C:\\Users", win32), /filesystem root/);
+    assert.throws(() => normalizeVaultPath("\\\\srv\\share\\one", win32), /filesystem root/);
+    assert.equal(normalizeVaultPath("C:\\Users\\Jürgen A\\Vault", win32), "C:\\Users\\Jürgen A\\Vault");
+    assert.equal(normalizeVaultPath("C:/Users/x/Vault", win32), "C:\\Users\\x\\Vault");
+    assert.equal(normalizeVaultPath("/home/u/vault", posix), "/home/u/vault");
+    assert.throws(() => normalizeVaultPath("/home", posix), /filesystem root/);
   });
 
   it("recognises a vault only by its Obsidian marker files", (t) => {
@@ -195,6 +207,7 @@ describe("vault detection across agent workspaces", () => {
     mkdirSync(join(base, "workspaces-not-an-agent"), { recursive: true });
     const previous = process.env.OPENCLAW_HOME;
     process.env.OPENCLAW_HOME = base;
+    bindHostPaths(envHostPaths());
     try {
       assert.deepEqual(listWorkspaceDirectories(base), ["workspace", "workspace-bernhardine", "workspace-heisenberg"]);
       const detected = detectObsidianVaults({});
@@ -204,6 +217,7 @@ describe("vault detection across agent workspaces", () => {
       const explicit = detectObsidianVaults({ workspaces: [{ path: join(base, "workspace-bernhardine") }] });
       assert.deepEqual(explicit.vaultPaths, [join(base, "workspace-bernhardine")]);
     } finally {
+      resetHostPaths();
       if (previous === undefined) delete process.env.OPENCLAW_HOME; else process.env.OPENCLAW_HOME = previous;
     }
     assert.deepEqual(listWorkspaceDirectories(join(base, "missing")), DEFAULT_WS_SUFFIXES, "an unreadable home falls back to the default suffix");
@@ -274,11 +288,11 @@ describe("Obsidian vault operator CLI", () => {
     clis[0].builder({ program });
     assert.equal(state.name, OBSIDIAN_VAULT_CLI_COMMAND);
 
-    await state.action("use", { session: "agent:heisenberg:telegram:heisenberg:direct:2048378590", path: "/vaults/h" });
+    await state.action("use", { session: "agent:heisenberg:telegram:heisenberg:direct:10000004", path: "/vaults/h" });
     const [method, opts, params, extra] = calls.at(-1);
     assert.equal(method, OBSIDIAN_VAULT_GATEWAY_METHODS.prepare);
     assert.equal(opts.json, true, "the host prints progress unless json is requested");
-    assert.deepEqual(params, { session: "agent:heisenberg:telegram:heisenberg:direct:2048378590", vaultPath: "/vaults/h", create: false });
+    assert.deepEqual(params, { session: "agent:heisenberg:telegram:heisenberg:direct:10000004", vaultPath: "/vaults/h", create: false });
     assert.deepEqual(extra, { progress: false, scopes: ["operator.write"] });
     assert.match(out.at(-1), /"callbackData": "cb-1"/, "the result is written, the host does not print return values");
 

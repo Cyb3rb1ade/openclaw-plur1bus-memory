@@ -72,6 +72,9 @@ describe("reranker-pipeline", () => {
   });
 
   it("times out and falls back when reranker is too slow", async () => {
+    // PR-09 fix round 1: this stub deliberately ignores its own signal — it
+    // proves the pipeline's own bound (via raceAbort on rerankSignal) still
+    // cuts off a provider that never reacts, not just a cooperative one.
     const slowReranker = {
       rerank: async () => {
         await new Promise(r => setTimeout(r, 500));

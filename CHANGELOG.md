@@ -1,358 +1,1037 @@
 # Changelog — PLUR1BUS Memory
 
-## 7.20.2-hermes.2 — 2026-11-20
-
-- Make the Torch lock of 7.20.2-hermes.1 process-wide. Hermes imports the plugin
-  once per profile home, so its module-level lock existed once per profile and
-  two profiles could still load or run models on Metal/MPS at the same time,
-  which aborted the gateway (`failed assertion _status < MTLCommandBufferStatusCommitted`).
-  Loading a local Sentence Transformers model or reranker now holds the same lock
-  as inference, and the optional local emotion classifier uses it too.
-
-## 7.20.2-hermes.1 — 2026-11-19
-
-- Serialize local Sentence Transformers encoding and reranking across profiles
-  in each Hermes process to avoid a Metal/MPS abort during concurrent recall.
-  Local ONNX and remote providers retain their existing execution paths.
-
-## 7.20.2-hermes.0 — 2026-11-19
-
-- Include OpenClaw v7.20.2. The group reasoning filter lets messages from
-  explicitly allowed senders through, even when their text matches a reasoning
-  prefix. Hermes handles incoming messages through its native gateway.
-
-## 7.20.1-hermes.0 — 2026-11-19
-
-- Include the full OpenClaw v7.20.1 source, including the cross-connection
-  LanceDB read fix, per-agent conversation compaction model picker, and Neo
-  worker recovery after OpenClaw removes a plugin capture copy.
-- Hermes already opens the LanceDB table for each Critical Push review and
-  classifies new records during capture. A native LanceDB regression verifies
-  the review sees a newly committed card from a second connection.
-- Configure the conversation compression model per profile in Hermes' own
-  Models settings. Hermes runs Neo capture on its Python executor and does
-  not use OpenClaw's Node worker launcher.
-
-
-## 7.12.70-hermes.0 — build candidate
-
-- Upstream .62–.69 merged, including encoding, retrieval and migration tools.
-- Native neutral/pending capture, bounded scoped hourly encoding, explicit
-  0.95–1.00 core protection, opt-in flashbulb and spaced usage reinforcement.
-- Reranking precedes deduplication/group limits; zero-strength and scope guards
-  remain intact. Legacy metadata is not automatically reset or reclassified.
-- Encoding decay-clock/core-classification fixes submitted separately upstream.
-- No productive installation or publication implied by this candidate.
-
-## 7.12.61-hermes.0 — 2026-09-18
-
-- Merge des veröffentlichten Upstream-Tags v7.12.61 inklusive Dashboard-,
-  Journal-Tail- und Dependency-Fixes. Hermes-Profilisolierung, Installer,
-  Migrationen und unmittelbare Compaction-Schreibkoordination bleiben erhalten.
-- Native Regressionen sichern unbekannte Zählungen und lange Leerzeilenfolgen.
-- Hermes-Prerelease mit plattformspezifischen Installationspaketen; konkrete
-  Test-, Signatur- und Notarisierungsbelege stehen bei den Release-Assets.
-- Keine automatische Installation oder Modell-/Datenmigration durch das Release.
-
-## 7.12.60-hermes.0 — candidate
-
-- Merge upstream .57–.60, retaining native UI, installer, retrieval/migration and profile isolation.
-- Native afterthought: newest eligible open/corrected thread, 30–180 minutes, own timestamp; explicit corrections captured.
-- Shared background-model fallback without replacing an explicit native model or changing chat routing.
-- Bounded compaction conflict retries; REM remains retryable if its expected narrative is missing.
-- Active-profile primary-agent counts in both UIs; unknown stays unknown, other profiles are not scanned.
-- Upstream false-zero defect reported as #155; optional JS dependency advisories remain in #150. No productive installation/publication implied.
-
 Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert.
 
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [Unreleased]
 
-## [7.20.2] — 2026-11-19
+## [7.21.8] — 2026-11-27
 
-### Fixed
-
-- The group reasoning filter no longer swallows messages from humans. It is meant for other bots'
-  streamed reasoning previews ("🧠 …"), but it also claimed a human's message when its text
-  started with one of the prefixes, so Bernd and Bernhardine silently ignored explicit mentions
-  in the group. Senders listed in any channel's `allowFrom`/`groupAllowFrom` (wildcards
-  excluded) now always pass. The log line names the sender id and the matched prefix, never
-  the message text.
-
-## [7.20.1] — 2026-11-17
+**emotion-refine bleibt nicht mehr an verweigerten Zeilen hängen.** Keine neuen Konfigurationsschlüssel, keine Datenänderung.
 
 ### Fixed
 
-- Neo worker no longer starts from a deleted plugin capture copy. Under OpenClaw 2026.11.5 the
-  runtime created by an earlier plugin generation spawned `neo-worker-runner.js` from a removed
-  `tmp/plugin-captures/…` directory (MODULE_NOT_FOUND on every Neo capture/drain job). Under a
-  capture copy the worker now starts from the installed extension, like the feature-cron runner.
+- **Verweigerte Zeilen blockierten die Warteschlange.** Lehnt das Modell eine Zeile ab, liefert der Host keinen Fehler, sondern eine leere Antwort. emotion-refine wertete das als toten Weg; nach drei solchen Zeilen griff die Sicherung, die Zeilen blieben vorne stehen, und jeder stündliche Lauf traf dieselben drei. Bei main hing die Warteschlange so seit dem 12.11.2026 (959 offene Zeilen: Platzhalter-Wichtigkeit, Emotion nur aus Stufe 1–2, kein LLM-Urteil zur Vertraulichkeit). Gescheiterte Zeilen merkt sich das Plugin jetzt je Agent im Speicher (höchstens 1 000); eine schon einmal gescheiterte Zeile zählt nicht mehr für die Sicherung, rückt ans Ende und wird erst nach 6 h wieder versucht (`deferred`). Ein wirklich toter Weg löst nach drei neuen Zeilen weiter die Sicherung aus. Geschätzte Werte werden nie geschrieben; verweigerte Zeilen bleiben `pending_t3`. Nach einem Neustart ist die Merkliste leer, der erste Lauf verliert dann eine Stunde.
+- **Package-Version 7.21.8.**
 
-## [7.20.0] — 2026-11-13
+## [7.21.7] — 2026-11-27
 
-### Added
-
-- Dashboard card **Conversation compaction model**: one row per chat agent sets the model OpenClaw uses to summarize that agent's chat context (auto-compaction and `/compact`). The choice is written to `agents.entries.<id>.compaction.model`; other per-agent compaction settings such as `maxSummaryChars` are kept, and an empty choice removes the key. Each row says what applies without a choice: the shared `agents.defaults.compaction.model`, or the session's own model. The card is separate from the **Memory compaction** task, which is the nightly store cleanup.
-- The card needs an OpenClaw host that knows `agents.entries.<id>.compaction.model`. On a host without it nothing is written and the page reports `compaction_model_unsupported` instead of the generic failure.
-
-### Changed
-
-- The card reads its values from the running OpenClaw config. Saving does not touch the plugin's own config entry, so the plugin is not reloaded and the snapshot from its load would keep showing the previous choice.
-- A saved choice is shown at once. OpenClaw writes `openclaw.json` immediately but takes the change into its running config only after its reload check (measured: 13 seconds to 2 minutes); until then the card would have shown the previous choice next to the "saved" notice. The plugin remembers the write until the running config changes, for five minutes at most.
-
-## [7.19.4] — 2026-11-10
-
-### Fixed
-
-- Critical pushes arrived almost only after a gateway restart, often many at once. The db adapter behind `classify-recent` kept one LanceDB table per agent open but connected without `readConsistencyInterval`, while captures are written through MemoryDB's own connection. The cached table stayed on the version it was opened with, so every run between two restarts reported "no recent unclassified cards". The first run after a restart then pushed everything from the last 24 hours, and cards that were older than that window by then were never classified. The adapter now connects with `readConsistencyInterval: 0`, as MemoryDB does since 7.5.0. This also affects the other adapter readers (pending critical reviews, `/plur1bus critical`, `getCard`).
-
-## [7.19.3] — 2026-11-09
-
-### Changed
-
-- Neo journals keep at least 90 days instead of the newest 5000 lines. The append path only applies an emergency ceiling of 40,000 lines (`PLUR1BUS_NEO_MAX_RECORDS`); regular retention runs in the daily consolidation: a file is trimmed only above 5000 lines (`PLUR1BUS_NEO_SOFT_MAX_RECORDS`), and then only entries older than 90 days (`PLUR1BUS_NEO_RETENTION_DAYS`). Bernhardine's candidates had shrunk to a 25-day window, including active ones. Small files such as episodes and dream diaries are still never trimmed.
-- Trimming goes by value instead of file position: all revisions of an id (or of a graph edge) stay or go together, the weakest go first (status, salience/strength, confidence), and active or promoted entries with confidence or salience of at least 0.6, strong graph edges (≥ 0.6), `neverForget` entries and pending queue items are protected from the age rule.
-- Removed lines are archived instead of discarded: gzip members are appended to `<workspace>/archive/<file>.<YYYY-MM>.jsonl.gz` (`zcat` reads them as one stream). If the archive cannot be written, the journal is left untouched.
-- The append dedupe tail is fixed at 5000 lines (`PLUR1BUS_NEO_APPEND_DEDUPE_TAIL_RECORDS`) so the higher ceiling does not make every append read more.
-
-### Fixed
-
-- The daily consolidation never pruned the Neo store the hooks write to. It only pruned the owner-bound partition stores (`acl-owner-v1_*`), which hold no journals, so injected context (system interruption notices, recall blocks captured as behavior cards) stayed in the live files. The workspace store's files are now pruned once per run (removing injected context and applying retention, without content dedupe) and the result is reported as `hookStorePrune`.
-- `createNeoStore` called with an existing workspace directory name (`<key>--<hash>`) created a second, empty directory and wrote into it while reads still came from the legacy path. A canonical name whose hash matches its key now resolves to itself.
-- Retention reads numeric `timestamp` values below 1e12 (the retrieval ledger) as seconds.
-
-## [7.19.2] — 2026-11-07
-
-### Fixed
-
-- `autoApplyLowRisk` never applied note proposals: the auto-approval set only `status`/`approvedAt`/`approvedBy` and skipped `approvedPayloadHash` and `approvalMetadata`, so revalidation rejected every `note_import_candidate`, `memory_promotion` and `knowledge_update` item as "Missing approvedPayloadHash." (status `invalid`). Auto-approval now goes through the same approval record as a human review, with `approvalSource: "auto_low_risk"`. Payload drift is still rejected.
-- The morning review command passes `memoryStore` and `knowledgeUpdate` to the bundle run, so auto-approved items can actually be written instead of ending up `blocked`.
-- A failing auto-apply is logged via `safeWarn` instead of being swallowed.
-
-### Changed
-
-- Note import skips files whose content is already in the prompt or in memory: workspace prompt files (`SOUL.md`, `USER.md`, `IDENTITY.md`, `AGENTS.md`, `HEARTBEAT.md`, `TOOLS.md`, `MEMORY.md`, `BOOTSTRAP.md`, `persona-voice.md`), notes derived from stored memories (`memory/episodes/**`, `memory/dream-diary/**`, `DREAMS.md`, `memory/consolidation/**`, `memory/graph/**`) and continuously appended reports and logs (`reports/routines/**`, `**/logbuch.md`, `**/gesehen.md`). Daily notes, `memory/eigenzeit.md`, research reports and other documents stay importable. Extend the list with `noteImportExclude`, or replace it with `noteImportExcludeReplaceDefaults: true`.
-- The morning review message reports automatically applied and failed items, and drops the preview wording and the next-step hint when nothing is left to approve.
-
-## [7.19.1] — 2026-11-07
-
-### Changed
-
-- Morgen-Review in Telegram aufgeräumt: Notizen erscheinen mit ihrem Titel statt mit Dateiname und abgeschnittenem Markdown, der Rest als „… und N weitere“, das Risiko als Satz („Alle mit niedrigem Risiko.“).
-- Reine Systemhinweise stehen nur noch einmal in der Nachricht, der Titel trägt keine Uhrzeit mehr, doppelte Leerzeilen entfallen.
-- Der nächste Schritt nennt einen Befehl, den es wirklich gibt: `/plur1bus review quickapply` statt „approve low-risk → apply“.
-
-## [7.19.0] — 2026-11-03
-
-### Added
-
-- Independent incoming Jev emotion assessment (`emotion.jev`), opt-in per global and per-agent switch. `shadow` mode assesses and logs bounded proposal metadata without touching the legacy mood writer; `active` mode applies independent reaction evidence to the shared per-agent EmotionalState by elapsed time, skipping the legacy turn update/fallback/writer and the standalone emotional-state injector for active agents. Runs before memory recall, including when `autoRecall` is disabled or its database fails, on the existing `captureChunkingJev` credential and model with a 1,000 ms deadline and no retries. Stored memory emotion classification and recall scoring are unchanged.
-- Telegram outgoing speech adapter (`scripts/plan-speech.mjs` plus rollout tooling in `scripts/telegramTts/`): bilingual (`de`/`pl`) ElevenLabs delivery for `main`, `bernhardine`, `heisenberg` driven by canonical semantic intent/delivery planning, not raw mood text. Shadow mode synthesizes neutral canonical text and exposes content-free proposals; active mode renders validated metadata. Run context is read only from a private, time-bounded `.plur1bus/speech-context/<hashed-run>.json` snapshot scoped to an exact agent/session/run/workspace match; missing or invalid context falls back to final-text-only planning. Preview/rollback via `scripts/telegramTts/deploy.py`.
-
-### Security
-
-- `@huggingface/transformers` 4.2.0 → 4.3.2, closing the high-severity `sharp` advisory (CVE-2026-96889, librsvg) pulled in transitively; the `sharp` override is raised to `0.35.5` to match.
-- Added a `zod` override (`4.6.7`) closing a high-severity memory-exhaustion advisory in the `openai` dependency chain.
-- `npm audit --omit=dev`: 0 vulnerabilities (previously 3 high). Remaining findings are exclusively in `devDependencies` (`c8`, `openclaw`); none ship in the published package. The `c8` fix path is a major-version downgrade and the `openclaw` devDependency fix path regresses the total count on this host — both left unresolved deliberately rather than forced.
-
-## [7.18.31] — 2026-10-23
-
-### Fixed
-
-- Skill Miner distinguishes real low-confidence decisions from technical/invalid responses. Only genuine decisions are reused for seven days; versioned fingerprints include evidence content/trust, prompt, effective model/policy and the authorized skill catalogue. Existing legacy cache entries remain stored but no longer block reconsideration. Semantic extraction validation also rejects invalid responses from the transport result cache, including older persisted entries, while valid results remain cacheable.
-- Compare same-owner workflows as well as names. Shared evidence alone does not merge different workflows; explicit rejections remain binding. Repeated instructions are duplicates even with new supporting evidence.
-
-### Changed
-
-- Focused, bounded topic cohorts supplement mixed evidence clusters. Grouping ignores conversational filler and attachment error metadata; admission and ACL gates stay unchanged. Extraction uses stable system instructions, at most 12 evidence excerpts and eight same-owner catalogue entries, with bounded model attempts.
-- Extend existing mined skills through public OpenClaw Workshop update proposals. Drafts append to the currently installed content, including manual additions; bound base-content hashes and reviewed proposal revisions protect concurrent edits. The Workshop may normalize frontmatter/newlines during application. Previous versions remain in the ledger, becoming superseded only after successful activation. Rejecting an extension retains its active base.
-- Existing approval/auto-apply rules, model overrides, schedules and installed skills are preserved. No OpenClaw upgrade or Harness import.
-
-## [7.18.30] — 2026-10-23
-
-### Fixed
-
-- Feature cron clients retry only the exact Gateway `UNAVAILABLE` rejection for the retired PLUR1BUS instance. Three fresh RPC attempts after 5/10/15 seconds resolve the current registration, covering brief hot-reload gaps without calling the old instance again.
-- Intermediate rejections produce no cron stdout/stderr; successful `NO_REPLY` suppression is preserved. Exhaustion remains a visible error. Business errors, permission failures, timeouts, malformed replies and mutation-policy denials are not retried.
-
-## [7.18.29] — 2026-10-23
-
-### Changed
-
-- Make the Jev credential status prominent beside the key editor: show whether a key is present and whether the effective source is the environment or plugin configuration. The key value stays hidden, including in read-only views.
-- Explain that the credential is shared by all agents in this PLUR1BUS installation and that an explicit plugin configuration key takes precedence over the environment fallback. Credential resolution and saved configuration remain unchanged.
-
-## [7.18.28] — 2026-10-23
-
-### Fixed
-
-- Selectively backport upstream `432313664242fc6c29c0b9bf3bcea8b9e5ad93c0` to the OpenClaw plugin: keep the reranker verdict through namespace merging and tier-budget selection, bound reranker inputs, retry incomplete KNOWLEDGE embeddings, and exclude graph-only hits whose relevance check failed. The standalone harness/engine is not imported.
-- Preserve provider order on equal or inconsistent scores instead of restoring vector order on ties. Omitted reranker caps retain the configured recall candidate pool; explicit caps remain effective. Existing ACL checks and intentional empty Jev shortlists remain intact.
-- The operator recall comparison now uses the same namespace merge and global budget as production. Model assignments, permissions, provider cache boundaries and output limits are unchanged.
-
-## [7.18.27] — 2026-10-23
-
-### Changed
-
-- PLUR1BUS model selections share provider groups and natural sorting across chat, subagents, background defaults and task overrides. Options show safe configured catalog names, concrete IDs and aliases; existing agent allowlists, permissions and saved model IDs remain authoritative.
-- Model-catalog reconciliation distinguishes complete verified inventories from partial/error results, preserves referenced models and never rewrites routing or permissions. ID-only API responses preserve human-readable names.
-- Read-only recall comparison evaluates 40/50/100 ANN candidates and an optional conservative Jev relevance prefilter with the same pipeline and scoped snapshot. Uncertain, missing or invalid Jev decisions retain candidates. Provider ACL is checked immediately before reranking; adapters can explicitly distinguish an empty relevance shortlist from a malformed provider response.
-- Live comparison: 30 questions across three agents, 23/27 known source anchors found by every variant. Jev adds latency and token use without reducing Cohere billing units; production retains 40 candidates, at most 15 prompt memories and the existing direct reranker. See `docs/audits/2026-10-23-recall-comparison.md`.
-
-## [7.18.26] — 2026-10-23
-
-### Changed
-
-- Afterthought prompts keep stable reflection instructions, identity and Persona Voice in the system prefix, with the untrusted conversation and the decision request in a separate user message. The native OpenClaw Anthropic transport can cache the stable prefix independently of changing conversation history. Existing provider cache lifetimes, per-agent task model overrides and full-context reflection remain unchanged; a cache hit is not guaranteed after the idle delay.
-
-## [7.18.25] — 2026-10-22
-
-### Changed
-
-- Afterthoughts reflect on the original conversation after one persisted random idle delay of 15–120 minutes. New interaction invalidates pending work. Full retained history, compaction summaries, tool results, identity and Persona Voice are available; only the context copy is compressed when needed. A model decision may produce no message, a useful short follow-up, or an optional document. Original channel/account/thread and session generation stay pinned. A durable send intent prevents automatic retries after an uncertain transport result.
-- The afterthought cron checks deadlines every minute, without a model call before work is due. Previously shipped 30-minute and three-hour intervals migrate to this cadence; custom intervals remain unchanged.
-- Jev credentials can be saved or removed from the PLUR1BUS dashboard using a dedicated authenticated native UI bridge. Values remain out of URLs, status responses and logs. Explicit config keys take priority over the existing environment fallback. Custom plugin UI must be enabled on the host for credential editing.
-- Persona learning and proactive feedback exclude current heartbeat templates and explicit internal execution while retaining ordinary user discussions of those topics.
-
-## [7.18.24] — 2026-10-13
-
-### Behoben
-
-- **Ein Session-Reset legte das Gedächtnis aller Agenten lahm.** OpenClaw ruft bei jedem Reset oder Löschen einer Session (`/new`, `/reset`, gelöschte Sessions) die Runtime-Lifecycle-Cleanups aller Plugins auf. PLUR1BUS baute daraufhin Pool, Shared Pool, Embeddings und Caches ab, ohne sie neu zu öffnen. Bis zum nächsten Gateway-Neustart scheiterten Recall, Capture und Feature-Crons mit „MultiNamespacePool is shutdown“. Session-bezogene Cleanups (`reason` `reset`/`delete` oder mit `sessionKey`) lassen die Ressourcen jetzt stehen. Bei `restart`, `disable` und `gateway_stop` wird weiter alles abgebaut.
-
-## [7.18.23] — 2026-10-09
-
-### Geändert
-
-- **Haiku-Routen denken im Hintergrund nicht mehr mit.** Claude Haiku 5.5 denkt ohne Angabe adaptiv (Effort `medium`), und die Denk-Tokens zählen gegen `maxTokens`. Bei den knappen Limits der Hintergrundjobs bliebe die Antwort leer. Der Host-Weg schickt deshalb für Routen mit einem `anthropic/claude-haiku-*`-Modell `reasoning: "off"` mit (OpenClaw macht daraus `thinking: disabled`). `disableThinking: false` im Feature-Block schaltet das Denken wieder ein, `disableThinking: true` schaltet es jetzt auch auf Host-Routen für jedes Modell ab. Bei Haiku 4.5 ändert sich nichts, es dachte ohne Angabe ohnehin nie.
-- **Knappe Ausgabelimits rund 50 % höher.** Der Tokenizer von Haiku 5.5 zählt denselben Text etwa 30 % länger. Angehoben: Traum-Erzählungen 400/900 → 600/1200 (Zeichengrenze 1200/3000 → 1800/4000), Light-/REM-Dream 400/600 → 600/900, Emotion-T3 300 → 450, Critical-Push-Klassifikation 16 → 24, Episoden 500 → 750, Konfliktlöser 400 → 600, Kompaktierung 300 → 450, Skill-Miner 800 → 1200 und Nutzen-Nachtrag 200 → 300, Wiki 400 → 600, Capture-Zusammenfassung `maxChars/3` → `maxChars/2`, Standard des Direktwegs 300 → 450.
-
-## [7.18.22] — 2026-10-06
-
-### Behoben
-
-- **Abgelehnte Obsidian-Befehle schickten rohes JSON in den Chat.** Am 06.10. lehnte die Mutation-Policy das Abend-Review ab (`mode_not_apply(augment)`), und Telegram bekam `{"ok": true, "applied": false, "reason": "mutation_policy_denied", …}`. Die Ablehnung ist jetzt ein übersetzter Text: was gesperrt ist, welcher Schalter es freigibt, und darunter die technischen Gate-Namen.
-- **Review-Cron meldete trotz Ablehnung „ok“.** Der Feature-Cron gibt den Text weiter aus und beendet sich danach mit Fehler, sodass der Lauf als `error` erscheint. Das Ergebnis des Befehls trägt dafür ein nicht aufzählbares `policyDenied`, das nur der Operator-/Cron-Pfad ausliest; der Chat-Host sieht weiter nur `{ text }`.
-
-## [7.18.21] — 2026-10-06
-
-### Behoben
-
-- **Morgen-Review meldete bei `obsidianBridge.mode: "apply"` „❌ System: 1 Fehler“.** Der Health-Check in `runMaintenanceLight` ließ nur `augment` gelten, das Schema erlaubt `augment` und `apply`. Wer deshalb auf `augment` umstellte, verlor alle Schreibrechte der Reviews: Die Mutation-Policy verlangt `apply` und lehnte mit `mode_not_apply(augment)` ab. Der Check akzeptiert jetzt beide Werte.
-- **Systemhinweise im Review mehrfach.** Hinweise werden nach Code gruppiert; „Dashboard-Link zu prüfen“ erscheint einmal mit Zähler statt fünfmal.
-- `invalid_mode` und die Fußnote des Morgen-Reviews sind übersetzt.
-
-## [7.18.20] — 2026-10-04
-
-### Behoben
-
-- **Bots antworteten in Gruppen auf den sichtbaren Denkblock anderer Bots, und Anthropic lehnte ab.** Mit `/reasoning stream` postet OpenClaw das Denken des Modells als Live-Vorschau („🧠 …“) und löscht sie nach der Antwort. Die anderen Bots der Gruppe erhalten diese Vorschau als normale neue Nachricht. Am 04.10. bekam Bernd Bernhardines Vorschau eine Sekunde nach dem Posten, startete darauf einen Turn, und Anthropic verweigerte die Anfrage („reasoning_extraction“). Neuer Filter `lib/group-reasoning-filter.js` auf `before_dispatch` und `before_agent_reply`: Beginnt eine Gruppennachricht mit einem Denk-Präfix, wird der Turn ohne Antwort und ohne Modellaufruf beansprucht. Direktchats bleiben unberührt. Voreingestellte Präfixe: 🧠, 💭, `<think>`, `<thinking>`, `reasoning:`, `thinking:` (auch hinter „Name: “). Einstellbar über `groupReasoningFilter.prefixes`, abschaltbar mit `groupReasoningFilter.enabled: false`. Das Log nennt nur Agent und Sitzung, nie den Text.
-
-## [7.18.19] — 2026-10-04
-
-### Behoben
-
-- **Hinweise des Hosts landeten als Nutzeraussagen im Gedächtnis.** OpenClaw legt nach einem Gateway-Neustart „[System] Your previous turn was interrupted by a gateway restart …“ als `user`-Nachricht in unterbrochene Sitzungen; ebenso eingereihte Nachrichten („[Queued user message from a previous active turn …“), Weiterleitungen aus anderen Sitzungen und die `⟦openclaw:ctx⟧`-Hülle. Der Auto-Capture hielt sie für Gesagtes: nach dem Deploy am 04.10. speicherte Heisenberg den Neustart-Hinweis als Erinnerung, ohne dass Erik etwas geschrieben hatte. `isInjectedContextText` erkennt diese Hinweise jetzt, am Zeilenanfang (auch mit vorangestelltem „User:“) bzw. an ihren eindeutigen Formulierungen; bloße Erwähnungen im Satz bleiben erfassbar.
-
-## [7.18.18] — 2026-10-04
+**Temperament pro Agent im Dashboard wählbar.** Keine neuen Konfigurationsschlüssel; die Karte schreibt denselben Eintrag wie `/plur1bus temperament`.
 
 ### Hinzugefügt
 
-- **Speicherweise „automatisch“: Jev entscheidet je Nachricht über die Aufteilung.** Die strukturelle Regel teilt an Aufzählungen, Überschriften und Absätzen, auch dort, wo alles zusammengehört: ein gespeichertes Rezept wurde zu 14 Zeilen wie „1 Prise Salz“. Mit `captureChunkingMode: "automatisch"` fragt der Capture für jede Nachricht, die die Regel teilen würde, das Entscheidungsmodell Jev (TypeSafe), ob sie eine zusammenhängende Einheit ist oder aus unabhängigen Einzelpunkten besteht. Sicher zusammenhängend → nur das Ganze; sicher unabhängig → nur die Teile; unsicher, „gemischt“, Fehler oder Timeout → Ganzes und Teile wie bei „beides“. Die Schnittstellen setzt weiter die Regel. Einstellungen unter `captureChunkingJev` (`apiKeyEnv`, Standard `TYPESAFE_API_KEY`; `model` `jev-latest`; `minConfidence` 0,85; `timeoutMs` 5000). Am 04.10.2026 auf deutschen Texten geprüft: Rezept und Erklärung „zusammenhängend“, vier unabhängige Anliegen „unabhängig“, jeweils Sicherheit 1,00 in 200–450 ms. Die Nachricht geht dafür an api.typesafe.ai; ohne Schlüssel verhält sich der Modus wie „beides“.
-- **Dashboard:** Der Speicherweise-Schalter auf der Capture-Karte bietet „Automatic (Jev)“ als vierte Stufe und warnt, wenn der Modus aktiv ist, aber kein Schlüssel gefunden wird (nur Vorhandensein, nie der Wert).
+- **Dashboard-Karte „Temperament“.** Das Temperament je Agent (`ausgewogen`, `warm`, `kühl`, `feurig`, `stoisch`) lässt sich jetzt im Operator-Reiter wählen, nicht nur per `/plur1bus temperament`. Die Karte schreibt denselben Eintrag `emotion.temperaments.<agent>` (Preset-Werte plus Name) über OpenClaws Config-Writer (`mutateConfigFile`, Reload `auto`); das Ergebnis prüft `resolveEffectiveConfig`, bevor etwas zugewiesen wird. Zeilen: die Chat-Agenten (Kanalbindung, ältere Hosts: Heartbeat), jeder Agent mit gespeichertem Eintrag und „All other agents“ (`default`), auf das alle übrigen Agenten samt Subagenten zurückfallen, `main` nie. Jede Zeile nennt, was gerade läuft und was ohne eigene Wahl gälte; „No own choice“ entfernt den Eintrag. Bis der Plugin-Reload (etwa eine Minute) die Wahl übernommen hat, zeigt die Auswahl schon die gespeicherte Wahl und „Running now“ den laufenden Wert, markiert als „pending“ (`temperament:<agent>` im Vergleich Datei gegen laufende Config). Eine Wahl, die die Datei nicht ändert, schreibt nichts und löst keinen Reload aus; ein Save ohne Änderung in dieser Zeit schreibt also nicht den alten laufenden Wert zurück. Träume und Antwortstil lesen nur den Namen aus dem eigenen Eintrag eines Agenten; die Zeile „All other agents“ ändert nur die Stimmungswerte. Karte und Meldung sagen das so. Schreibrecht wie bei den anderen Karten: nur mit `controlUi.writeActions: "all"` und dem Einmal-Token der Seite; jede Änderung steht als Info-Zeile im Gateway-Log (`dashboard temperament.set agent=… temperament=…`). Neue Datei `lib/agent-temperament.js` (in `DEPLOY_FILES`).
 
-## [7.18.17] — 2026-10-04
+### Fixed
 
-### Behoben
+- **`/plur1bus temperament` mit geerbten Objekt-Schlüsseln.** `constructor`, `toString` oder `__proto__` galten als Preset und landeten als Unsinn in `openclaw.json`; jetzt zählen nur die fünf Presets. Der Befehl schreibt außerdem eine tiefe Kopie des Presets statt eines geteilten `baseline`-Objekts, über dieselbe Funktion wie die Karte.
+- **Package-Version 7.21.7.**
 
-- **Recall verwarf die vollständige Ursprungszeile zugunsten ihrer Teilstücke.** Seit 7.12.70 speichert der Capture lange Antworten zusätzlich in Teilstücken (`keepWhole`: Ganzes plus Teile, gleiche `sourceTurnId`, nur die Teile mit `chunkGroupId`). Die Textentdopplung in `dedupResults` hielt die Ursprungszeile für ein Duplikat ihres ersten Teilstücks, weil beide fast dieselbe Zusammenfassung haben, und warf sie heraus. Ein vollständig gespeichertes Rezept kam so auch über `memory_recall` mit `full_text: true` nur bis „250 g Mehl“ an. Die Ursprungszeile ersetzt jetzt ihre bereits aufgenommenen Teilstücke an deren Platz, und Teilstücke eines schon aufgenommenen Ganzen fallen weg. Gilt an allen drei Aufrufstellen (Auto-Recall, `memory_recall`, Namespace-Merge).
+## [7.21.6] — 2026-11-27
 
-## [7.18.16] — 2026-10-04
+**Herkunft für alte Neo-Einträge von main, die nur noch im Index stehen.** Neu ist eine Zuordnungsdatei als zusätzliche Quelle für das Nachtragen der Herkunft. Damit bekommen 1 209 Chatnachrichten aus Bernds Telegram vom 11.07. bis 08.09.2026 ihren Chat (1 056 DM, 153 Gruppe), die weder Lauf-ID noch Turn-Hash zuordnen konnten.
 
-### Behoben
-
-- **Recall zeigte gespeicherte Erinnerungen nur als Bruchstück.** Jede Erinnerung kam als Zusammenfassung in den Prompt, die semantische Kompression verteilte dann 240 Wörter auf alle Treffer (bei 15 Treffern rund 16 Wörter je Erinnerung), und der Recall-Block kappte jeden Eintrag bei 400 Zeichen. Ein vollständig gespeichertes Rezept (2515 Zeichen) kam als „Mehl, 7 g Hirschhornsalz, … auskühlen lassen“ an; der Agent hielt die Mitte für verloren und suchte per `exec` in Sitzungsdateien. Die bestplatzierten Treffer (`recall.fullTextTopRecords`, Standard 3) kommen jetzt mit ihrem gespeicherten Text in den Prompt, bis `recall.fullTextMaxChars` (Standard 2000) und ohne Kompression. Was der Prompt kürzer zeigt als gespeichert, trägt `truncated="true"`, und der Block sagt dem Modell, den vollen Text vor dem Zitieren mit `memory_recall` und `full_text: true` zu holen. Die Gesamtgrenzen `recall.memoriesMaxChars` und `recall.globalInjectMaxChars` gelten unverändert.
-- **`/plur1bus enable|disable <feature>`** las das Wort „enable“/„disable“ selbst als Feature-Namen („Feature "disable" unknown“). `/enable` und `/disable` waren nicht betroffen.
-
-## [7.18.15] — 2026-10-03
+Upgrade-Hinweise: keine neuen Konfigurationsschlüssel, keine Laufzeitänderung. Die Zuordnung ist ein eigener Schritt mit gestopptem Gateway und Snapshot.
 
 ### Hinzugefügt
 
-- **`dreaming.narrative.diaryFromUserChats` (Standard `false`).** Light-Träume aus dem Chat mit einem identifizierten Nutzer laufen im Bereich `user`; `diaryScopeAllowed` lässt ins Traumtagebuch nur den privaten Bereich des Agenten, deshalb kam aus echten Chats nie ein Light-Eintrag in `DREAMS.md`. Eingeschaltet schreiben auch diese Erzählungen ins Tagebuch. Nur für Agenten mit genau einem Besitzer gedacht: `DREAMS.md` liegt im Workspace des Agenten, und jeder mit Zugriff darauf liest die Erzählung.
+- **`--id-map` für `scripts/neo-origin-backfill.mjs`.** Eine TSV mit der Kopfzeile `id<TAB>sessionKey<TAB>method` nennt den Sitzungsschlüssel je Neo-Kandidaten-ID, für Einträge, die weder die Lauf-ID noch der Hash der Turn-ID zuordnet. Sie gilt für Journal-Kandidaten und reine Indexeinträge, als Quelle `id-map` nach den Lauf-ID-Quellen und vor dem Turn-ID-Hash; nennt eine andere Quelle einen anderen Schlüssel, bleibt die Id wie bisher unangetastet. Eine Zeile gilt nur, wenn der Agent im Schlüssel der des Eintrags ist (Einträge ohne Agent: der Agent des Workspace). Nur Chat-Schlüssel, IDs im Format `mem_` plus 20 Hex-Zeichen, höchstens 8 MiB; fehlerhafte Zeilen und IDs mit zwei Schlüsseln werden gezählt und übersprungen. Ein Gruppenschlüssel ohne Thema und derselbe mit `:topic:` gelten als ein Schlüssel, geschrieben wird der mit Thema (auch zwischen den bisherigen Quellen); zwei verschiedene Themen bleiben ein Widerspruch. Zeilen für reine Indexeinträge brauchen `--include-index-only`, ohne die Option schreibt `--apply` gar nichts. Der Bericht `archive/origin-backfill.*.jsonl` führt die Spalte `method` mit, Journal-Revisionen aus der Liste tragen `sessionKeySource: "backfill:id-map"`. Probelauf auf einer Kopie von main mit der Liste vom 26.11.: 1 209 Indexzeilen (1 056 direct, 153 group), keine Journal-Revision, keine unbekannte, mehrdeutige oder schon mit Schlüssel versehene Id; ein zweiter Lauf schreibt nichts. Angewendet wird die Liste erst im nächsten Deploy-Fenster.
+- **Package-Version 7.21.6.**
 
-## [7.18.14] — 2026-10-03
+## [7.21.5] — 2026-11-26
 
-### Behoben
+**Neo-Erinnerungen bekommen ihre Herkunft nachgetragen, GitHub Packages veröffentlicht der Release-Workflow selbst, der Messstand ist auf dem Stand vom 25.11.**
 
-- **Light-Träume und Episoden laufen wieder mit LLM.** Unter OpenClaw 2026.9.7 lehnt der Host jeden Plugin-LLM-Aufruf aus `agent_end` mit `LLM_COMPLETION_NOT_AUTHORIZED: agent tool caller authority is no longer active` ab, weil die Nacharbeit die Identität des schon beendeten Turns erbt (openclaw/openclaw#162941, upstream offen). Betroffen waren Gesprächserkenntnisse, Traumerzählung, Traum-Echo, Persona-Stimme und Episoden-Extraktion: Light-Träume kamen ohne Erzählung und nie ins Traumtagebuch, Episoden ohne LLM-Anreicherung. `agent_end` reiht diese Arbeit jetzt nur noch ein (`<baseDbPath>/.post-turn-queue/<agent>/`, eine Datei je Turn-Stapel, Modus 0600, nach der Verarbeitung gelöscht), der neue native Feature-Cron `post-turn-refine` arbeitet sie alle 20 Minuten ab, FIFO je Agent hinter einem Job-Lock. Scheitert ein Eintrag, hält die Schlange an (Episoden bauen aufeinander auf); nach drei Versuchen wird er mit Warnung verworfen. Fällt das Einreihen aus, läuft die Arbeit wie bisher direkt im Hook.
+Upgrade-Hinweise: keine neuen Konfigurationsschlüssel. Der Kandidatenindex des Neo-Stores führt neu `sensitivity` und `sensitivitySource`. Das Nachtragen der Herkunft ist ein eigener Schritt mit gestopptem Gateway und Snapshot (siehe unten), kein Teil des Starts.
 
-### Hinzugefügt
+### Fixed
 
-- `runtime.deferPostTurnLlm` (Standard `true`). `false` führt Light-Traum und Episoden wie vor 7.18.14 direkt in `agent_end` aus; dann entsteht auch kein `post-turn-refine`-Cron.
-
-## [7.18.13] — 2026-10-03
-
-### Geändert
-
-- **„📂 Geschrieben“ kennt die Wochenrhythmen.** Das Traumtagebuch bekommt seinen automatischen Eintrag mit dem wöchentlichen REM-Traum; die Zeile ist ✅, solange DREAMS.md zum letzten REM-Bericht geschrieben wurde, und warnt, wenn dieser Eintrag fehlt. KNOWLEDGE.md zeigt jetzt, wie viele Erinnerungen auf die Einarbeitung warten und seit wann (`.adaptive-learning/knowledge-pending.json`, nur Anzahl und Zeitpunkte). Eine Warnung gibt es erst, wenn etwas offen ist und die Datei über eine Woche nicht geschrieben wurde.
-
-## [7.18.12] — 2026-10-03
+- **Herkunft alter Neo-Kandidaten** (`scripts/neo-origin-backfill.mjs`). Kandidaten aus der Zeit vor 7.20.10 tragen nur die Lauf-ID (`origin.sessionId`), keinen Sitzungsschlüssel. Die Herkunftsgewichtung aus 7.21.2 wertete sie deshalb als „dm“, und eine Gruppenerinnerung zählte im DM des Besitzers als derselbe Chat. Das Skript sucht die Lauf-IDs in den Host-Datenbanken (nur lesend) und rechnet als zweite Quelle den Sitzungsschlüssel aus dem Hash der Turn-ID nach; widersprechen sich die Quellen, bleibt die Id unangetastet. Es hängt je Id eine Revision mit `origin.sessionKey` an, dazu die Regel-Vertraulichkeit, wo sie fehlt. Geschrieben werden nur Chat-Schlüssel (direct, group, channel); Cron-, Subagent- und Hauptsitzungs-Schlüssel bleiben Altbestand. `createdAt`, `updatedAt`, Status und Embedding-Felder bleiben unverändert, die Vektoren hängen weiter an der Id. Trockenlauf am 26.11.: main 2 887, bernhardine 4 589, heisenberg 156 (mit `--legacy-trajectories` 188). Index-Einträge, deren Journalzeilen schon vor 7.19.3 gekürzt wurden, bleiben ohne Schlüssel; `--include-index-only` schreibt die zuordenbaren als reine Indexzeilen.
+- **Kandidatenindex mit Vertraulichkeit.** Globale Neo-Treffer kamen als Indexkopien ohne `sensitivity` an und galten fremd immer als unklassifiziert, auch für Erfassungen ab 7.21.2.
 
 ### Hinzugefügt
 
-- **Abend-Review zeigt, was der Workspace zuletzt geschrieben hat.** Neuer Block „📂 Geschrieben“ mit Tagesnotiz (`memory/YYYY-MM-DD.md`), letztem Light-Traum, letztem REM-Bericht (`memory/dream-diary/rem/`), Traumtagebuch (`DREAMS.md`), `memory/KNOWLEDGE.md` und `MEMORY.md`, jeweils mit Zeitpunkt in der Review-Zeitzone. Eine Warnung erscheint, wenn die neueste Tagesnotiz älter als gestern ist oder der wöchentliche REM-Bericht älter als acht Tage. Gelesen werden nur Dateinamen und Änderungszeiten, keine Inhalte. Was ein Workspace nicht hat, fehlt im Block. Texte auf Deutsch und Englisch.
+- **`store.appendCandidateRevisions`.** `appendCandidates` verwirft eine Revision, deren Text gleich bleibt (Inhalts-Dedupe). Die neue Methode schreibt Journal und Index unter derselben Sperre, prüft dabei die erwarteten Dateigrößen und schreibt bei Abweichung nichts. Den Index nie aus dem Journal neu aufbauen, um so etwas rückgängig zu machen: Bei main und bernhardine stehen viele Einträge nur noch im Index, ein Neuaufbau würde sie und danach ihre Vektoren verlieren.
+- **GitHub Packages im Release-Workflow.** Der neue Job `github-packages` in `plugin-release.yml` veröffentlicht nach `github-release` denselben Tarball mit dem automatischen Token (`packages: write`, kein Secret) auf `npm.pkg.github.com`; bis 7.21.4 ging das von Hand. Vorher prüft er das Artefakt gegen `SHA256SUMS` und diese Datei gegen das Release-Asset, danach liest er `dist.integrity` zurück. Eine schon vorhandene Version mit denselben Bytes wird übersprungen, mit anderen Bytes bricht der Job ab. `latest` rückt nur auf ein reines x.y.z vor, das über der höchsten veröffentlichten Version liegt. Schlägt nur dieser Job fehl, reicht „Re-run failed jobs“.
+- **Messstand `bench/` auf Stand 25.11.2026**: `run.mjs`, `lib/common.mjs` und das neue `lib/recall-cache.mjs` aus dem Live-Messstand übernommen. Antwort, Jury, Einbettungen, Reranker und `ingest-capture.mjs --jev` laufen nur noch mit eigenen Schlüsseln (`BENCH_OPENAI_API_KEY`, `BENCH_COHERE_API_KEY`, `BENCH_DEEPSEEK_API_KEY`, `BENCH_TYPESAFE_API_KEY`); `loadEnv` lehnt jede Datei unter `~/.openclaw`, `$OPENCLAW_HOME` oder `$OPENCLAW_STATE_DIR` ab. Neu sind der Recall-Cache, `--auto-policy off|base|full`, `--cohere-billing`, `--temporal-mode`, `--judge-provider` und `--rerank-model` (Standard `rerank-v5.0-fast`, `BENCH_DEFAULT_RERANK_MODEL`). `excluded.json` führt nach der Gold-Prüfung vom 24.11. 25 Fragen.
+- **Package-Version 7.21.5.**
 
-## [7.18.11] — 2026-10-03
+## [7.21.4] — 2026-11-25
 
-### Behoben
+**Weniger synchrone Arbeit im Main-Thread nach jedem Zug.** Die Analyse der Main-Thread-Stalls vom 24./25.11. (884 Stalls ≥ 1 s im Betrieb, 2 100 s) fand im `agent_end`-Pfad von PLUR1BUS zwei feste Kosten je Capture, gemessen auf einer Kopie der bernhardine-Daten: der Neo-Embedding-Drain mit 0,8–1,0 s auch ohne offene Einträge und die Graph-Dedupe mit 0,3–0,5 s.
 
-- **Morgen- und Abend-Review liefen nie.** `/plur1bus obsidian cron install-workspace-reviews` und `print-morning-review` legten die Reviews als agentTurn mit `--message "/plur1bus obsidian …-review"` an. Das Modell kann Plugin-Kommandos nicht ausführen; es suchte nach einem `plur1bus`-Binary, rief `date`, `df` und `ls` auf und schickte ein selbst gebautes „Review“. Der Cron meldete trotzdem `ok`. Die Reviews sind jetzt native Feature-Crons (`run-feature-cron.mjs --feature morning-review|evening-review`) ohne Modell.
-- **Bestehende Review-Jobs werden umgestellt.** Der Feature-Cron-Bootstrap erkennt agentTurn-Jobs, deren Prompt genau einen der beiden Befehle enthält, und stellt sie per `cron edit --command-argv` um. Voraussetzung ist ein konkretes Direktchat-Ziel (`--announce --channel telegram --to <id>`); Jobs ohne ein solches Ziel bleiben unverändert. Eigener Prompt-Text um den Befehl herum entfällt dabei.
-- **Wer das Review auslöst.** Ein Review schreibt in den Vault und verlangt deshalb einen berechtigten Absender. Der Cron führt es über den Operator-Pfad im Namen des Direktchats aus, an den er zustellt. Es gelten dieselben Regeln wie im Chat: `allowedUserIds`, Vault-Bestätigung und Antwortsprache.
+Upgrade-Hinweise: keine neuen Schlüssel, keine Datenänderung.
 
-### Geändert
+### Fixed
 
-- **Review-Texte sind mehrsprachig.** Morgen-, Abend- und Wochen-Review sowie `review show`/`prepare` kamen fest auf Deutsch. Die Texte stehen jetzt im i18n-Wörterbuch (de, en). Die Sprache kommt aus dem Kontext (`ctx.lang`, Chatverlauf), sonst aus der Plugin-Option `language` (Standard: Deutsch); Review-Crons nutzen `language`. Sprachen ohne Wörterbuch-Eintrag bekommen Englisch.
-- **Datum mit Wochentag in der richtigen Zeitzone.** Die Kopfzeile zeigte UTC ohne Wochentag („3. Oktober 2026, 17:28“ um 19:28 Ortszeit). Sie nutzt jetzt `Intl.DateTimeFormat` in der Sprache des Reviews und in `timezone` bzw. der Systemzeitzone („Samstag, 3. Oktober 2026 um 19:28“).
-- „📋 1 Vorschlagge warten“ heißt jetzt „📋 1 Vorschlag wartet“.
+- **Embedding-Drain ohne Leerlaufkosten.** Der Drain las bei jedem Capture die ganze `embedding-queue.jsonl` (bernhardine 18 242 Zeilen, fast nur Erledigtes) und vorab die vollständigen Kandidaten-, Verhaltens- und Turn-Journale (je 17–22 MB). Er merkt sich jetzt den Stand der Queue nach einem vollständigen Lauf (nur im Prozess): unveränderte Datei = nichts zu tun, angehängte Zeilen = nur diese plus die noch offenen Einträge; eine umgeschriebene Datei (Aufbewahrung, Umbenennung) wird wieder ganz gelesen. Die Zieljournale werden erst gelesen, wenn ein Eintrag sie braucht. Einträge, an denen der Embedder gescheitert ist (`deferred`), werden ohne neue Zeilen höchstens alle 10 Minuten erneut versucht; fehlte nur der Embedder, sofort beim nächsten Lauf mit Embedder. Gemessen: 69 ms beim ersten Lauf, danach 1 ms.
+- **Graph-Dedupe über einen Existenz-Index** (`lib/graph-edge-index.js`). Statt je Capture die letzten 10 000 Zeilen von `memory-graph.jsonl` zu lesen und die Adjazenz aufzubauen, hält ein Index dieselben 10 000 Zeilen und liest nur Angehängtes nach (gleiche Regeln wie `readBoundGraph`: nur gebundene Kanten, ungerichtete in beide Richtungen). Erster Aufbau 574 ms je Prozess und Workspace, danach unter 1 ms. Mit Legacy-Graphdatei bleibt der alte Weg.
+- **Hook-Zähler in `agent_end` asynchron** (`recordHookAsync`, wie `before_prompt_build` seit 7.12.30). Das Watermark der Nachverarbeitung bleibt synchron.
+- **Package-Version 7.21.4.**
 
-## [7.18.10] — 2026-10-02
+## [7.21.3] — 2026-11-25
 
-### Geändert
+**Hintergrund-Turns im DM mit dem Besitzer sehen dessen Erinnerungen, lange Prompts sprengen den Recall nicht mehr.** Drei Fehler aus dem ersten Live-Tag von 7.21.1/7.21.2.
 
-- **`config.get` der Cron-Einrichtung wartet 60 s statt 30 s.** Die neue Diagnose aus 7.18.8 zeigte direkt nach dem Start von 7.18.9 `pending reason=config-load-failed`: Unter OpenClaw 2026.9.7 braucht der Aufruf im Leerlauf 4 s, kurz nach einem Gateway-Start über 30 s. Der Bootstrap änderte dann nichts und lief beim nächsten Start erneut an.
+Upgrade-Hinweise: keine neuen Schlüssel, keine Datenänderung.
 
-## [7.18.9] — 2026-10-02
+### Fixed
 
-### Behoben
+- **Besitzer-DM bei Hintergrund-Turns.** Heartbeat, Cron und Subagent-Fertigmeldungen (`inputProvenance` `inter_session` aus `subagent_announce`/`subagent_settle`) haben keinen bewiesenen Absender; in der DM-Sitzung mit dem eingetragenen Besitzer galt der Altbestand deshalb als fremd (25.11. 13:31 bernhardine: `same=0 foreign=5 capped=11`). Solche Turns zählen jetzt als Besitzer-DM; ihre Antwort geht in diese DM (Vorbehalt: ein Cron, der in dieser Sitzung läuft, aber woandershin zustellt, sieht dieselben Erinnerungen). Normale Nachrichten brauchen weiter einen bewiesenen Absender; `sessions_send` bleibt ausgenommen (Antworten können in die sendende Sitzung gehen). Log: `owner=yes(background)`.
+- **Lange Prompts im Auto-Recall.** Eine Subagent-Fertigmeldung mit 36 693 Zeichen verbrauchte 3 s im Neo-Embedding und 6 s für die LLM-Zusammenfassung der Anfrage; danach kam der Vektor nicht mehr rechtzeitig, der Recall lief in die 12-s-Grenze (25.11. 13:32:12). Der Auto-Recall bettet jetzt höchstens 6 000 Zeichen ein (Anfang ein Drittel, Ende zwei Drittel, `shortenAutoRecallQuery`), Neo-Vorlauf und LanceDB-Recall denselben Text; die LLM-Zusammenfassung bleibt `memory_recall` vorbehalten.
+- **Warm-Pfad mit Neo-Frist.** Der Start-Prewarm wartete ohne Frist auf das Neo-Embedding und lief kalt in die 12-s-Grenze. Er nutzt jetzt dasselbe Vorlauf-Budget wie der normale Recall (`neoPreludeBudgetMs`, jetzt in `engine/recall/neo-prelude.js`).
+- **Package-Version 7.21.3.**
 
-- **`planCreateCount=1` nach jedem Gateway-Start war ein Lesefehler.** `setup-feature-crons.mjs --json` beendete sich mit `process.exit()`, direkt nachdem es rund 170 KB JSON geschrieben hatte. Über die Pipe des Bootstraps kamen davon nur 64 KiB an. Der Bootstrap konnte das abgeschnittene JSON nicht lesen und wertete das pauschal als einen offenen Job. Das Skript setzt jetzt `process.exitCode` und lässt die Ausgabe vollständig ab. Es fehlte nie ein Cron.
+## [7.21.2] — 2026-11-25
 
-## [7.18.8] — 2026-10-02
+**Erinnerungen bleiben in ihrem Chat, Vertrauliches verlässt ihn nie.** Dazu zwei ACL-Fehler aus 7.21.1: Neo-Einträge mit Bereich `workspace_shared` waren für niemanden sichtbar, und in Christians Telegram-DM mit Themen lief der Recall fast immer ohne erkannten Absender.
 
-### Geändert
+Upgrade-Hinweise: Neuer Schlüssel `recall.contextWeighting` (Standard an), neue Spalten `sensitivity` und `sensitivitySource` in jeder Memory-Tabelle (beim ersten Start angelegt, Bestand `''` = nicht eingestuft). Bis `scripts/sensitivity-backfill.mjs` gelaufen ist (nur mit Snapshot, bei gestopptem Gateway), erscheinen Erinnerungen aus anderen Chats nur, wenn sie seit 7.21.2 eingestuft wurden; im DM mit dem Besitzer des Agenten zählt der Altbestand weiter als derselbe Chat. Wer auf 7.21.1 zurückgeht, muss `recall.contextWeighting` vorher aus `openclaw.json` entfernen; die neuen Spalten stören 7.21.1 nicht.
 
-- **Feature-Cron-Bootstrap sagt, was offen ist.** Nach jedem Gateway-Start meldete das Log `planCreateCount=1`, ohne den Job zu nennen. Bleibt etwas offen, folgt jetzt eine Zeile `plur1bus-feature-crons: pending …` mit den geplanten und geänderten Jobs, den gescheiterten Aufrufen oder dem Abbruchgrund (nur Jobnamen, keine Inhalte).
-- **Lesende CLI-Aufrufe der Cron-Einrichtung warten 60 s statt 15 s** (`agents list`, `cron list`). Unter OpenClaw 2026.9.7 braucht `agents list` schon im Leerlauf 11–13 s, direkt nach einem Start länger. Der Bootstrap gab dann mit `planCreateCount=11` auf. Schreibende Aufrufe (`cron add`/`edit`) behalten ihr kurzes Budget.
+### Fixed
 
-## [7.18.7] — 2026-10-02
-
-### Behoben
-
-- **Endlosschleife aus Plugin-Neuladen und LLM-Timeouts unter OpenClaw 2026.9.7.** Der erste `runtime.llm`-Aufruf je Agent und Modell lässt den Host einen Laufzeitstand bauen, der alle Plugins neu lädt und den Gateway 40–70 s blockiert. Gab der Aufrufer vorher auf (Skill-Miner nach 30 s), warf der Host den fertigen Bau weg, und der nächste Aufruf baute erneut: Am 02.10.2026 folgten so für Bernhardine 4 und für Heisenberg 5 Neuladungen samt Stillstand aufeinander, jeweils mit Timeout (openclaw/openclaw#163029). Für einen Schlüssel ohne jüngsten Erfolg bekommt der Host-Aufruf jetzt ein eigenes Abbruchsignal (180 s). Der Aufrufer hört weiterhin nach seinem Timeout auf zu warten, der Host baut aber fertig und behält den Stand für die nächsten Aufrufe. Läuft ein warmer Schlüssel in den Timeout, gilt er wieder als kalt.
-
-## [7.18.6] — 2026-10-02
-
-### Geändert
-
-- **`runtime.traceRegistrations` hält 200 statt 60 Stack-Frames fest.** Der erste live eingefangene Stack brach in `prepared-model-runtime` ab, vor dem Aufrufer, der entscheidet, ob ein Turn oder ein Plugin-LLM-Aufruf die Neuladung auslöst.
-
-## [7.18.5] — 2026-10-02
+- **`workspace_shared` im Neo-Store wieder sichtbar.** Die Hooks des Hosts tragen keinen `workspaceKey`, `neoRequester()` lieferte deshalb einen leeren Schlüssel, und kein Agent sah diese Einträge, auch nicht der eigene Hauptagent. Ohne ausdrücklichen Schlüssel kommt er jetzt aus dem Workspace-Verzeichnis, nur über konfigurierte Pfade oder Aliase (`workspaceKeyFromDirStrict`): kein Standard, keine Sitzungs-Map, kein Namensraten. Geteilt heißt weiter: Hauptagent und seine Subagenten im selben Workspace; andere Hauptagenten bekommen den Schlüssel nie.
+- **Telegram-DM-Themen behalten den Absender-Nachweis.** OpenClaw 2026.11 schreibt den Thread im Sitzungsschlüssel als `<Partner>:<Thread>` (`…:direct:55736530:thread:55736530:64934`), Hook, Dispatch und Sitzungseintrag nennen nur `64934`. Der Dispatch scheiterte mit „conflicting threadId“, der Prompt-Hook mit `thread_missing`; am 24.11.2026 liefen 22 von 23 Recalls ohne erkannten Absender. Der Präfix des eigenen Gesprächspartners wird abgeschnitten; in Direktnachrichten gilt ohne `messageThreadId` der Thread des Sitzungsschlüssels, der weiter zu Sitzungseintrag und Dispatch-Ticket passen muss. In Gruppen bleibt der ausdrückliche Hook-Thread Pflicht.
 
 ### Hinzugefügt
 
-- **Diagnose `runtime.traceRegistrations` (Standard aus).** OpenClaw 2026.9.7 lädt das Plugin nach einem Gateway-Start in Wellen mitten im Turn neu, jede Neuladung blockiert den Gateway 40–70 s (openclaw/openclaw#163029). Upstream braucht den Aufruf-Stack einer solchen Neuladung. Eingeschaltet schreibt jede Registrierung eine Warnung mit laufender Nummer je Prozess, Uptime, Abstand zur vorigen Registrierung und Aufruf-Stack ins Gateway-Log.
+- **Gewichtung nach Herkunft** (`recall.contextWeighting`, Auto-Recall, CRR, Semantic Lens, Neo-Block, `memory_recall`/`memory_search`). Derselbe Chat (ganze Gruppe, ganzer DM) zählt voll; Gruppenwissen im DM × 0,85, eine andere Gruppe × 0,5, unbekannte Herkunft × 0,5, eine DM-Erinnerung anderswo × 0,35 — als Faktor auf den Score, ein sehr starker Treffer kommt also durch. Höchstens 5 fremde Erinnerungen je Block. Gilt auch, wenn der DM-Partner selbst in der Gruppe schreibt. Altbestand (`origin` dm ohne `sessionKey`) und Neo-Einträge ohne Sitzungsschlüssel zählen nur im DM mit dem Besitzer des Agenten (bewiesener Absender; `recall.contextWeighting.owners` oder die Allowlist des Kanal-Kontos mit genau einer Person) als derselbe Chat. Faktoren, Obergrenze und Besitzer sind einstellbar. Logzeile `plur1bus-context` je Recall mit den Zählern (gleich, fremd durchgelassen, abgewertet, wegen Vertraulichkeit gefiltert, eingereiht, gekappt).
+- **Vertraulichkeit** (`lib/sensitivity.js`): `banal`, `persönlich` (`personal`) oder `vertraulich` (`confidential`: Gesundheit, Finanzen, Beziehung/Intimes, Familienkonflikte, Adressen/Zugangsdaten, Rechtliches). Regeln beim Capture, bei `memory_store` und für neue Neo-Kandidaten; das stündliche Emotion-Refine stuft im selben LLM-Aufruf mit ein und ersetzt dann das Regelurteil. Fremde vertrauliche oder nicht eingestufte Erinnerungen erscheinen nie. In Gruppen braucht eine fremde Erinnerung zusätzlich ein LLM-Urteil: beim ersten Auftreten wird sie zurückgehalten und eingereiht, ein Hintergrund-Timer stuft die Warteschlange gebündelt ein (Route von `criticalPush`, sonst `merging`); die Urteile liegen in `_sensitivity/verdicts.jsonl`, ohne Erinnerungstext, die Zeilen bleiben unberührt.
+- **Vom Host eingespielte Dateien:** `knowledge_update` übernimmt nichts Vertrauliches nach `memory/KNOWLEDGE.md` (auch Altbestand, nach Regeln), das Traumtagebuch `DREAMS.md` lässt einen vertraulichen Traum aus. Offene Fäden und Traum-Echo erscheinen nicht in Gruppen. Der Obsidian-Spiegel bleibt unverändert.
+- **`scripts/sensitivity-backfill.mjs`:** stuft den Bestand nach Regeln ein (Trockenlauf Standard; `--apply` nur bei gestopptem Gateway und mit Snapshot). Schätzung am 25.11.2026: main 610 von 13 694 aktiven Zeilen vertraulich, bernhardine 1 418 von 24 051, heisenberg 68 von 1 211.
+- **Package-Version 7.21.2.**
+
+## [7.21.1] — 2026-11-25
+
+**Der Recall behält sein Budget, und der Block wird schlanker.** Anlass: Am 24.11.2026 fiel der erste Recall nach einem Neustart zweimal ganz weg (09:44 und 22:29, „recall timed out without cache“), und Bernd fand im Block zu viele alte eigene Antworten, Dubletten und einen falschen Betriebsalarm. Das Gateway-Log zeigt in beiden Fällen einen Stall des Main-Threads (`main-thread stall: elapsedMs=9944` bzw. `18388`) genau im Fenster des Neo-Vorlaufs; die Zeile `embed=17474ms(timeout)` war also kein langsames Embedding, der 4-s-Timer konnte nicht feuern.
+
+Upgrade-Hinweise: **Der Cohere-Reranker nutzt standardmäßig `rerank-v5.0-fast` statt `rerank-v3.5`.** Rerank 5 wird nach Eingabe-Tokens abgerechnet, nicht mehr je Suche; wer v3.5 behalten will, setzt `reranker.model: "rerank-v3.5"`. Neue Schlüssel `recall.keywordFallback`, `recall.mergeTurnParts`, `recall.qualityWeighting.staleAssistant` und `runtime.recallPrewarm`; alle mit Standard an, keiner wird von Setup oder Installer geschrieben. Der Standard von `conversationReactivationRecall.timeoutMs` steigt von 50 auf 250 ms. Wer auf 7.21.0 zurückgeht, muss gesetzte neue Schlüssel vorher aus `openclaw.json` entfernen.
+
+### Geändert
+
+- **Cohere-Standard `rerank-v5.0-fast`** (`DEFAULT_COHERE_RERANK_MODEL`, Provider-Wizard, Dashboard-/Setup-Text, Schema-Beschreibung). Abrechnung nach Eingabe-Tokens statt je Suche (0,02 $ je 1 Mio. Tokens laut Cohere); `reranker.maxDocChars` begrenzt die Kosten jetzt direkt. Gemessen mit Bench-Schlüssel (LOCOMO Kat. 1–4, 431 Fragen; LME 100; Breite 30/100): Belegtreffer in den Top 30 LOCOMO 418 statt 414 von 429, LME 100 von 100 wie v3.5; der volle Lauf kostete 3,66 Mio. Tokens (etwa 0,07 $). Antwortqualität (DeepSeek-Antwort und -Jury, Produktionsdarstellung, gleiche Auto-Recall-Regeln): LOCOMO 74,7 % statt 74,2 % (+0,5 pp, KI −2,6 … +3,5), LME 94 % statt 91 % (+3 pp, KI −1 … +8), beides nicht signifikant. `reranker.model: "rerank-v3.5"` behält das alte Modell.
+- **Neo-Vorlauf mit festem Budget.** Höchstens `min(neo.recall.global.embedTimeoutMs, runtime.recallTimeoutMs / 4)` ab Beginn des Recalls (bei 12 000 ms: 3 000 ms). Danach entfallen globale Suche und Lanes; die Logzeile `recall prelude` nennt `budget=…ms` und `(exceeded)`.
+- **Schlüsselwort-/Jüngste-Einträge-Rückfall.** Der Auto-Recall wartet auf den Anfragevektor nur, bis ein Viertel des Budgets übrig ist (mindestens 1,5 s, höchstens 3 s; ein Achtel des Budgets, wenn der Vorlauf das Embedding schon als langsam gesehen hat). Kommt er nicht oder scheitert das Embedding, sucht `lib/recall-keyword-fallback.js` nach bis zu sechs Wörtern der Nachricht und nach den Einträgen der letzten 7 Tage, mit denselben Toren wie der Vektorweg (Lebenszyklus, ACL, Echo, Qualitätsgewicht). Der Block trägt `retrieval="keyword-recent-fallback"` und einen Hinweis an das Modell, das Ergebnis meldet `embedding-unavailable`. `recall.keywordFallback.enabled: false` schaltet ihn ab.
+- **Warmstart.** `runtime.recallPrewarm`: 20 s nach `gateway_start` je Chat-Agent ein lesender Warm-Recall (Embedding-Verbindung, Neo-Vektor-Cache, LanceDB-Handles), ohne Reranker, ohne Schreiben, ohne Recall-Cache-Eintrag.
+- **CRR-Zeitlimit 250 ms** statt 50 ms (`conversationReactivationRecall.timeoutMs`, begrenzt auf 10–2000 ms). Am 24.11. lief CRR 20-mal ins Limit.
+- **Alte Assistenten-Antworten sinken** (`recall.qualityWeighting.staleAssistant`, nur Auto-Recall). Ohne Inhaltsanker ab 14 Tagen × 0,8, ab 60 × 0,65, ab 180 × 0,55; informative Antworten (Zahl, URL, Bezeichner oder Zitat, ab 200 Zeichen) erst nach 60 Tagen × 0,85; Floskeln ohne Inhalt × 0,6. Nutzeraussagen altern nie. Gelöscht wird nichts.
+- **Ein Eintrag je Zug** (`recall.mergeTurnParts`, nur Auto-Recall). Einträge mit gleicher `sourceTurnId` und Sprecherrolle werden für den Prompt zusammengelegt. Der Neo-Block wird gegen alle gerenderten Erinnerungen geprüft, nicht nur gegen globale Treffer, und ein Neo-Eintrag, dessen Wörter zu mindestens 80 % in einer Erinnerung stehen, fällt weg. Messung (Recall-Cache, gleiche Pipeline-Ergebnisse, Regeln nachträglich): Auf LOCOMO ändern beide Regeln keinen einzigen Recall (nur Nutzer-Sprecher, keine geteilten Züge); auf LME ändern sie 5 von 100 Recalls, Antwortqualität 91 % statt 90 % (nicht signifikant). Unterschiede zwischen Läufen mit identischem Recall lagen bei ±2 pp (Rauschen des Antwortmodells).
+
+### Fixed
+
+- **`operational-risk="high"` bei Textzitaten.** Ein einzelnes „cron“ irgendwo im Text machte eine Erinnerung operativ und zugleich hochriskant (Bernds zitierter SOUL-Auszug mit der Tabellenzeile „Cron/Background“). Schwache Begriffe (cron, service, gateway, live, deploy …) zählen jetzt nur mit einem Zustands- oder Handlungswort oder einem zweiten schwachen Begriff im selben Satz; das Risiko wird nur aus diesen Sätzen bestimmt, „cron“ allein ist kein Hochrisiko-Wort mehr.
+- **`acl.user.missing_principal` bei Light-Träumen.** Der Light-Traum band sich auf dem Adapter-Pfad an die rohe `senderId` des Hooks (Scope `user`), der Recall gewährt Scope `user` aber nur einem bewiesenen Principal; in Telegram-DMs mit Thread (`thread_missing`) und in Gruppen fehlt der, die Träume blieben unsichtbar. Der Recall merkt sich jetzt bewiesene Principals je Zug (`adapter/openclaw/proved-turn-principals.js`, nur im Speicher, 30 min), und der Light-Traum desselben Zugs bindet sich nur dann an den Nutzer, sonst an den Workspace des Agenten. Bestehende Zeilen bleiben unverändert.
+- **Kein Python-Bytecode im Release-Tarball.** `plugin-release.yml` packte nach der Testsuite und nahm `scripts/telegramTts/__pycache__` mit (im 7.21.0-Tarball zwei Einträge). Tests laufen jetzt mit `PYTHONDONTWRITEBYTECODE=1`, Reste werden vor `npm pack` entfernt, ein Tarball mit Bytecode bricht den Lauf ab.
+- **Package-Version 7.21.1** in `package.json`, `package-lock.json`, `openclaw.plugin.json` und den beiden Versions-Tests.
+
+## [7.21.0] — 2026-11-24
+
+**Releases kommen jetzt von `main` (Engine/Adapter-Layout).** 7.21.0 ist das erste Release, das aus `main` gebaut wird: ein Tag `v7.21.0` auf dem Merge-Commit von `main`, ausgeliefert wie bisher über den gepinnten Release-Checkout und `scripts/verify-plugin-deploy.mjs`. Die getrennte Release-Linie (`release/*`, Tags bis `v7.20.10`, das alte Ein-Datei-`index.js`) ist abgeschafft; es gibt keine `port(<version>)`-Commits mehr. Das Plugin ist jetzt `adapter/openclaw/plugin.js` (Registrierung) über `engine/create-engine.js` (Aufbau), `index.js` bleibt Einstiegspunkt; alle Laufzeitdateien stehen in `DEPLOY_FILES`.
+
+Gegenüber 7.20.10 kommt die gesamte bisher nur auf `main` liegende Engine-Arbeit hinzu (Abschnitte unten): Engine-Verträge 1.5–1.16 (typisierte MemoryOps, Admin-Ops, Embedding-Probe/Serve, Status/Modelle, Link/Import/Unimport/Rebind), das Job-Ledger unter `{baseDbPath}/_jobs` (REM-Abschlüsse aus der Neo-`run-state.json` werden einmalig übernommen, die Datei behält eine `.migrated`-Kopie), vollständige Embedding-Identitäten pro Store (Stores ohne Metadaten bleiben legacy), begrenzte LanceDB-Fragment-Kompaktierung im Prozess (`runtime.lancedbCompaction`, standardmäßig an) und EmbeddingGemma 2 als lokaler Standard für neu angelegte Stores. Verhaltensänderungen aus M1b-1 (§7) gehen damit erstmals in Betrieb: unvollständige Job-Läufe werden bis zu zweimal wiederholt, abgebrochene/zeitüberschrittene Recalls und Recall-Fehler sind sichtbar, der Reranker bekommt ein einziges Budget-Signal.
+
+Upgrade-Hinweise: Das Config-Schema hat nur Schlüssel hinzubekommen, bestehende Konfigurationen bleiben gültig. Wer auf 7.20.10 zurückgeht, muss neu gesetzte Schlüssel (z. B. `runtime.lancedbCompaction`, `apiKeyRef`, `reranker.protocol`) vorher aus `openclaw.json` entfernen, weil das 7.20.10-Schema sie ablehnt.
+
+### Hinzugefügt
+
+- **Engine-Vertrag 1.16.0 — `memory.link` für importierte Duplikate.** (Owner-Entscheidung 19.10.2026.) `engine.memory.link(id, { sourceRef, provenance: "imported", importRunId?, idempotencyKey?, dryRun? }, p, a)` hängt an eine bestehende Erinnerung eine zusätzliche Quelle, statt ein Duplikat anzulegen (schließt den KNOWN GAP „Engine-seitige Verknüpfung“ aus Harness-PR #593). Die Kartenzeile wird nie geschrieben (Text, Vektor, `updatedAt`, Import-Digest unverändert); der Link steht im Sidecar `_links/<agentId>.jsonl` (fsync), `linkId` deterministisch über (Agent, Karte, sourceRef). Idempotent: gleiche sourceRef erneut → `already-linked`, die eigene Import-Quelle der Karte → `already-source`, beides ohne Schreiben. Nur `origin "system"`/`background false` (`denied`), nur Karten, die der Aufrufer per `show` sieht (sonst `not-found`, auch bei unbekannter ID), unter dem Import-Lock des Agenten (`lock-busy`/`lock-lost`), höchstens 100 Links pro Karte (`conflict`), Audit `memory.linked` ohne sourceRef. `importRunId` explizit oder aus `;run=<id>` im sourceRef. `show`/`list` liefern `links[]` (`linkId`, `sourceRef`, `provenance`, `importRunId`, `linkedAt`). `memory.unimport` eines Laufs entfernt dessen Links (`unlinked`-Zeile, Audit `memory.unlinked`, `result.links`) und lässt die Karte unangetastet; auch Läufe ohne eigene Karten, `idempotencyKeys` filtert über den beim Link angegebenen Schlüssel. Neu: `Engine.capabilities` (`{ memoryLink: true }`, eingefroren). Typen (`MemoryLinkRequest`, `MemoryLinkResult`, `MemoryLinkOutcome`, `MemoryLink`, `MemoryUnimportLinksResult`, `EngineCapabilities`), Konformanz, Schema-`x-contract`, `docs/engine-api.md`. Tests: `tests/engine-memory-link.test.js` (echter LanceDB-Store im Temp-Verzeichnis). Package-Version bleibt 7.18.4.
+
+- **Engine-Vertrag 1.15.0 — Netz-Ports und konfigurierbarer HTTP-Reranker.** (1) Optionales `HostServices.fetch` (`HostFetch`, WHATWG-Signatur): ist es gesetzt, laufen alle ausgehenden HTTP-Aufrufe der Engine darüber — OpenAI-SDK-Embedding-Clients (OpenAI und jeder OpenAI-kompatible Endpunkt), der OpenClaw-Remote-Embedding-Adapter, die Reranker, die direkten LLM-Aufrufe der Engine (Konsolidierung, Klassifikation, Dreaming, Merge-Check, Tier-3-Emotion, JEV), Reminder-Webhooks, gepinnte Modell-Downloads und die Downloads von `@huggingface/transformers` (`env.fetch`). Ohne Port bleibt es beim globalen `fetch`. Neues Modul `lib/host-network.js`, gebunden in `createEngine` (eine Bindung pro Prozess wie `pathOverrides`). (2) `SecretStore` wird `resolve(ref, purpose)` (das nie aufgerufene `lease()` bleibt optional/deprecated); neue Provider-Option `apiKeyRef` bei `embedding`, `embedding.routes[].provider`, `reranker` und den Feature-LLM-Overrides (`merging`, `schicht15`, `skillMiner`, `criticalPush`, `emotion.t3`). Reihenfolge `apiKeyRef` → `apiKeyEnv` → `apiKey` → Default-Variable; ohne Store oder bei fehlgeschlagener Auflösung Abbruch ohne Anfrage. Embedding/Reranker halten den Schlüssel höchstens 60 s und verwerfen ihn bei 401/403 (neuer OpenAI-Client bei Schlüsselwechsel), LLM-Aufrufe lösen pro Aufruf auf; der Schlüssel wird nie geloggt und steht im LLM-Result-Cache nur gehasht. (3) Reranker-Provider `cohere | jina | voyage | remote` (`lib/providers/reranker-remote.js`) mit `baseUrl`, `protocol` (`cohere`/`jina`, `voyage`, `tei`), `model`, `maxDocuments`/`maxRequestBytes`/`maxResponseBytes`; Presets mit Default-URL, -Modell und -Schlüsselvariable, `remote` ohne Vorgaben und auch schlüssellos. Antworten werden geprüft und auf `[{index, relevance_score}]` normalisiert; kein stiller Modellwechsel, ein Fallback nur mit explizitem `fallbackProvider`. `CohereRerankerProvider` ist jetzt das Cohere-Preset (gleiche Default-URL, Fehlertexte und Schlüsselauflösung). Schema (`engine-config.schema.json`, generiertes `openclaw.plugin.json`), Typen (`HostFetch`, `SecretPurpose`, `ProviderCredentialConfig`, `RemoteRerankerConfig`, `RerankProtocol`), README, `docs/configuration.md`, `docs/engine-api.md`. Tests: `tests/host-network.test.js`, `tests/reranker-remote.test.js` (lokaler Stub-Server), `tests/host-fetch-port.test.js` (globales `fetch` wirft, alle Pfade laufen über den Port, Quelltext-Scan gegen Umgehungen). Package-Version bleibt 7.18.4.
+
+- **Import-Rollback über den Lauf im `sourceRef` (Vertrag 1.15.0).** `memory.import` ohne `importRunId` ordnet eine Karte dem Lauf zu, den ihr `sourceRef` nennt (genau ein Segment `;run=<id>`, Harness-Importer), mit Digest; `memory.unimport({agentId, importRunId})` wählt auch Ledger-Zeilen ohne `importRunId` über diesen Lauf aus (Altzeilen vor 1.13 eingeschlossen; ohne Digest entscheidet `updatedAt`). Unimport zieht abhängige Daten mit: Graph-Kanten der rückgängig gemachten Karten werden im kanonischen Neo-Graph-Journal unter einem Lock entfernt (`neoStore.removeGraphEdgesTouching`), Obsidian-Spiegelnotizen in Vaults des Agenten mit `vault_write` ins Archiv verschoben (`archiveMemoryNotes`, nie hart gelöscht); Zähler in `derived.graphEdgesRemoved`/`mirrorsArchived`/`cleanupErrors` (nur beim Apply). Weiterhin archivieren statt löschen, kein Tombstone, Neuimport möglich, vom Nutzer geänderte Karten bleiben (`kept-modified`), idempotent, Audit `memory.unimported`. Tests: `tests/engine-memory-unimport-run-ref.test.js` (echter LanceDB-Store im Temp-Verzeichnis). Package-Version bleibt 7.18.4.
+- **OpenClaw-Adapter `plur1bus-embeddinggemma-2`** — ergänzt den Host-Vertrag (`contracts.embeddingProviders`, `registerEmbeddingProvider`) um EmbeddingGemma 2 (`google/embeddinggemma-2`, Apache-2.0, keine Lizenzbestätigung). Standard-Präzision `q8` (alternativ `q4`/`fp32`), Standard-Dimension 768d mit Matryoshka-Kürzung (128/256/512/768), 8K maxInputTokens, Query-/Passage-Prompts, lokaler Cache und ReloadSafe-IPC-Anbindung. Empfohlener lokaler Eintrag im Host-Vertrag. Bestehende Stores behalten ihren Adapter unverändert; Wechsel über bestehenden Re-Embedding-Pfad. Package-Version bleibt 7.18.4.
+- **Optionen pro Engine-Aufruf** — `recall(query, { reranker: "on" | "off" })` und `capture(turn, { deferPostTurnLlm: boolean })` mit unveränderten konfigurierten Defaults, isolierten parallelen Aufrufen und typisierten Fallback-Diagnosen. Fehlender Reranker bzw. fehlende Scheduler-Capability führen zu ungeranktem Recall bzw. direkter Nacharbeit statt Fehler oder Arbeitsverlust. Keine Versionsänderung.
+
+- **Engine-Vertrag 1.14.0 / PR-10** — vollständige Embedding-Identitäten pro Store und Generation; per-Agent-/Namespace-/Shared-Scope-Routing, Query-Vektoren pro Identität, RRF oder ein gemeinsamer Reranker, sichtbare Recall-Degradation und Re-Embedding in der Ziel-Identität bei Share. Cache-Keys tragen die vollständige Identität; fremde Revisionen gleicher Dimension werden abgelehnt. Bestehende Stores ohne Metadaten bleiben ausdrücklich legacy. Details: `docs/embedding-identity.md`. Plugin-Version bleibt unverändert.
+
+- **Engine-Vertrag 1.13.0** — `memory.unimport`: macht die Karten eines `memory.import`-Laufs (`importRunId`) für einen Agenten rückgängig. Archive-first und Soft-Delete wie bei forget, aber ohne Registry-Tombstone; eine `unimported`-Zeile im Import-Ledger gibt den Key frei, ein späterer Re-Import legt die Karte wieder an. Geänderte Karten bleiben (`superseded`, `content-changed`, `binding-changed`, `metadata-changed`, `edited`, `shared`, `rebound`); `force` überschreibt nur Content/Metadaten-Änderungen. Läuft unter dem Import-Lock des Agenten mit Nonce-Fence vor jedem Store- und Ledger-Schreiben (`lock-lost`), Write-ahead-Sidecar `_unimports/<agentId>/<runId>.jsonl`, `dryRun` standardmäßig an. Neuer Fehlercode `lock-busy`. `memory.import` nimmt optional `importRunId` und schreibt Gruppen-Digests ins Ledger. Package bleibt 7.18.4.
+- **Engine-Vertrag 1.12.0** — `memory.rebind` / `memory.unbind`: manuelle N:1-Verknüpfung einer Kanal-Identität mit einem Harness-User, engine-weit. Nur Scope `user`, nur Owner-Metadaten; `updatedAt` bleibt stehen. Sidecar `_rebinds/<rebindId>.jsonl` mit fsync (Datei und Verzeichnis). Exklusives Lock über `tryAcquireOwnedLock` (Nonce, Freigabe nur des eigenen Locks). Ein Claim für einen anderen Nutzer ist `identity-already-bound` und wird nicht gelöscht. `ADOPT_PROBE_MIN_ROWS` verlangt `min(8, vorhanden)` endliche Scores bei bis zu 16 Probe-Zeilen. Package bleibt 7.18.4.
+- **EmbeddingGemma 2 als lokales Embedding-Modell; Standard für neu angelegte Stores.** Gepinnt ist der ONNX-Export `onnx-community/embeddinggemma-2-ONNX` (Revision `daa72c51`, Basismodell `google/embeddinggemma-2` @ `914f7f89`, Apache-2.0) mit Größe und SHA-256 je Datei; q8 (rund 346 MB) ist Standard, q4 und fp32 sind gepinnte Alternativen (`embedding.local.dtype`). 768 Dimensionen, Matryoshka-Kürzung auf 512/256/128 mit erneuter Normalisierung, 8K Kontext (`maxTokens` bis 8192, Standard 512), Mean-Pooling, Anfrage-/Dokument-Prompts `task: search result | query: ` und `title: none | text: ` (abweichende Prompts werden verweigert), Teilbatches über `embedding.local.maxBatchSize` (Standard 16). Geladen wird nur der Text-Turm: Vision und Audio der multimodalen Config werden auf `null` gesetzt. Neuer Runtime-Zweig `embeddinggemma-2` im lokalen Provider, Zielprofile `embeddinggemma-2-128…768` (Schema, Dimensions-Planer, Dashboard-Umschalter), Eintrag im Wizard (Option 5) und im Shell-Installer (`gemma2`), jeweils ohne Lizenzabfrage. Der Fingerprint trägt dtype und gepinnte Artefakte; die Re-Embedding-Migration (plan/apply/resume/rollback) kennt EmbeddingGemma 2 als Ziel, auch mit dtype-Variante, und reicht dem Zielprovider die kanonischen Prompts statt der im Fingerprint gekürzten. **Standard nur für neue Stores:** `applyLegacyProviderDefaults` (kein Provider gewählt, noch keine Speicherdaten) und der Selftest nehmen jetzt EmbeddingGemma 2 statt E5; Stores mit Daten und jede ausdrückliche Provider-Wahl (auch ein bloßes `local-transformers`, E5) bleiben unverändert, nichts wird still umgestellt oder neu eingebettet. E5 bleibt wählbar. Abhängigkeit `@huggingface/transformers` 4.2.0 → 4.3.1 (zieht `onnxruntime-node` 1.30.0). Package-Version nicht geändert.
+
+### Geändert
+
+- **Package-Version 7.21.0.** `package.json`, `package-lock.json`, `openclaw.plugin.json`, die beiden Versions-Tests und README/AGENTS.md nennen 7.21.0. Bis 7.20.10 trug `main` die Version des jeweils letzten Release-Linien-Tags; ältere Einträge „Package-Version bleibt 7.18.4“ beschreiben ihren damaligen Stand.
+- **Empfehlung angeglichen: EmbeddingGemma 2 (q8) ist die erste Option in Provider-Wizard und Shell-Installer.** Der Owner hat EmbeddingGemma 2 zum einheitlichen lokalen Standard erklärt. Der Wizard listet sie als Option 1 mit dem Zusatz „empfohlen“, der Installer ist auf `gemma2` vorbelegt (keine Lizenzabfrage, daher auch nicht-interaktiv ohne Rückfall). Jina v5 Nano bleibt wählbar (Option 2, weiterhin mit CC-BY-NC-Hinweis und Zustimmung), danach OpenAI, E5 und Jina v3; keine Option außer EmbeddingGemma 2 trägt noch das Wort „empfohlen“. Die Nummern der Wizard-Optionen verschieben sich entsprechend (Auswahl intern über den Schlüssel der Option). i18n de/en, README und `docs/configuration.md` angepasst; Tests prüfen Reihenfolge und Empfehlung.
+
+### Fixed
+
+- **Deploy-Reparatur gleicht jetzt auch die ausgelieferten Nicht-Code-Dateien ab.** Auf einer Produktivinstallation (`v7.20.2`) war aller Code byte-identisch zum Tag, aber `CHANGELOG.md`, `docs/configuration.md` und `.openclaw/extensions/emotional-state-injector/index.js` stammten noch aus dem Oktober, und vier über `package.json` `files` ausgelieferte Audits/Runbooks fehlten — `verify-plugin-deploy.mjs --repair` und `repair-installed-plugin.mjs` kannten nur `DEPLOY_FILES`. Neu ist eine zweite, beratende Stufe: `listPackagedFiles()` leitet die Liste aus der `package.json` des Quell-Checkouts ab (deckungsgleich mit `npm pack`, per Test geprüft), `listAuxiliaryPackagedFiles()` nimmt davon alles außerhalb von `DEPLOY_FILES`, `syncAuxiliaryFiles()` meldet `STALE`/`MISSING` und frischt mit `--repair` bzw. im Repair-Skript auf. Die Stufe ändert nie den Exit-Code (ein Gateway-Start scheitert daran nie), läuft erst, wenn die strikte Code-Stufe inklusive Release-Preflight bestanden hat, archiviert jede überschriebene Datei vorher nach `~/.openclaw-backups/plur1bus-repair-<ts>/` (ohne Archiv kein Überschreiben), löscht nichts, schreibt nur Pfade aus der Paketliste und nie durch einen Symlink oder aus dem Deploy-Verzeichnis heraus. `DEPLOY_FILES` bleibt der strikte Vertrag. Nebenbei: Archivverzeichnisse tragen jetzt Sekunden (`20261121T150912Z` statt `2026-11-21T1509`), und `verify-plugin-deploy.mjs` leert stdout vor `process.exit()` — nach dem Smoke-Import wurde der Bericht an einer Pipe sonst mitten in der Liste abgeschnitten. Tests: `tests/deploy-packaged-files.test.js`.
+- K8-I1: `engine.embedding.serve()` without an address now uses a filesystem socket in the private `0700` embedding-ipc directory on Linux (`owner.sock`), the same default as Darwin. Abstract sockets stay Linux-only and require an explicit address. The client checks the server identity before sending the token or any memory text (`SO_PEERCRED` uid when available, otherwise socket owner and directory mode 0700) and refuses a foreign or group-writable directory. An explicit Linux abstract-socket address now requires koffi (`SO_PEERCRED`); without it the client fails closed. Unix-socket paths that Node would silently truncate (108 bytes on Linux, 104 on macOS) abort with `scoped_embedding_socket_path_too_long`. A missing socket file is `scoped_embedding_ipc_unavailable`, not an untrusted-peer error.
+- Security: optional inference dependency `sharp` (via `@huggingface/transformers`) override 0.35.4 → **0.35.5** for GHSA-wq5f-xc86-pv6w (CVE-2026-96889, published 2026-10-06), which made the blocking `npm audit --omit=dev --audit-level=moderate` step fail. Lockfile only; no code change.
+- `memory.rebind` / `unbind`: die Nonce-Prüfung (`lock-lost`) läuft vor jedem Store-Patch, nicht nur vor Ledger-Schreiben. Ein verlorenes Lock bricht die Schleife sofort ab; ein erneuter Aufruf läuft über das Sidecar zu Ende.
+- `engine/create-engine.js`: Merge-Safety-Logs schreiben Memory-Text nur noch über `describeText()`, Fallback-`baseUrl` über `redactUrl()`, Fehler in Log-Zeilen über `describeError()`.
+- Error messages in logs: about 130 log lines in capture, recall, db-adapter, jobs, obsidian bridge, scheduler and engine paths now print `describeError` (class, code, message length and hash, URLs reduced to host plus path hash) instead of `String(err)` / `err.message`; `safeWarn`/`safeDebug`/`trySafeWarn` do the same via the new `describeErrorForLog`. `redactError` is unchanged for callers that need the message (rethrown, returned, CLI stderr). `reason`/`note` log values no longer keep `<platform>:<digits>`.
+- Leak audit, remaining items: whole-result job logs (`consolidate-daily`, `classify-recent`, `auto-accept-stale`, `rem-dream`, `skill-miner`, `episodes-rebuild`, `gc-run`, `embedding-drain`, `feedback-report`, `meta-reflect`) now go through the deny-by-default `summarizeJobResultForLog`; recall query refinement, the group-reasoning filter, chat-model session release, skill auto-apply and several error logs no longer print queries, session keys, skill names or raw error messages. Job return values and command replies are unchanged.
+- Log redaction review fixes: the summarizer describes session keys under id keys and hashes numeric chat/peer/user/sender ids; four edited log lines no longer print a database or lock path, a knowledge heading or a note name; fixed content-free reasons (`cold-start host call failed`, principal and shared-pool notices) stay readable instead of being hashed; call-site tests cover the job result logs, the chained reranker and these reasons.
+- `memory.import` (K1): concurrent imports of one `idempotencyKey` (same process, two engines, or two processes on one store) could each store the card — duplicate rows and several `created` outcomes — because the write phase ran under the shared `withWriteDb` lease. Re-check → `store()` → ledger now runs under a per-agent lock (`engine/memory-ops/import-lock.js`: in-process mutex plus `tryAcquireOwnedLock` on `_imports/.locks/<agentId>.lock`, mtime heartbeat). Exactly one call is `created`, the rest `matched-existing`. Each `_imports/` ledger append is now fsynced, and creating the ledger file fsyncs its parent directories (no-op on win32; best-effort, warned once, where the filesystem refuses a directory fsync, so a stored card is never reported as failed). One 120 s deadline and the caller's `signal` cover both the in-process queue wait and the file-lock acquire; a timed-out or aborted waiter leaves the queue without blocking the others. Contract 1.11.0 semantics unchanged.
+- `scripts/setup-feature-crons.mjs`: the npm `postinstall` no longer touches OpenClaw cron jobs in a development checkout (`INIT_CWD` = package root and `.git` present) or under `CI=true`; `PLUR1BUS_SETUP_CRONS=1` opts in. Real installs, the gateway bootstrap and `/plur1bus setup crons` are unchanged.
+- `lib/registry-lock.js`: the tombstone-registry lock now carries an ownership nonce. Release only removes a lock that still holds our nonce (rename-aside, no check-then-unlink race), and a live holder is no longer reaped after 10 s: stale = age > `staleMs` and (holder pid dead or age > 10 × `staleMs`).
+- Lock audit N1: the same ownership protocol now covers every other file lock that released by unconditional delete or reaped a live holder by age alone. `lib/registry-lock.js` exports `tryAcquireOwnedLock` (non-blocking, returns a handle whose `release()` only removes our own lock). `lib/job-lock.js` (cron jobs, config lock, post-turn drain), the knowledge-pending lock and the `knowledge_update` lock use it; a refused `knowledge_update` acquire no longer unlinks the other holder's lock in its `finally`. `lib/proactive-governor.js` releases and reclaims via rename-aside + re-check instead of check-then-unlink. The neo workspace write lock (`.neo-write.lock` directory) carries a nonce in `owner.json`, releases only its own lock, re-verifies a takeover on a moved-aside name, and no longer reaps a live holder before 10 × `NEO_LOCK_STALE_MS`.
+- N1 fix round: locks now record the holder's process incarnation (`procStart`: monotonic process start plus the Linux boot id). A lock carrying our own pid but an earlier incarnation — a containerised gateway restarted as PID 1 after a crash — counts as dead instead of alive until 10 × `staleMs` (neo: reaped at once). job-lock refuses a second acquire of a path this process still holds. A lock that vanishes between the failed create and the stale check is retried instead of reported held; on Windows, delete-pending `EPERM`/`EACCES`/`EBUSY` is retried twice after 25 ms. The neo put-back recreates the directory with `mkdir` and links `owner.json` into it, so it never replaces a fresh holder's empty lock directory. `knowledge_update` no longer retries a busy lock five times with backoff; a concurrent update is refused at once.
+
+### Ported from 7.20.3–7.20.10
+
+- **7.20.3** — The Semantic Lens index is written every night (`lib/semantic-lens-writer.js`, called at the end of `runSemanticDiscoveryBatches` in `engine/runtime/semantic-discovery.js`); it never had a writer. Scans return plain vectors only with `withVectors` (`engine/store/memory-db.js`); LanceDB returns an Arrow vector and the old `Array.isArray` check made the nightly discovery skip every row since June. The discovery budget counts searches only. The Lens hydration ACL of 7.20.3 was already on `main` (8e753189).
+- **7.20.4** — Split messages reach the prompt whole: `projectRecallEntry` passes `chunkGroupId` and `sourceTurnId`, the chunk group key is `chunkGroupId` only, and small-to-big replaces a part by its whole message after the rerank (`lib/recall-pipeline.js`, unchanged from the release).
+- **7.20.5** — List parts find their whole message: parts and wholes are compared through `comparableChunkText` (`lib/memory-chunking.js`), which applies the list-marker rule of `findStructuralParts`.
+- **7.20.6** — Entity edges across capture runs: `withGraphSignals` (`lib/memory-graph.js`) derives topics/entities from the stored text (they are not stored in LanceDB); derived topics do not count for emotional edges, and `buildEdgesForSession` keeps one row per id. The capture (`engine/capture/capture-turn.js`) asks `getRecentForGraph` for the text and drops the rows of the running capture from the existing set. `getRecentForGraph` (`engine/store/memory-db.js`) reads growing `createdAt` windows (7/30/180 days, then the older rest appended) without the vector column and keeps the newest rows. Without a reranker answer the recall orders by vector relevance (`relevanceFallbackOrder` in `lib/recall-pipeline.js`; the combined score breaks ties, graph-only hits are capped below the best vector relevance, a single candidate carries its relevance too). `parseTemporal` gets the recall's `now`. The automatic recall sets `canonicalOutsideLimit` in `autoRecallParams` (`engine/recall/recall-params.js`, also used by the warm-only path): canonical hits come on top of `maxPromptMemories` in `mergeNamespaceRecallResults`, `applyMergedRecallBudget` and the main-only multi-identity rerank cut (`engine/recall/namespace-recall.js`); `memory_recall`/`memory_search` keep their `limit` as the total.
+- **7.20.7** — The `<relevant-memories>` block (`lib/relevant-memory-context.js`) carries one fixed line after the recall safety preamble: relative time words inside a record refer to that record's created-at, not to today. LOCOMO bench, multi-hop + temporal: +3.0 pp (p = 0.019).
+- **7.20.8** — The recall filters by `createdAt` only for questions about the conversation time. `classifyTemporalQuery` (`lib/temporal-parser.js`, the release file) needs a relative phrase (today, yesterday, N days/hours ago, last week/month, weekday) with a conversation cue in the same clause ("was haben wir gestern besprochen", "what did I tell you last week"), no future signal there and a message of at most 1,500 characters; the window is widened by 2 h on both sides. Event time, calendar dates and "after the X" anchors no longer filter and start no anchor lookup (per namespace one embedding and one table read before the ACL check less, on the warm-only path too). Parser fixes: media envelopes, code, URLs, paths, `file:line`, UUIDs and hex runs are removed before parsing; "seit gestern" / "since last week" are durations; "last week of October 2026" is October; a four-digit number is a year only with a preposition or standing alone. `runRecallPipeline` (`lib/recall-pipeline.js`) takes `temporalFilterMode` (`"intent"` default, `"legacy"` = 7.20.7 for the bench, `"off"`; no config key), does not classify queries over 20,000 characters, falls back to the system time for an invalid `now` and recalls unfiltered when the classifier throws. A recognized phrase that does not filter is logged as `temporal phrase not used as filter (kind=…, reason=…, inWindow k/n)` without query text (two different phrases at the cue: `reason=ambiguous-time`); a hard filter appends `kind=…` to the existing log lines. The 7.12.41 safety net decides over all namespaces: `mergeNamespaceRecallResults` drops the rows outside the window from namespaces it kept unfiltered when a namespace that filtered still has rows inside it; `runMergedNamespaceRecall` (`engine/recall/namespace-recall.js`) passes its logger. Main only: with several embedding identities that decision is computed once over all namespaces (`namespaceTemporalFilterHit`) and handed to every per-identity merge (`temporalInWindow`), so the net covers the union there as well; the rows those merges remove (`temporalRejected`) go into the decision trace of the final merge (stage `temporal-filter`).
+- **7.20.9** — The Neo prelude keeps the candidate vectors in memory: `searchNeoCandidatesGlobal` (`lib/neo-arch.js`, the release file) caches them per vector file (device, inode, birth time) with a hit only when offset and length match the current `vector-index.json`, reads misses sorted by offset in blocks of up to 16 MiB, compares four cached vectors with the disk when the file's size or times change, evicts only entries the last 4 searches did not use (the rest is read without caching) and keys the vector index cache on the inode. Dot products run four candidates at a time with bit-identical scores. `PLUR1BUS_NEO_VECTOR_CACHE_MAX_BYTES` (default 512 MiB per process, `0` = the 7.20.8 read path); `neoVectorCacheStats()` and `resetNeoVectorCache()` are exported. `runNeoGlobalSearch` (`engine/create-engine.js`) logs the counters at debug level as `plur1bus-neo: global vector cache …` and the capacity warning once per process.
+- **7.20.10** — Auto-recall without echoes, dated state, clean embeddings; nothing is deleted or archived. The release files are `lib/query-echo.js`, `lib/recall-quality.js`, `lib/embedding-text.js`, `scripts/reembed-clean.mjs` and the `lib/` hunks (`recall-pipeline.js`, `neo-arch.js`, `categorize.js`, `runtime-scheduler.js`, `temporal-provenance.js`, `relevant-memory-context.js`, writers that re-embed). (1) Echoes: `createAutoRecallPolicy`/`applyAutoRecallPolicy` leave out memories that only repeat the prompt and memories of the running conversation still in context (same `sessionKey`, created after the last `compactionSummary`, else within 6 h, never before the oldest message in context); CRR and the semantic lens do not bring them back; Neo routes with `excludeQueryEcho` and `sessionEcho` (new turns and candidates carry `origin.sessionKey`). (2) Quality weight (auto-recall only, `recall.qualityWeighting`, floor 0.35): final score = score after rerank × weight, `weightedScore` drives the namespace merge; trace stages `query-echo`, `session-echo`, `quality-weight`. (3) Neo: no `[visible …]` placeholder lines (`stripNeoHiddenPlaceholders`, also in the corpus snippet), lanes only by category (`NEO_AUTO_RECALL_LANES`, `strictLanes`, `neo.recall.maxReflections` default 4, optional `neo.recall.laneMinRelevance`), no behavior cards in the auto-recall, one slot per near-duplicate group filled with the newest member, re-routing after the dedupe, which compares only against the LanceDB records actually rendered (`collectRenderedMemoryIds`). (4) State dating: "[Stand DD.MM.YYYY]" after a state marker in the Neo and LanceDB block (`recall.volatileStateAnnotation`). (5) Capture: categories without non-durable phrases, pure questions are `conversation`/`open_question`, Unicode word boundaries in the Neo rules; subagent, helper and inter-session turns are tagged in `origin` (`CAPTURE_ORIGINS`, Neo `origin.sourceKind`) without filtering or a status change; content-free host envelopes are not captured. (6) Store raw, embed clean (`embedding.cleanText`, column `embeddingTextMode`): new rows embed a cleaned copy, re-embedding writers follow the row's mode, `scripts/reembed-clean.mjs` re-embeds the stock (dry-run default, `--apply` with the gateway stopped and a snapshot). (7) Cohere: v2 request without `return_documents`, each document cut to `reranker.maxDocChars` (default 1400). On main: the capture is `engine/capture/capture-turn.js`, both `memory_store` paths are `storeMemoryFromToolParams` (`engine/create-engine.js`) and `engine/tools/memory-tools.js`, the columns are in `engine/store/memory-db.js`, the policy options come from `autoRecallPolicyOptionsFor` and `autoRecallParams` (`engine/recall/recall-params.js`, `embeddingQuery` too), the lane options from `readNeoPrelude` (`engine/recall/neo-prelude.js`), the rest from `engine/recall/assemble-prompt-context.js`; the warm-only path passes the same embedding text, lane options and policy so it warms the entries the real recall reads. The Cohere preset of the remote reranker (`lib/providers/reranker-cohere.js`) cuts the documents and drops `return_documents` through a new `buildRequestBody` hook of `RemoteRerankerProvider`; other remote presets keep their request, and `reranker.maxDocChars` is normalized for `provider: "cohere"` only. `/share` re-embeds a clean row's cleaned text in the target identity too. The config keys are in `engine/config/engine-config.schema.json` (manifest regenerated). `scripts/reembed-clean.mjs` checks "inside the OpenClaw home" and "snapshot under `.snapshots`" with `path.relative` instead of a `/` prefix, so the production-path guard also holds on Windows (main CI runs there). Main only: with several embedding identities the identity query vectors come from `embeddingQuery`; the fused list drops the per-identity `weightedScore` (the RRF ranks already carry the weight), and after the multi-identity rerank the weight is applied to the rerank score as on the single-identity path. Upgrade notes: the new columns `sessionKey` and `embeddingTextMode` are added on the first start; afterwards older plugin versions cannot append to that table, so roll back only together with a snapshot. The new config keys (`reranker.maxDocChars`, `embedding.cleanText`, `recall.qualityWeighting`, `recall.volatileStateAnnotation`, `neo.recall.maxReflections`, `neo.recall.laneMinRelevance`) are unknown to 7.20.9 and older, whose schema then rejects the plugin config: set them only after the upgrade and remove them from `openclaw.json` before rolling back. None has a schema default, so setup and installer do not write them.
+
+### Ported from 7.18.21–7.20.2
+
+- **7.18.21** — Morning/evening review health check accepts `obsidianBridge.mode: "apply"`; system notices are grouped by code; `invalid_mode` and the review footnote are translated.
+- **7.18.22** — A denied Obsidian mutation policy answers with translated text naming the closed gates instead of raw JSON; the result carries a non-enumerable `policyDenied`, which the adapter's operator path forwards so the review feature cron ends with an error.
+- **7.18.23** — Host LLM routes to Claude Haiku disable thinking for background jobs; tight output limits rise about 50 % (dream narratives, light/REM dream, emotion T3 300 → 450, critical-push classification 16 → 24, merge check and query summary 300 → 450, capture summary maxChars/3 → /2).
+- **7.18.24** — Session-scoped host runtime-lifecycle cleanups (reset/delete or a `sessionKey`) no longer dispose the plugin-wide pools, embeddings and caches (`isSessionScopedRuntimeCleanup`), so recall, capture and feature crons keep working after a session reset.
+- **7.18.25** — Afterthoughts reflect on the original conversation after a persisted 15–120 minute idle delay; the cron checks deadlines every minute (shipped 30-minute/3-hour intervals migrate). Jev credentials can be saved or removed from the dashboard (`captureChunkingJev.apiKey`, a SecretInput, before `apiKeyEnv`). On main the host-bound parts live in `adapter/openclaw/afterthought-{host,hooks}.js`; the engine job uses `host.capabilities.createAfterthoughtHost` and falls back to the journal-based job without it.
+- **7.18.26** — Afterthought prompts keep stable instructions, identity and Persona Voice in the system prefix and the untrusted conversation plus the decision request in a separate user message, so the host transport can cache the stable prefix.
+- **7.18.27** — Model selections share provider groups and natural sorting; catalog reconciliation keeps referenced models and never rewrites routing. Read-only recall comparison (`scripts/compare-recall.mjs`, optional conservative Jev prefilter); provider ACL is checked right before reranking, and a reranker may declare an empty result valid.
+- **7.18.28** — Reranker order survives the namespace merge and the recall budget (`preserveOrder` from `rerankScore`); duplicate rerank indices are ignored; only an explicit `reranker.candidates` caps the rerank pool; a knowledge cache with a failed section is not written; a failed graph-hydration relevance check rejects the row. The open PR #257 fixes the same area differently and needs a rebase against this port.
+- **7.18.29** — The dashboard shows whether a Jev credential is configured and where it comes from (config or environment), never the value.
+- **7.18.30** — Feature-cron clients retry only the Gateway `UNAVAILABLE` rejection of a retired PLUR1BUS instance, three times after 5/10/15 s; intermediate rejections stay silent, exhaustion is a visible error.
+- **7.18.31** — Skill Miner separates genuine low-confidence decisions from technical failures (only genuine ones are reused for seven days), compares same-owner workflows by content, adds focused topic cohorts, and extends mined skills through Workshop update proposals; the aggregate run report carries the new counters.
+- **7.19.0** — Independent incoming Jev emotion owner (`emotion.jev`, shadow/active, per agent) and the bilingual Telegram speech adapter (`scripts/plan-speech.mjs`, `scripts/telegramTts/`). On main the engine builds the shared pool and runtime; `lib/jevEmotionRuntime.js` returns its hook list (`hooks`) instead of taking the host API, and the adapter registers it right after the Neo warm-up. `@huggingface/transformers` 4.3.1 → 4.3.2, `zod` override 4.6.6 → 4.6.7.
+- **7.19.1** — The Telegram morning review lists notes by title with "… and N more", states the risk as a sentence, shows system notices once, drops the time from the title and names a real next command (`/plur1bus review quickapply`).
+- **7.19.2** — `autoApplyLowRisk` stamps the approval hash and metadata so revalidation accepts it, the morning review run gets `memoryStore`/`knowledgeUpdate`, a failing auto-apply is logged; note import skips workspace prompt files and derived content.
+- **7.19.3** — Neo journals keep at least 90 days: the append path only applies an emergency ceiling of 40,000 lines; regular retention runs in the daily consolidation above 5000 lines, by value (revisions stay or go together, protected entries last), and removed lines are archived to `<workspace>/archive/<file>.<YYYY-MM>.jsonl.gz`. The daily consolidation now also prunes the hook store (`pruneHookNeoStoreFiles`). Without this, the 5000-line append cap on main cut stores grown under 7.19.3+ without an archive.
+- **7.19.4** — The DB adapter connects with `readConsistencyInterval: 0`, so classify-recent sees cards written after the table was opened. Main already had this (E1 Task 8); the port adds the release regression test.
+- **7.20.0** — Dashboard card "Conversation compaction model": one row per chat agent writes `agents.entries.<id>.compaction.model` in the OpenClaw config (`compaction_model_unsupported` on hosts without it); values come from the running host config (`liveHostConfig`).
+- **7.20.1** — Under a plugin capture copy the Neo worker starts from the installed extension (no MODULE_NOT_FOUND after OpenClaw removes the copy); a saved compaction model the host has not reloaded yet stays visible (`createPendingCompactionModels`).
+- **7.20.2** — Senders listed in a channel's `allowFrom`/`groupAllowFrom` (wildcards excluded) always pass the group reasoning filter (`collectHumanSenderIds`, wired in the adapter). The log line names the matched prefix and the sender as a hash (main logs no raw peer ids).
+
+### Ported from 7.18.5–7.18.20
+
+- **7.18.5** — `runtime.traceRegistrations` writes a registration stack to the gateway log (adapter). Contract 1.10.0: additive config keys, no breaking change.
+- **7.18.6** — registration trace keeps 200 frames instead of 60.
+- **7.18.7** — cold-start protection for plugin LLM calls (`lib/llm-warmth.js`).
+- **7.18.8** — feature-cron bootstrap names pending jobs; read timeouts 60 s.
+- **7.18.9** — `setup-feature-crons` leaves the JSON output intact (`exitCode`).
+- **7.18.10** — cron setup `config.get` waits 60 s.
+- **7.18.11** — Obsidian reviews as native crons; review texts in several languages.
+- **7.18.12** — evening review shows the daily note, dreams and knowledge files.
+- **7.18.13** — evening review checks the dream diary against REM and shows the KNOWLEDGE backlog.
+- **7.18.14** — light dream and episode extraction enqueue from capture; cron `post-turn-refine` drains the queue every 20 minutes. `runtime.deferPostTurnLlm=false` restores the inline path.
+- **7.18.15** — `dreaming.narrative.diaryFromUserChats` (default false) writes light-dream narratives from identified user chats into `DREAMS.md`.
+- **7.18.16** — Recall injects stored full text of the top records (`recall.fullTextTopRecords` default 3, `recall.fullTextMaxChars` default 2000) and marks truncated records; `/plur1bus enable|disable` passes remaining tokens as the feature name.
+- **7.18.17** — Recall prefers the original stored row over its chunk parts (`dedupResults` replaces parts with the whole at the same place).
+- **7.18.18** — `captureChunkingMode: "automatisch"` lets Jev decide per message whether to store the whole row, only parts, or both; dashboard switch offers Automatic (Jev).
+- **7.18.19** — Host recovery and routing notices (gateway restart, queued user message, inter-session routing, `⟦openclaw:ctx⟧`) are not captured as user memories.
+- **7.18.20** — Group messages that look like another bot's visible reasoning (`🧠`, `<think>`, …) are claimed without a reply (`groupReasoningFilter`).
+- Native feature-cron delivery lookup matches Windows runner paths (`\run-feature-cron.mjs`) and review commands (`/plur1bus obsidian …-review`).
+- Review of the port: engine `runtime.deferPostTurnLlm` defaults to false (inline); the OpenClaw adapter sets true and `postTurnRefineScheduled`. Adapter-only keys `runtime.traceRegistrations` and `groupReasoningFilter` stay out of the engine schema. Native review-cron builders live in the adapter so the engine graph does not load `feature-cron-native`. Queued post-turn work is not purged on `/forget` (follow-up).
+
+### Hinzugefügt
+
+- **Eingefrorener Engine-Vertrag** in `types/engine.d.ts` (Contract 1.2.0,
+  eingefroren bei 1.0.0, seitdem zweimal geändert: 1.1.0 fügt
+  `SecurePathResult.reason: "acl-tool-unavailable"` hinzu, 1.2.0 macht
+  `HostServices.workspaceDir` asynchron) plus `npm run typecheck`. Reicht
+  `Host`/`HostServices`, `Engine`, `Principal`, `AgentContext`, `TurnOrigin`,
+  `RecallQuery`/`RecallResult`, `CaptureHandle` und `JobRun` in einer Form ein,
+  gegen die beide Adapter geschrieben werden.
+- **`lib/platform.js`** mit `securePath`, `ipcAddress`, `isUnsafeLink` und
+  `canonicalIdentityPath`.
+- **`lib/host-services.js`** — `createHostServices(api)` und `createStubHost()`.
+- **Golden-Prefix-Korpus** (`tests/fixtures/golden-prefix/`): sieben
+  synthetische Szenarien, deren `prependContext` byteweise festgehalten ist.
+- **`bench/recall-budget-probe.mjs`** und
+  `bench/results/2026-09-22-recall-budget-probe.md` — p50/p95/p99 der
+  Recall-Latenz gegen den synthetischen Golden-Prefix-Korpus mit
+  Stub-Embedder; bei N=20 Stichproben entsprechen p95 und p99 dem
+  Stichproben-Maximum (nearest-rank, floor).
+- **`tools/free-identifiers.mjs`** — Scope-Analyse über die TypeScript-Compiler-
+  API (keine neue Abhängigkeit), benutzt um die Extraktionsgrenzen zu ziehen.
+- **`scripts/lint-engine-imports.mjs`, `scripts/lint-no-api-outside-adapter.mjs`,
+  `scripts/typecheck.mjs`** — alle drei in `npm run lint` verdrahtet.
+- **`tests/helpers/runtime-sources.js`** (`readRuntimeSources()`).
+- **`openclaw plur1bus selftest`** (`--json`, `--download-models`, `--remote`,
+  `--keep`): prüft native Addons, Modell und einen Wegwerf-Store ohne Gateway
+  (`docs/selftest.md`). Die Add-on-Installer rufen es als Verify-Schritt auf.
+- **Store-Snapshots in Node** (`lib/snapshot/store-snapshot.js`,
+  `scripts/snapshot-store.mjs`): Verzeichnis-Snapshots mit SHA-256-Manifest,
+  konsistent gegen laufende Kompaktierung, die neuesten fünf bleiben erhalten;
+  optionales `snapshotsDir` für alle Funktionen.
+- **`docs/engine-api.md`** und die Spalte *Harness behaviour* in
+  `docs/compatibility-openclaw.md`.
+- Optionaler, testinterner Kontext-Schlüssel `recallTimingSink` (additiv, in
+  Produktion ein No-op) — inzwischen wieder entfernt, siehe M1b-1 unten
+  (`RecallResult.timing`/`recall.completed`).
+
+### Geändert
+
+- **Selftest / native `sharp`:** Wenn `sharp` nicht lädt (etwa
+  `ERR_DLOPEN_FAILED`, fehlendes libvips), bleibt der Text-Pfad (Embed,
+  Capture, Recall) grün. Vision wird als `degraded` mit Reason
+  `native_addon_unavailable:sharp` gemeldet; ein redigiertes Warning, kein
+  unhandledRejection. `@huggingface/transformers` wird hinter dem Probe
+  geladen. Der Platzhalter gilt nur für `sharp`-Imports aus
+  `node_modules/@huggingface/transformers/`; alle anderen behalten das echte
+  Modul. LanceDB und `onnxruntime-node` bleiben Pflicht.
+- **Windows-ACL-Lesen:** `readDirectoryAcl` startet auch PowerShell 5.1 über
+  `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`. Der
+  Vergleichstest prüft einen reinen Vererbungseintrag (`IO`).
+- **Windows-ACL-Lesen:** `readDirectoryAcl` liest Owner und ACEs zuerst über
+  `cscript` (WMI) und `whoami` (~0,4 s kalt auf windows-11-arm). PowerShell 5.1
+  bleibt Fallback. Die 30-s-Grenze gilt unverändert für den ganzen Lesevorgang.
+  `windows-11-arm` in der CI ist damit ein Pflichtjob.
+- Installer, Bootstraps und Install-Feed liegen jetzt in [PLUR1BUS-Host-Addons](https://github.com/Cyb3rb1ade/PLUR1BUS-Host-Addons).
+- Hinweis: Das nächste Plugin-Release braucht eine freie Version (v7.18.5–v7.18.7 sind auf feat/health-watch vergeben). Es ist das erste, das selftest, Store-Snapshot und snapshotsDir enthält, und damit die Plugin-Version für das erste Host-Addons-Release.
+- `index.js` ist auf die Konstruktion und die Registrierungsaufrufe reduziert;
+  Recall, Capture, Kommandos und Tools liegen unter `engine/`, jede
+  `api.on`/`api.register*`-Stelle unter `adapter/openclaw/`. **Kein
+  Verhaltensunterschied** — die volle Suite und der Golden-Prefix-Korpus sind
+  die Gates.
+- `index.js` liest den Logger jetzt über `HostServices` (`host.logger`) statt
+  direkt über `api.logger`; die fünf host-gekoppelten Funktionen vor
+  `register()` (`inspectCronNativeCapabilities`,
+  `reconcileUnsafeDirectCronsWithService`, `runDeferredFeatureCronBootstrap`,
+  `makeReactionsCapabilityChecker`, `resolveNeoHooksConfig`) bleiben davon
+  ausgenommen, da sie ihren eigenen `api`-Parameter tragen statt `host` aus
+  einem Closure zu lesen.
+- **Release-Linie 7.17.0–7.18.4 übernommen** (Persona/Light für
+  Discord-Sprachräume, Health-Überwachung im Dashboard, Feature-Cron-Probe,
+  Skill-Miner-Clustering, `runtime.detachPostTurnWork`, Critical-Teilstücke;
+  Einträge unten). In der neuen Struktur: `/modus`, die `plurv`-Knöpfe, der
+  Light-Zweig vor Recall/Wartung und `before_model_resolve` in
+  `adapter/openclaw/register-voice-mode.js`; der Gateway-Log-Watch im
+  Dashboard-Block von `adapter/openclaw/register-commands.js`; der
+  LLM-Fehlerzähler und der Post-Turn-Detacher werden in
+  `engine/create-engine.js` gebaut (`EngineInternals.llmFailureRecorder`,
+  `detachPostTurnWork` im Capture-Kontext); `healthWatch` und
+  `runtime.detachPostTurnWork` stehen im Engine-Config-Schema.
+
+### Behoben
+
+- **Windows (engine-windows):** Die Link-Prüfung `isUnsafeLink()` verglich
+  unter Windows den `realpathSync.native` eines Pfads mit seiner Schreibweise.
+  Ein Vorfahr in 8.3-Kurzschreibweise (etwa `C:\Users\RUNNER~1\…\Temp`) oder
+  in anderer Groß-/Kleinschreibung ließ damit jede Datei darunter als Reparse
+  Point gelten — u. a. wurde die frisch angelegte `owner-pipe.nonce` als
+  „not a regular file“ abgewiesen und der Embedding-Owner startete nicht.
+  Geprüft wird jetzt nur das letzte Segment (Realpath des Eintrags gegen
+  Realpath des Elternverzeichnisses plus Name, ohne Groß-/Kleinschreibung);
+  Junctions und Symlinks am Eintrag selbst bleiben abgewiesen. POSIX und macOS
+  unverändert.
+- **Windows (engine-windows):** Der Embedding-Owner ohne explizite Adresse
+  lauschte unter Windows auf der Datei `control/embedding-ipc/owner.sock`, was
+  libuv dort nicht kann (`listen EACCES`) — der lokale Embedding-Owner startete
+  unter nativem Windows nie. Er lauscht jetzt auf der Named Pipe
+  `\\.\pipe\plur1bus-embedding-owner-v2-<40 hex>`: SHA-256 über den
+  kanonischen Pfad des embedding-ipc-Verzeichnisses (`realpathSync.native`,
+  kleingeschrieben) und eine 256-Bit-Nonce, die einmal in
+  `owner-pipe.nonce` im ACL-geschützten embedding-ipc-Verzeichnis angelegt wird
+  (Datei ebenfalls nur für den Benutzer). Andere lokale Benutzer können den
+  Namen daher weder vorhersagen noch vorab belegen (EW-R1); die Pipe selbst hat
+  weiter Nodes Standard-Sicherheitsdeskriptor, das Token authentifiziert jede
+  Anfrage. Fehlt die Nonce oder ist sie unlesbar, startet der Owner nicht und
+  Clients scheitern mit `scoped_embedding_pipe_nonce_unavailable`
+  (fail-closed). POSIX unverändert (`owner.sock`).
+- **Windows (engine-windows):** Pfad-Containment im Obsidian-Bridge
+  (`resolveUnder`, Open-Threads) prüfte mit `/` und wies jeden Vault-Pfad ab;
+  die Vault-Wurzelprüfung zählte Segmente mit `/`; `splitAgentDbPath` trennte
+  nur an `/` (Tombstone-Guard las die falsche Registry); der Critical-Push-
+  Zustandsordner wurde nie angelegt; das Verzeichnis-`fsync` scheiterte mit
+  EPERM (SKILL.md-Aktivierung, epistemischer Cutoff); Module wurden per
+  Dateipfad statt `file:`-URL importiert; die Neo-Generationen-Migration
+  entfernte `\workspaces` nicht. Alle unter POSIX unverändert.
+- Die `.obsidian`-Schreibsperre vergleicht das erste Segment jetzt ohne
+  Groß-/Kleinschreibung und ohne abschließende Punkte/Leerzeichen, auf allen
+  Plattformen (`.OBSIDIAN`, `.obsidian.`, `.obsidian ` umgingen sie auf NTFS
+  und case-insensitiven APFS-Volumes).
+- **Verhaltensänderung, alle Plattformen:** Vault-relative Pfade im
+  Obsidian-Bridge (beide `assertSafeRelativePath`, `resolveUnder`) weisen jetzt
+  jedes Segment ab, das nur aus Punkten und/oder Leerzeichen besteht — auch `.`
+  (`a/./b`, ein `reviewRoot` von `./plur1bus` ergeben nun „Path traversal
+  rejected“), `...`, `.. `, ` .`. Unter Windows zusätzlich: Segmente mit
+  abschließendem Punkt oder Leerzeichen (Windows entfernt sie), mit `:`
+  (NTFS-Streams wie `.obsidian::$INDEX_ALLOCATION`, laufwerksrelatives `C:x`)
+  und in 8.3-Kurznamen-Form (`~` plus Ziffer, z. B. `OBSIDI~1`) — alle
+  verweisen sonst auf einen anderen Namen.
+- Der Persona-Direktiven-Cache ist an einen Hash des Dateiinhalts gebunden
+  statt an `mtimeMs`; eine (gleich große) Neufassung im selben Zeitstempel-Tick
+  lieferte die alte Direktive.
+- `install-plugin.ps1`: Unter Windows PowerShell 5.1 kam vor dem an WSL
+  geleiteten `bootstrap.sh` ein BOM an; ein fehlgeschlagenes Zurücksetzen der
+  Konsolen-Kodierung wird jetzt gewarnt. Neuer CI-Job `bootstrap-stdin-bytes`.
+- **Bekannte Einschränkung (`engine-windows:elevated-owner`, EW-R4):** Auf
+  einem erhöht (als Administrator) laufenden Windows-Gateway gehören neue
+  Verzeichnisse `BUILTIN\Administrators`; die Verified-Path-Prüfung des
+  Shared-Memory-Pools verlangt den Benutzer als Besitzer und weist geteilte
+  Schreibvorgänge daher ab („memory write failed“, danach `unsupported`).
+  Die Prüfungen werden bewusst nicht gelockert; Abhilfe: Gateway nicht erhöht
+  starten oder Basis und `.plur1bus-shared` dem Benutzer übereignen (siehe
+  `docs/engine-api.md`, Abschnitt „Shared memory on macOS and Windows“).
+- `process.env.HOME` wird nicht mehr als Home-Verzeichnis benutzt
+  (`lib/providers/openclaw-memory-embedding-adapters.js`); unter Windows ist
+  die Variable nicht gesetzt, der Modell-Cache landete im Arbeitsverzeichnis.
+- Alle `chmod`-Stellen laufen über `securePath`, das unter Windows eine
+  benutzergebundene ACL setzt statt nur das Read-only-Bit; wenn das ACL-Tool
+  fehlt, wird das jetzt abgefangen statt die Operation scheitern zu lassen
+  (ein anderer Fehler des ACL-Tools wird weiterhin nicht abgefangen).
+- `applyGlobalInjectBudget` (`lib/inject-budget.js`) kürzte den droppable
+  `memories`-Block an einer beliebigen Zeichenposition, was ein halb offenes
+  `<memory-record>`-Element (fehlerhaftes XML) erzeugen und den inneren
+  Trunkierungs-Marker verschlucken konnte. Der Block wird jetzt am Ende des
+  letzten vollständigen `<memory-record>`-Elements gekürzt und bekommt
+  denselben `<!-- memory context truncated -->`-Marker wie `truncateMemoryContext`;
+  jedes an dieser Stelle noch offene Element wird korrekt geschlossen —
+  seit Fix-Runde 2 über ein echtes Scannen des Tag-Stroms (`openTagsAt`/
+  `closeOpenElements`, `lib/inject-budget.js`) statt einer festen Liste
+  bekannter Wrapper-Namen, sodass auch ein bislang nicht aufgeführter
+  Wrapper wie `<memory-reactivation>` (dem am Ende angehängten
+  Reaktivierungs-Block, `lib/conversation-reactivation-recall.js`) korrekt
+  geschlossen wird; passt kein einziger Record mehr in das verbleibende
+  Budget, wird der ganze Block verworfen statt mittendrin abgeschnitten. Ein
+  droppable Block ganz ohne `<memory-record>`-Elemente (z. B. ein reiner
+  Start-Hinweis) wird ebenfalls vollständig verworfen statt an beliebiger
+  Zeichenposition abgeschnitten (Fix-Runde 1). `truncateMemoryContext`'s
+  eigener Fallback für den Fall, dass kein einziger Record mehr ins Budget
+  passt, schneidet seit Fix-Runde 2 ebenfalls vor dem ersten `<memory-record>`
+  statt mittendrin und schließt offene Wrapper über denselben Helper
+  (Fix-Runde 2).
+- `recall.globalInjectMaxChars` (Default 17 000) konnte nie greifen, weil der
+  `<relevant-memories>`-Block bereits vorher von `truncateMemoryContext` auf
+  12 000 Zeichen gedeckelt wurde und nichts diesen inneren Wert überschrieb.
+  Der innere Cap ist jetzt über `recall.memoriesMaxChars` (Default weiterhin
+  `12000`, additiv, verhaltensneutral) konfigurierbar; siehe
+  `docs/configuration.md` für das Zusammenspiel beider Werte.
+- Das Golden-Prefix-Szenario `recall-over-budget` war falsch benannt: sein
+  Kommentar versprach den 17 000-Zeichen-Cap, tatsächlich pinnt es einen
+  gewöhnlichen Prefix mit zwei Records (~1 100 Zeichen) — der 12 KB `FILLER`
+  jedes Records erreicht den Prompt nie, weil nur die auf 400 Zeichen
+  gedeckelte Summary angezeigt wird. Umbenannt zu
+  `recall-large-text-records` (`git mv`, Oracle-Bytes unverändert), Kommentar
+  korrigiert; alle Referenzen aktualisiert.
+- `truncateMemoryContext` (`lib/relevant-memory-context.js`, der innere Cap
+  hinter `recall.memoriesMaxChars`) schnitt ebenfalls an einer beliebigen
+  Zeichenposition (`output.slice(0, limit) + marker`), mit demselben Risiko
+  eines halb offenen `<memory-record>`-Elements oder eines nie geschlossenen
+  `<relevant-memories>`-Wrappers — und das am produktiven Pfad, der bei den
+  Standardeinstellungen tatsächlich greift. Nutzt jetzt denselben
+  Record-Grenzen-Helfer wie `applyGlobalInjectBudget`
+  (`trimAtRecordBoundary`, `lib/inject-budget.js`) und fällt nur noch auf den
+  reinen Zeichenschnitt zurück, wenn kein einziger Record mehr passt
+  (Fix-Runde 1, betrifft nur das Golden-Prefix-Szenario `recall-truncated`).
+
+### M1b-1 — die Engine-API (`createEngine`)
+
+Contract-Version **1.4.1** (von 1.0.0 über 1.1.0/1.2.0/1.3.0, siehe oben, auf
+1.4.0 gehoben — der komplette `Engine`-Umfang von `createEngine` —, dann 1.4.1:
+`JobTrigger` kennt `"unknown"` für die Crash-Zeile eines unlesbaren
+Start-Markers). Details in `docs/engine-api.md`.
+
+#### Hinzugefügt
+
+- **`engine/create-engine.js`** — `createEngine(host, config, testOptions?)`
+  baut den vollen 1.4.1-`Engine`-Umfang aus einem reinen `HostServices`-Objekt
+  ohne OpenClaw-`api` im Aufrufgraphen (`createEngine(createStubHost(),
+  config)` ist genau das, was `tests/engine-contract.test.js` prüft).
+  `index.js` ist auf 55 Zeilen geschrumpft (Konstruktion, ein
+  `plugin.register()`-Aufruf, `/wiki`, `export default`).
+- **`Principal`/`AgentContext` als explizite Eingaben** (`engine/identity/
+  principal.js`) statt implizit aus dem OpenClaw-Hook gelesen; ein
+  Kanal-Register (`Engine.channels`) für die offene `ChannelRef`-Vokabular.
+- **JobRegistry mit 18 engine-eigenen Jobs** (`engine/jobs/job-registry.js`,
+  `job-specs.js`, `internal-job-bodies.js`) — `Engine.jobs.run()`/`.history()`/
+  `.list()` ersetzen die bisherigen Cron-/internen Command-Aufrufer.
+- **Anhängendes Run-Ledger** (`engine/jobs/job-ledger.js`) unter
+  `<baseDbPath>/_jobs/<agentId>/ledger.jsonl` (bewusste Abweichung von der
+  ursprünglichen Spezifikation, die `stateDir` nannte — der Ledger-Wurzelpfad
+  bleibt im selben Verzeichnisbaum, den Tests bereits pro Agent über
+  `baseDbPath` isolieren) plus Started-Markern zur Absturzerkennung.
+- **`checkpoint(agentId, reason)`** (`engine/checkpoint/checkpoint-store.js`,
+  `CheckpointReason` inkl. `"session-end"`).
+- **`RecallResult.timing`** (`{ phases, totalMs, namespacePhases }`) auf jedem
+  geplanten Recall, plus das Host-Event `recall.completed` (`{ agentId,
+  timing, degraded }`), genau einmal pro Recall-Versuch, unabhängig davon, ob
+  `Engine.recall` oder der adapter-eigene `before_prompt_build`-Hook ihn
+  ausgelöst hat — beide rufen denselben Assembler. Ersetzt den testinternen
+  `recallTimingSink`/`api.__recallTimingSinkForTests`-Seam vollständig; die
+  feinkörnigen Pro-Namensraum-Phasen werden separat gesammelt
+  (`onNamespacePhases`) und nicht mehr in den äußeren Timer gefaltet, den die
+  Timeout-Log-Zeile des Schedulers liest.
+- **L3-Events und `Deferral`s** (additiv): `recall.block-clipped`,
+  `recall.block-dropped`, `recall.degraded`, `job.run`.
+- **`lib/host-paths.js`/`lib/host-sdk-loader.js` als injizierte Host-Pfade**
+  (`HostServices.configPath()`, `.routing?`, `.pathOverrides?`, Contract
+  1.3.0) statt direkter `OPENCLAW_HOME`/`OPENCLAW_CONFIG_PATH`-Lesungen im
+  Engine-Graphen.
+- **`scripts/lint-engine-imports.mjs`, Regeln 6–7**: die
+  Forbidden-Import-Regel gilt jetzt transitiv über den gesamten von
+  `engine/**` erreichbaren `lib/**`-Graphen, und kein
+  `process.env.OPENCLAW_*`-Lesen bzw. kein `"openclaw/…"`-Ladepfad ist auf
+  diesem Graphen erlaubt.
+- **`bench/results/2026-09-24-recall-budget-probe.md`** — Re-Lauf des B6-
+  Probes gegen `RecallResult.timing`/`recall.completed` statt
+  `recallTimingSink`, mit Vergleichstabelle gegen den 2026-09-22-Report.
+
+#### Geändert (Verhaltensänderungen, siehe M1b-1-Vertrag §7)
+
+- **Job-Semantik (PR-08):** ein `incomplete`-Job-Lauf wird bis zu zweimal neu
+  versucht (`MAX_ATTEMPTS = 3` insgesamt), bevor er als `abandoned` markiert
+  wird (mit Diary-Zeile, sofern Diary aktiv); `already_processed` gilt, sobald
+  irgendeine Ledger-Zeile den Schlüssel als erledigt führt (`keys`, gesetzt
+  über `markCompletedKey`) — unabhängig vom Ausgang dieser Zeile, also auch
+  nach einem `failed`-Lauf, der den Schlüssel schon markiert hatte —, und ein
+  nach den Wiederholungen aufgegebener Schlüssel zählt ebenfalls als
+  erledigt (Skip mit Grund `abandoned`); eine `incomplete`-Zeile allein macht
+  einen Schlüssel nie erledigt. `rem`/`deep`-Phasen teilen sich einen
+  Circuit-Breaker von 3 LLM-Sitzungen pro Agent und UTC-Kalendertag
+  (Wiederholungsversuche zählen mit, laufende Sitzungen ebenfalls — eine
+  Reservierung im Speicher vor dem Job-Körper); ein Singleton- oder
+  `rem`/`deep`-Job, der für denselben Agenten schon läuft, wird nicht doppelt
+  gestartet (`skipped`/`already_running`); jeder Job-Lauf erzeugt eine
+  Ledger-Zeile, auch ein Skip.
+- **Recall-Abbruch (spec §3.2):** ein abgebrochener oder per Timeout
+  beendeter Recall liefert jetzt die Blöcke zurück, die zum Abbruchzeitpunkt
+  bereits fertig waren, zusammen mit `degraded.reason: "aborted"`/`"timeout"`,
+  statt gar nichts — auch dann, wenn der Scheduler die Antwort aus seinem
+  Recall-Cache liefert. Der Cache ist auf dem `Engine.recall`-Pfad nach dem
+  ganzen Principal geschlüsselt (nie über Principals hinweg) und gibt immer
+  Kopien heraus; ein abgebrochener Recall markiert keine fälligen Reminder
+  als präsentiert und schreibt keinen späten Wert mehr in den Cache. Die
+  sieben Golden-Szenarien laufen nie in einen Timeout, das Oracle bleibt also
+  unverändert.
+- **Recall-Fehler sind sichtbar:** Druck-Abwurf, volle Queue, Scheduler-Fehler
+  und ein Fehler im Store-Abschnitt kommen als `degraded` (`"pressure"`,
+  `"queue-full"`, `"error"`) statt als `degraded: null` zurück; der
+  OpenClaw-Join und das Golden-Oracle sind davon unberührt.
+- **Rerank-Budget:** der Reranker bekommt ein einziges Signal — das
+  Aufrufer-Signal plus den einen `rerankerTimeoutMs`-Timer — und wird gegen
+  genau dieses Signal gerannt (`raceAbort(reranker.rerank(...), rerankAbort,
+  …)`): ein Timeout-Owner statt eines zweiten, unabhängigen Timers. Embedder
+  und LanceDB-Abfrage haben keinen eigenen Timer; sie sind über dasselbe
+  Aufrufer-Signal per `raceAbort` begrenzt.
+- **`Engine`-Oberfläche (Final Review):** `Engine.capture` fragt den
+  Host-Routing-Klassifikator nicht erneut, wenn der Host den Turn mit
+  `incognito: false` selbst klassifiziert hat (ein Host ohne Routing
+  speicherte sonst nichts), und meldet in `stored` die tatsächlich
+  gespeicherte Anzahl; Light-Dream und Dream-Echo nutzen den Principal des
+  Aufrufers statt eines benutzerlosen Hook-Kontexts; `Engine.jobs.run` reicht
+  nur `trigger`, `signal` und `dryRun` weiter (`dryRun` → `skipped`/
+  `dry_run_unsupported`, das Signal wird nur vor dem Start beachtet);
+  `Engine.close()` lehnt nie ab, danach antworten `recall`/`capture` mit
+  `"engine-closed"` und `jobs.run` lehnt mit `Error("engine closed")` ab.
+- `run-state.json`'s historische REM-Abschlüsse werden einmalig in das
+  Ledger migriert (`engine/jobs/run-state-migration.js`); danach wird die
+  alte Datei nicht mehr gelesen.
+
+### E1 — Contract 1.5.0 (typisierte MemoryOps)
+
+Contract-Version **1.5.0**. Details in `docs/engine-api.md`, Abschnitt
+„Typed MemoryOps“.
+
+#### Hinzugefügt
+
+- **`Engine.memory`** mit sechs Mitgliedern (`engine/memory-ops/`): `list`
+  (genau eines von `topic` oder `since`/`until`, `limit` Standard 20, höchstens
+  100), `show`, `forget`, `correct`, `share` (Ziel `"workspace"` oder
+  `"user"`, `{ allowSensitive }` nach einer Bestätigung) und `state`. Jedes
+  Mitglied nimmt `Principal` und `AgentContext` explizit und löst sie wie
+  `recall`/`capture` auf; `forget`, `correct` und `share` verlangen
+  `origin: "user"` und `background: false`, `share` zusätzlich einen
+  `"proved"`-Principal mit der Ziel-Identität.
+- **Fehler-Codes:** jedes Mitglied lehnt mit einem `MemoryOpError` ab
+  (`code` stabil, `message` englisch und log-sicher, nie Kartentext):
+  `not-found` (auch „existiert, aber nicht sichtbar“, „nicht mehr live“ und
+  „vergessen“ — bewusst nicht unterscheidbar), `denied`, `invalid-input`,
+  `approval-required`, `conflict`, `storage`.
+- **`HostCapabilities.memoryArchiveDir()`** (optional, pro Aufruf gelesen): ein
+  Host kann das Archivverzeichnis der MemoryOps selbst nennen.
+
+#### Geändert
+
+- **`runCommand` ist deprecated** (entfällt mit Contract 2.0); ein Host liest
+  und ändert Erinnerungen über `Engine.memory`.
+- **Archive liegen unter `<stateDir>/memory/_archive`**, sofern der Host
+  nichts anderes nennt. Für OpenClaw ändert sich nichts: der Adapter reicht
+  über `memoryArchiveDir` das bisherige Verzeichnis durch
+  (`~/.openclaw/memory/_archive` bzw. `$OPENCLAW_HOME/.openclaw/memory/_archive`).
+- **`correct` liefert die ID der neuen, lebenden Version** (E1-R8), nicht die
+  übergebene, jetzt abgelöste ID.
+- **`correct` schreibt über `safeUpdate`** (`lib/safe-update.js`) statt über
+  `db-adapter.updateCard`: frische Zusammenfassung aus dem neuen Text,
+  Evidenzzeile mit dem gespeicherten Vorher-Text, Neo-Reconsolidation-Event,
+  Retrieval-Verstärkung — genau der Pfad, den `/correct` schon immer nahm.
+  `updateSource` ist dabei `"user_correction"` statt `"telegram:/correct"`
+  (beide gelten in `lib/memory-text-contradiction.js` als autoritativ).
+- **`computeCutoff` akzeptiert neben den benannten Bereichen `{ from, to }`**
+  (Epoch-ms); `list` mit `since`/`until` vor mehr als 30 Tagen wird dadurch
+  nicht mehr stillschweigend abgeschnitten.
+- **`MemoryState.tombstones` ist `number | null`**: `null` heißt „Registry
+  unlesbar“, nie „keine Tombstones“.
+- **`/memory` mit Zeitangabe** (heute, gestern, ein Monat …) listet jetzt die
+  neuesten Erinnerungen zuerst; vorher war die Reihenfolge bei vielen
+  Treffern zufällig.
+- **`/share` auf eine geteilte Kopie** antwortet weiter mit „nicht gefunden“;
+  `Engine.memory` selbst meldet dafür `denied` (geteilte Kopien lassen sich
+  über diesen Aufruf noch nicht ändern, Folgearbeit in E2).
+- **OpenClaw-Adapter:** `/forget`, `/correct` und `/share` führen ihre
+  eigentliche Änderung über `Engine.memory` aus; Parsing, Normalisierung,
+  Kandidatenauswahl, Bestätigungs-Nonce, Sprache, Darstellung und `checkAuth`
+  bleiben im Adapter. Ein über den `/plur1bus`-Router (auch
+  `Engine.runCommand`) erreichter Befehl behält den `AgentContext` des
+  Aufrufers; ein Subagent kann damit nichts vergessen oder korrigieren.
+  `/memory` bleibt bewusst bei `queryMemoryAcrossAccessPools` (`--explain`
+  und die Filtersyntax bildet `MemoryListQuery` nicht ab).
+- **Bewusste Antwortänderungen von `/forget`, `/correct` und `/share`:**
+  (1) beim Bestätigen antworten „nicht gefunden“ und „per ACL verweigert“
+  beide mit `*_not_found` (nicht mehr unterscheidbar); (2) die Variable in
+  `*_failed` ist jetzt eine allgemeine englische Meldung statt des
+  lokalisierten Einzelfehlers; (3) abgelöste, archivierte, abgelaufene und
+  invalidierte Ziele werden mit „nicht gefunden“ abgelehnt. Eine Ablehnung
+  `denied`, die erst nach bestandenem `checkAuth` aus der Engine kommt
+  (z. B. widersprüchliche Workspace-Identität nach einem Config-Reload),
+  antwortet mit `*_failed` statt mit dem Whitelist-Hinweis und wird mit
+  Grund geloggt.
+- **Audit-Einträge von `/forget` und `/correct` (OpenClaw-Parität):** der
+  Akteur ist jetzt `userPrincipal` oder, ohne ihn, `principal:<agentId>`
+  (bisher bei `/forget` `userPrincipal`, `userId` oder `"telegram:/forget"`;
+  bei `/correct` leer). Der Grund lautet `"MemoryOps.forget"` bzw.
+  `"MemoryOps.correct"` (bisher `"user /forget command"` bzw. keiner).
+- **Neo-Partition von `/correct` (OpenClaw-Parität):** der Neo-Store für das
+  Reconsolidation-Event und die Kanten-Umschreibung wird jetzt aus
+  `{ agentId, workspaceDir }` abgeleitet statt aus dem vollen
+  Befehlskontext; die Session→Workspace-Zuordnung von
+  `workspaceKeyFromContext` wird dabei nicht mehr gelesen. Ist eine Session
+  an einen anderen als den Standard-Neo-Workspace gebunden, können Event und
+  Kanten-Umschreibung in einer anderen Partition landen als bisher. Die
+  Session-Fakten wieder durchzureichen ist ein E2-Folgepunkt.
+- **`show` liest alle erreichbaren Pools:** wie `list` den privaten Pool des
+  Agenten, den Workspace- und den User-Pool (gleiche ACL, gleicher
+  Liveness-Test); jede ID, die `list` ausgibt, findet `show` auch.
+- **`forget`, `correct` und `share` ändern nur eigene agent-private Karten.**
+  Für eine Karte, die nur in einem geteilten Pool (Workspace oder User)
+  liegt und die der Aufrufer sehen kann, antworten sie jetzt mit `denied`
+  („shared copies cannot be changed through this call yet“) statt mit
+  `not-found`; eine Karte, die der Aufrufer gar nicht sehen kann, bleibt
+  `not-found`. Geteilte Kopien zu ändern ist ein E2-Folgepunkt (OpenClaws
+  `/forget` hat heute dieselbe Grenze).
+- **`list` im Zeitmodus liefert die neuesten Karten:** jeder Pool liefert
+  seine neuesten `limit + 1` Zeilen, die Zusammenführung sortiert global
+  nach `createdAt` absteigend, und `truncated` ist genau dann `true`, wenn
+  mehr Karten passen. Bisher nahm jede Quelle bei mehr als 100 Treffern die
+  ältesten 100 in Speicherreihenfolge, und `truncated` blieb `false`. `list`
+  lehnt außerdem ein leeres oder nur aus Leerzeichen bestehendes `topic`,
+  `until` zusammen mit `topic` und `until` vor `since` mit `invalid-input` ab.
+- **`Engine.memory` nach `close()`:** jedes Mitglied lehnt mit
+  `MemoryOpError` `storage` („engine is closed“) ab, bevor es einen Store
+  berührt; ein später Aufruf öffnet LanceDB nicht wieder und schreibt weder
+  Archiv noch Tombstone.
+
+#### Behoben
+
+- **`db-adapter` merkte sich eine fehlende Tabelle für immer:** fehlte das
+  Agenten-Verzeichnis oder die Tabelle noch (oder schlug das Öffnen fehl),
+  cachte `resolveRawTable` `null` ohne es je zu verwerfen. Ein einziges
+  `show`/`forget` vor dem ersten Capture eines Agenten ließ `getCard` danach
+  bis zum Neustart für alle seine Karten `not-found` antworten. Ein
+  Fehlschlag gilt jetzt nur noch für den laufenden Aufruf.
+
+- **`db-adapter` sah Schreibvorgänge anderer LanceDB-Handles nicht:** die
+  gecachte Tabelle behielt die Version beim Öffnen, sodass eine über den
+  Agenten-Pool geschriebene Zeile (die neue Version eines `/correct`, ein
+  Statuswechsel) für `getCard`/`resolveCandidates` bis zum Neustart
+  unsichtbar blieb. `lancedb.connect` läuft jetzt wie in `MemoryDB` mit
+  `readConsistencyInterval: 0`.
+- **Capture auf frischen Installationen:** eine von `MemoryDB` angelegte
+  Tabelle hatte keine Spalte `chunkGroupId` (weder in der Schema-Zeile noch
+  in `MemoryDB`s eigener Migrationsliste). Ergänzte `db-adapter` sie danach
+  über ein zweites Handle, lehnte LanceDB jeden weiteren Append dieser
+  `MemoryDB`-Instanz ab („missing=[chunkGroupId]“, der Spalten-Cache filterte
+  das Feld heraus) — Capture und Korrekturen standen bis zum Neustart.
+  `chunkGroupId` gehört jetzt zur Schema-Zeile und zur Migrationsliste.
+
+### E2 — Contract 1.6.0 (Admin-Ops ohne Host-Runtime, geteilte Kopien, Vorschläge)
+
+Contract-Version **1.6.0**. Details in `docs/engine-api.md`, Abschnitte
+„Shared copies and change proposals“ und „AdminOps in 1.6.0“.
+
+#### Hinzugefügt
+
+- **`AdminOps.share`/`.forget`** sind jetzt deprecated Aliase von
+  `Engine.memory.share`/`.forget` (entfallen mit Contract 2.0) — derselbe
+  Codepfad, keine zweite Implementierung.
+- **`AdminOps.obsidian`** (`engine/admin/obsidian.js`), host-neutral mit
+  expliziten Pfaden, ohne Host-Runtime: `detect(p, a, opts?)` fasst
+  konfigurierte, Workspace- und bis zu 20 aufrufer-eigene Kandidatenpfade
+  zusammen (`~`, `~/…`, relative und absolute Pfade werden gegen das
+  Home-Verzeichnis des Aufrufers aufgelöst) und meldet je Kandidat `isVault`
+  und `confirmed` (aufrufer-eigene Kandidaten nur für einen „proved“-
+  Principal, sonst `denied`; Konfigurations- und Workspace-Quellen stehen
+  jedem Aufrufer offen); `prepare(vaultPath, p, a)` prüft zuerst — vor jedem
+  Dateisystemzugriff —, ob ein „proved“-Principal mit Nutzer vorliegt, und
+  stellt eine 10 Minuten gültige Nonce aus (über
+  dieselbe `lib/security.js`-Bestätigung wie jeder andere Confirmation-Flow —
+  kein dritter Mechanismus); `confirm(nonce, p, a)` verbraucht die Nonce beim
+  ersten Erfolg und schreibt die Quittung erst danach unter
+  `<baseDbPath>/.plur1bus-authority/obsidian-vaults/`. Rohe
+  Dateisystemfehler verlassen `detect`/`prepare`/`confirm` nie: ein
+  inzwischen verschwundenes Vault-Verzeichnis antwortet `not-found` („vault
+  not found“, ohne Pfad), jeder andere Fehler `storage` mit fester Meldung;
+  der Rohfehler geht nur an `logger.warn`.
+- **`AdminOps.migrate(from, to)`** (`engine/store/schema-version.js`)
+  schreibt einen kleinen Schema-Marker (`<baseDbPath>/_schema.json`), nicht
+  die LanceDB-Tabellenform selbst; ein Store ohne Marker gilt als
+  `LEGACY_STORE_SCHEMA_VERSION` ("0"). Der einzige registrierte Schritt,
+  `"0->1"`, ist ein No-op (die Spalten von Contract 1.5.0 wendet
+  `memory-db.js`s eigene LanceDB-Migration schon beim ersten Öffnen an) und
+  markiert nur, dass der Betreiber die Store-Form bestätigt hat. Scheitert
+  ein Migrationsschritt oder das Schreiben des Markers, antwortet `migrate`
+  `storage` („store migration failed“); der Rohfehler geht nur ins Log.
+  **`EngineStatus.storeSchema`** (`{ current, expected }`) macht diesen
+  Zustand sichtbar.
+- **Geteilte Kopien: Regeln für die teilende Instanz** (`engine/memory-ops/
+  shared.js`, Spec-Entscheidung D31): `forget` auf eine geteilte Kopie durch
+  den teilenden Agenten **entzieht** sie (archive-first, dann derselbe
+  Soft-Delete wie `tombstoneCard`; `tombstoneId` ist immer `null`, denn die
+  Zeile landet bewusst nicht in `lib/tombstone.js`s Registry — das Original
+  bleibt lebendig und erfassbar). `correct` auf dieselbe Kopie
+  **erneuert** sie: erst das private Original korrigieren (derselbe
+  Archive-first-Pfad wie E1s `correct`), dann die korrigierte Fassung erneut
+  in denselben Scope teilen, zuletzt die alte Kopie entziehen — in dieser
+  Reihenfolge, damit ein Fehlschlag nie beide Kopien verliert. Ein
+  Fehlschlag nach Schritt 1 lehnt mit `storage` und `detail: { sourceId,
+  sharedId }` ab (plus `staleSharedId`, wenn der letzte Schritt scheitert).
+- **`MemoryOpError.detail`** (nicht-geheime IDs, z. B. für eine
+  halb-fertige Kopie-Erneuerung).
+- **Änderungsvorschläge für jeden anderen Leser** (`engine/memory-ops/
+  proposal-store.js`, `proposals.js`, Spec-Entscheidung D31):
+  `MemoryOps.propose(sharedId, newText, p, a, opts?)` legt einen Vorschlag
+  gegen eine geteilte Kopie an, die der Aufrufer lesen, aber nicht ändern
+  darf; lehnt `invalid-input` ab, wenn `sharedId` eine eigene lebende
+  private Karte des Aufrufers ist oder der Aufrufer selbst der Teilende ist,
+  `not-found` für eine nicht lesbare geteilte ID, `denied` für eine
+  Legacy-Kopie ohne `sourceAgentId`/`sourceMemoryId` („this shared copy has
+  no recorded sharer“, vor jedem Schreibzugriff), `conflict` bei einem schon
+  offenen oder gleichzeitig eingereichten eigenen Vorschlag gegen dieselbe
+  Kopie. Jeder Vorschlag gehört zum geteilten Pool seiner Kopie
+  (Workspace- bzw. User-Pool, intern als Pool-Schlüssel festgehalten, nie
+  zurückgegeben): `proposals.list` zeigt nur Vorschläge aus Pools, die der
+  Principal des Aufrufers erreicht, und `accept`/`reject` antworten für
+  jeden anderen `not-found` — vor jeder `stale`-Markierung. Derselbe Agent
+  unter einem anderen Nutzer sieht also die User-Pool-Vorschläge des ersten
+  nicht (Anti-Orakel). Vorschläge liegen
+  dateibasiert unter `<dirname(baseDbPath)>/_proposals/<sharerAgentId>/
+  <id>.json` (atomar geschrieben, ein defektes Nachbarfile zählt in
+  `unreadable` statt die Liste zu verstecken). `proposals.list(q, p, a)`
+  zeigt nur selbst eingereichte oder empfangene Vorschläge, optional nach
+  `status` gefiltert. `proposals.accept`/`.reject` sind ausschließlich der
+  teilenden Instanz vorbehalten (jede andere ID antwortet `not-found`);
+  `accept` markiert eine geteilte Kopie, die verschwunden ist oder deren
+  Text sich seit dem Vorschlag geändert hat, als `stale` und lehnt
+  `conflict` ab, statt sie zu überschreiben; ein Fehlschlag beim Erneuern
+  oder beim Nachschlagen der Kopie (`storage`) lässt den Vorschlag
+  `pending`. Scheitert nach erfolgreicher Erneuerung das Festhalten der
+  Annahme oder die Audit-Zeile, antwortet `accept` `storage` mit `detail:
+  { proposalId, id, sourceId }`. `reject` protokolliert nur die Ablehnung
+  und eine optionale Notiz; scheitert danach die Audit-Zeile, antwortet es
+  `storage` mit `detail: { proposalId }`.
+- **`"memory.proposal"`-Event** (`EngineEventName`): einmal beim Einreichen
+  (`status: "pending"`) und einmal bei der Auflösung (`"accepted"` /
+  `"rejected"` / `"stale"`), mit `{ proposalId, status, sharerAgentId,
+  proposerAgentId, sharedId }`.
+- **`MemoryCard.sharedBy`/`.sourceId`** (nur auf Workspace-/User-Kopien): die
+  teilende Instanz und die ID ihres privaten Originals.
+
+#### Geändert
+
+- **`Engine.close()` wartet jetzt auf laufende Memory-Operationen** (E2 Task
+  3): jedes `memory.*`- und die memory-gestützten `admin.*`-Mitglieder
+  (`share`/`forget`/`obsidian.*`/`migrate`) werden während der Ausführung
+  verfolgt; `close({ budgetMs })` wartet zuerst auf diese (`Promise.
+  allSettled`), bevor Stores geschlossen werden — innerhalb desselben
+  Budgets, das schon für langsame Ressourcen galt. Ein Aufruf, der erst nach
+  Beginn von `close()` eintrifft, wird sofort mit `storage` („engine is
+  closed“) abgelehnt statt am Drain teilzunehmen; kein Store schließt unter
+  einer laufenden Operation.
+
+### E3 — Contract 1.7.0 (Embedding-Probe/Serve echt, detect-Toleranz, typisiertes pushCriticalButtons)
+
+Contract-Version **1.7.0**. Details in `docs/engine-api.md`, Abschnitt
+„EmbeddingService in 1.7.0: probe and serve“.
+
+#### Hinzugefügt
+
+- **`Engine.embedding.probe()`** prüft den Embedding-Provider einmal echt
+  (fixer Text mit Pro-Engine-Nonce, damit kein persistenter Embedding-Cache
+  antworten kann; Identität, Bereitschaft, bei Erfolg gemerkt) — Contract
+  1.7.0. Parallele Aufrufe teilen sich einen laufenden Provider-Aufruf; der
+  Abbruch eines einzelnen Aufrufers (`signal`) beendet nur dessen eigenes
+  Warten (`{ ok: false, error: "aborted" }`), nie den geteilten Aufruf oder
+  die übrigen Wartenden. Ein Fehlschlag wird nie gemerkt, ein erneuter
+  Versuch prüft den Provider also wieder. Wirft nie bei einem
+  Provider-Fehler; der Rohfehler geht nur an `logger.warn`. Der Harness nutzt
+  `probe()` als Warm-up-Primitive, E4 liest `lastResult()`.
+- **`Engine.embedding.serve(address | null)`** startet den
+  Scoped-Embedding-IPC-Server als In-Process-Owner ohne
+  Loopback-Claim-Listener (ADR-001 C1); Default-Adresse je Plattform (Linux:
+  Abstract Socket; macOS/BSD:
+  `<baseDbPath>/control/embedding-ipc/owner.sock`; Windows:
+  `\\.\pipe\plur1bus-embedding-<32 hex>`); das Token liegt für jede
+  Adressart unverändert unter
+  `<baseDbPath>/control/embedding-ipc/owner.token` (0600, Verzeichnis 0700)
+  und erscheint nie in einem Ergebnis, einer Log-Zeile oder einem Fehler.
+  `null` = nur In-Process (stoppt den Server, `{ address: null, tokenPath:
+  null, identity: null }`). Bekannte Grenze: zwei Prozesse auf demselben
+  `stateRoot`, die **verschiedene** Adressen bedienen, werden nicht
+  verhindert — der zweite überschreibt `owner.token` der ersten Instanz;
+  dieselbe Adresse und In-Process-Duplikate werden dagegen erkannt (Letzteres
+  meldet `conflict` „embedding IPC address is in use“), ebenso ein laufender
+  OpenClaw-Owner (mit Claim) desselben `stateRoot` in einem anderen Prozess:
+  vor dem Listen prüft der Server ohne Claim per Verbindungsversuch die
+  Claim-Adresse und `owner.sock` und verweigert, solange einer antwortet.
+  Jeder Server löscht `owner.token` beim Beenden nur noch, solange die Datei
+  sein eigenes Token enthält.
+- **Sicherheitshinweis zu `serve()`:** Das Token authentifiziert nur Clients
+  gegenüber dem Server, nicht den Server gegenüber Clients. Abstract-Socket-
+  und Named-Pipe-Namen sind vorhersagbar (SHA-256 des
+  embedding-ipc-Verzeichnispfads), und nach einem Absturz bleibt ein altes
+  `owner.token` liegen; ein lokaler Nutzer, der den freien Namen zuerst
+  belegt, erhält die Client-Tokens und kann gefälschte Vektoren liefern oder
+  `serve()` mit `conflict` blockieren. Der bisherige Linux-Datensocket im
+  0700-Verzeichnis war hier stärker. Server-Authentifizierung (Challenge oder
+  Peer-Credentials) folgt mit PR-11 zusammen mit der Pipe-ACL.
+- **`probe({ refresh: true })`** erzwingt jetzt auch bei laufendem Aufruf
+  einen neuen Provider-Aufruf (hinten angestellt); Aufrufer sollten ein
+  `signal` bzw. Timeout übergeben. Neben `lastResult()` (letzter Erfolg)
+  gibt es `lastAttempt()` (letzter abgeschlossener Versuch, Erfolg oder
+  Fehlschlag, nie ein Abbruch).
+- **`HostCapabilities.pushCriticalButtons`** ist typisiert
+  (`CriticalButtonPushArgs`/`CriticalButtonPushResult`); fehlt sie, wirft sie,
+  oder liefert sie `null`/`sent: 0`/kein `unsentTexts`-Array, bleibt
+  `classify-recent` unverändert bei der Text-Zustellung über den Cron;
+  `unsentTexts: []` mit `sent > 0` ergibt NO_REPLY.
+
+#### Geändert
+
+- **`createScopedEmbeddingIpcServer`** nimmt optional `address`/`claim`, der
+  Client optional `address`; der OpenClaw-Pfad (ohne diese Optionen) bleibt
+  verhaltensgleich — Claim-Listener, `owner.sock` im privaten Verzeichnis,
+  alle bestehenden Tests unverändert grün. Beide Clients lehnen
+  `address: null` jetzt ab wie der Server.
+
+#### Behoben
+
+- **`admin.obsidian.detect` scheitert nicht mehr als Ganzes**, wenn ein Vault
+  während der Prüfung verschwindet — der betroffene Kandidat wird als
+  `{ isVault: false, confirmed: false }` gemeldet statt den ganzen Aufruf mit
+  `not-found` scheitern zu lassen (R11).
+
+### E4 — Contract 1.8.0 (Status, Modelle, Journal-Rückstand, Shared-Memory-Plattformen)
+
+Contract-Version **1.8.0**. Details in `docs/engine-api.md`, Abschnitt
+„Status, models and shared memory in 1.8.0".
+
+#### Hinzugefügt
+
+- **`Engine.status()`** meldet Job-Gesundheit aus dem Ledger (letzter Lauf je
+  Job, Breaker, laufende Jobs, unlesbare Zeilen), Modellbereitschaft,
+  Journal-Rückstand des Hosts und Shared-Memory-Unterstützung — Contract
+  1.8.0. Bleibt lesend und billig (öffnet nie LanceDB, legt nie ein
+  Verzeichnis an, lädt kein Modell, ruft keinen Provider) und lehnt nie ab:
+  ein Ledger-Lesefehler markiert nur `jobs.ledger: "unavailable"`, ein
+  fehlender oder hängender `journalBacklog`-Host-Capability-Aufruf wird nach
+  50 ms auf `journal: null` abgeschnitten, statt `status()` zu verzögern.
+  `degraded` ist jetzt echt abgeleitet (fehlgeschlagener oder noch nicht
+  bestätigter Embedder/Reranker), nicht mehr immer `null`.
+- **`Engine.models`** (`status()`, `warm({ signal })`) — `ModelState`
+  (`"loading" | "ready" | "failed" | "disabled"`) für Embedder und, falls
+  konfiguriert, Reranker. `loading` mit `checkedAt: null` heißt „noch nicht
+  geprüft", nicht „lädt gerade" (Ruling C1). **`Engine.models.warm()`**
+  wärmt Embedder und Reranker explizit an — ein Host ruft es nach dem Start
+  im Hintergrund auf, um `status()` von „noch nicht geprüft" auf
+  `ready`/`failed` zu bringen und einen `models-warming`-Degraded-Grund
+  aufzulösen. Ein abgebrochenes `warm()` lässt das Modell beim vorherigen
+  Zustand, markiert es nie als `failed`.
+- **`HostCapabilities.journalBacklog?()`** (optional): ein Host meldet seinen
+  eigenen Journal-Rückstand; `status()` liest ihn mit 50-ms-Deckel, ein
+  `null`-Ergebnis des Hosts ist eine gültige „nichts ausstehend"-Antwort,
+  kein Fehler.
+- **Wiedergabe-Schutz für Turns (Q3).** Ein per Journal erneut eingespielter
+  Turn wird vor der Capture-Pipeline erkannt (Schlüssel: SHA-256 aus
+  `agentId`, `runId`, `sessionKey`, `messages`), 7 Tage bzw. 512 Einträge je
+  Agent gemerkt, und beantwortet mit `reason: "duplicate-turn"` ohne
+  Store-Zugriff. Ein fehlgeschlagener oder abgebrochener Capture wird
+  **nicht** gemerkt, damit seine Wiedergabe erneut versucht wird (bewusster
+  Kompromiss: ein teilweise fehlgeschlagener Turn mit einem schon
+  gespeicherten Element kann bei Wiedergabe eine zweite Zeile anlegen). Ein
+  Host ohne stabile `runId` je Journal-Zeile riskiert einen falschen
+  `duplicate-turn` für eine identische Nachricht in derselben Sitzung
+  innerhalb der 7 Tage — der Harness-Journal (2a-H3) vergibt eine stabile
+  `runId`.
+- **`CaptureResult.reason`** gewinnt `"aborted"`, `"capture-failed"` und
+  `"capture-incomplete"` (typisierter Pfad) neben `"duplicate-turn"`: ein
+  `{ stored: 0, skipped: 0 }` ohne `reason` bleibt der saubere Fall, in dem
+  nichts speicherwürdig war — ein Turn, dessen Elemente alle fehlschlugen,
+  bekommt jetzt einen dieser drei Gründe statt still als sauber zu gelten.
+- **`MemoryOpErrorCode` gewinnt `"unsupported"`.** `Engine.memory.share` und
+  `proposals.accept` lehnen damit ab, bevor eine Zeile, ein Archiv oder ein
+  `.plur1bus-shared`-Verzeichnis angefasst wird, wenn die Plattform keinen
+  Shared-Memory-Modus hat (`detail: { capability: "shared-memory", reason:
+  "platform" }`); geteilte Lesezugriffe bleiben unverändert leer/`null`.
+  **`EngineStatus.sharedMemory`** meldet dieselbe Tatsache vorab
+  (`{ supported, mode, reason? }`); Linux bleibt unverändert beim
+  Descriptor-Alias-Modus (`fd-capability`).
+- **ADR 0001** (`docs/adr/0001-shared-memory-on-macos-and-windows.md`): warum
+  macOS und Windows keinen Descriptor-Alias-Modus haben, und der
+  `verified-path`-Modus, der das schließt — vom Owner am 2026-09-27
+  angenommen (Status „Accepted").
+- **Geteilte Erinnerungen funktionieren auf macOS und Windows im
+  Verified-Path-Modus (ADR 0001).** `SharedMemoryPool` wählt dort
+  `verified-path` (`lib/verified-path-directory.js`): jeder Pfad wird vom
+  Wurzelverzeichnis an per `lstat` geprüft (kein Symlink, keine Junction,
+  POSIX: Eigentümer root oder der aktuelle Benutzer, nicht für andere
+  beschreibbar), `.plur1bus-shared` wird beim Anlegen auf den Benutzer
+  beschränkt (`0700` bzw. `icacls`) und muss ab der ersten schreibenden Lease
+  benutzereigen und privat sein (ebenso muss die Basis dem Benutzer gehören;
+  eine rein lesende Nutzung prüft nur Pfad und Identität), die Identität jedes gehaltenen Verzeichnisses wird vor jeder
+  LanceDB-Operation und nach jeder Lease erneut geprüft. Schlägt eine Prüfung
+  fehl, sperrt sich der Pool bis zum Neustart: `status().sharedMemory` meldet
+  `{ supported: false, mode: "verified-path", reason }` (`unsafe-root`,
+  `acl-tool-unavailable`, `identity-changed`), weitere Freigaben antworten
+  mit `unsupported` (`/share` sagt dann, dass eine Sicherheitsprüfung
+  fehlgeschlagen ist und ein Neustart nötig ist), geteilte Lesezugriffe
+  bleiben leer. Vorübergehende Ressourcenfehler (`EMFILE`, `EIO`, `EAGAIN` …)
+  sperren nicht. Ein bestehendes `.plur1bus-shared` mit lockereren Rechten
+  wird ab der ersten schreibenden Lease abgelehnt, nicht still verschärft. Linux bleibt unverändert beim `fd-capability`-Modus; die
+  Legacy-Shared-Migration und benannte Namespaces bleiben Linux-only. Der
+  Contract bleibt 1.8.0. Neuer CI-Job `windows-verified-path.yml`
+  (windows-latest), der macOS-Portabilitäts-Job führt die neuen Tests mit.
+
+#### Geändert
+
+- **Teilen ohne Shared-Memory-Unterstützung antwortet mit `unsupported`
+  statt `storage`; `/share` sagt, warum** (`plur1bus.share_unsupported`
+  statt der allgemeinen Fehlermeldung) — ein Host kann diese Antwort
+  gesondert behandeln, ein erneuter Versuch hilft auf dieser Plattform
+  ohnehin nie.
+- **`status()` ist nicht mehr statisch.** `contract` steht jetzt auf
+  `"1.8.0"`; `jobs`, `models`, `journal`, `sharedMemory` und `degraded`
+  spiegeln den tatsächlichen Zustand statt fester Platzhalterwerte.
+
+#### Behoben
+
+- **Ein erneut eingespielter Turn (Journal-Replay) läuft nicht mehr ein
+  zweites Mal durch die Capture-Pipeline** (keine zweite Zusammenfassung,
+  keine zweite Zeile, kein zweiter Sitzungszähler; Q3).
+
+### E4.1 — Wiedergabe-Schutz merkt den Turn, sobald die Zeilen stehen
+
+Kein Contract-Wechsel (Typen bleiben bei 1.8.0).
+
+#### Behoben
+
+- **Ein Kill direkt nach dem Speichern legt bei der Journal-Wiedergabe keine
+  zweite Zeile mehr an.** Der Wiedergabe-Schutz (Q3) merkte den Turn erst,
+  nachdem der ganze Capture durchgelaufen war — also auch nach den ~300 ms
+  Nacharbeit hinter `db.store` (Sprecher-Pipeline, Meta-Kognition,
+  Graph-Aufbau, Neo-Drain, Scheduler). Ein SIGKILL in diesem Fenster (im
+  Harness-Kill-Soak reproduziert) ließ die Zeile gespeichert, den Turn aber
+  ungemerkt, und die Wiedergabe mit derselben `runId` speicherte ihn erneut.
+  Jetzt ruft die Capture-Pipeline direkt nach der Speicherschleife einen
+  internen `onRowsSettled`-Callback, sobald etwas gespeichert wurde und kein
+  Element fehlschlug; der Schutz schreibt den Schlüssel sofort (atomar wie
+  bisher). Übrig bleibt nur das Fenster des eigenen Datei-Schreibens.
+  Scheitert danach ein Nacharbeitsschritt (best-effort), bleibt der Turn
+  gemerkt. Fehlgeschlagene, abgebrochene oder unvollständige Captures werden
+  weiterhin nicht gemerkt, eine gleichzeitige identische Capture wartet wie
+  bisher und endet als `duplicate-turn`; der OpenClaw-Adapter-Pfad ist
+  unverändert.
+
+### E5 — Contract 1.9.0 (host-neutrales Engine-Config-Schema, Warm-Only-Recall, ehrliches Timing, Fragment-Kompaktierung, Neo-Worker-Lease)
+
+Contract-Version **1.9.0**. Details in `docs/engine-api.md`, Abschnitt
+„Engine configuration schema in 1.9.0".
+
+#### Hinzugefügt
+
+- **`engine-config.schema.json`** beschreibt alle Engine-Schlüssel
+  host-neutral (Typ, Default, Beschreibung, `readAt`, `x-tier`,
+  `x-sensitive`); `openclaw.plugin.json` wird daraus erzeugt (`npm run
+  gen:config-schema`, `--check` als CI-Gate gegen Drift) — Contract 1.9.0.
+- **Header-Maps und Reminder-Webhook maskiert**: `merging.headers`,
+  `schicht15.headers`, `skillMiner.headers`, `criticalPush.headers` und
+  `reminders.webhookUrl` sind jetzt `x-sensitive` und in OpenClaw per
+  `uiHints` als sensitiv markiert (Owner-Entscheidung zu E5-R24); neu
+  `redactSensitiveConfig` und `secretInputPaths`. `x-sensitive` heißt nur
+  noch Maskieren/Redigieren — `configContracts.secretInputs.paths` folgt den
+  `$ref`-`secretInput`-Knoten und bleibt bei den acht `*.apiKey`-Pfaden, weil
+  OpenClaw `${NAME}`-Strings an SecretInput-Pfaden selbst als Env-SecretRef
+  auflösen würde und die Engine an Headern und Webhook-URL keine SecretRefs
+  auflöst; bestehende Klartext-Konfigurationen bleiben unverändert gültig.
+- **`RecallQuery.warmOnly`** wärmt den schweren Recall-Pfad (Neo-Vorlauf,
+  Query-Embedding, ein nur lesend geöffneter Store, Vektorsuche, Rerank)
+  ohne Schreibzugriffe (auch keine Zeile im persistenten Embedding-Cache:
+  neues Per-Call-Flag `persist: false` im Embedding-Cache, durchgereicht
+  von Local-, OpenAI- und Scoped-IPC-Provider), ohne Events, Recall-Cache
+  oder LLM-Aufrufe, mit Hintergrund-Priorität — gedacht für einen Aufruf je
+  Agent direkt nach `Engine.models.warm()`. Antwort sonst `blocks: []` mit
+  `degraded` `warm-failed`, `aborted`, `timeout`, `queue-full`/`pressure`
+  oder `engine-closed`; ein kalter Modell-Cache lädt Modelldateien wie bei
+  jedem ersten Modell-Load.
+- **`runtime.lancedbCompaction`** — begrenzte LanceDB-Fragment-Kompaktierung
+  zwischen den `dailyConsolidation`-Läufen, standardmäßig aktiv auf jedem
+  Host, auch OpenClaw (Owner-Entscheidung 2026-09-27); Details in
+  `docs/configuration.md`.
+
+#### Geändert
+
+- **Das weiche Recall-Budget zählt ab Aufruf, inklusive Warteschlange.**
+  `RecallTiming.totalMs` läuft jetzt ehrlich ab `Engine.recall` (bzw. auf dem
+  OpenClaw-Hook-Pfad ab dem Assembler-Eintritt); `phases.completed` beginnt
+  mit `entry`/`queue`/`prelude`. Die Emotions-Inferenz, die Write-/Read-DB-
+  Leases, der GC-Kick, der Start-Notice-Konsum und fast-bernd zählen jetzt
+  ebenfalls gegen das weiche Budget, ohne eine eigene Phase zu sein — bei
+  kleinem `recall.softBudgetMs` (Harness) kann ein Soft-Budget-Fallback
+  dadurch früher greifen. Der harte Scheduler-Timeout ist unverändert und
+  zählt weiterhin ab dem Enqueue.
+- **`reembedding.activeGeneration` wird host-neutral erneut gelesen
+  (Verifikations-Read, kein live-Schlüssel)** — über
+  `engine/config/live-config.js`, unabhängig davon, ob `host.config()`
+  die gesamte Host-Konfiguration oder direkt die Engine-Konfiguration liefert.
+
+#### Behoben
+
+- **Capture- und Recall-Latenz wachsen nicht mehr mit der Zahl der
+  LanceDB-Fragmente:** begrenzte Kompaktierung zwischen den
+  consolidate-daily-Läufen (`runtime.lancedbCompaction`).
+- **`timing.totalMs` enthält jetzt Warteschlange und Neo-Vorlauf.**
+- **Mit aktivem Neo hält die Engine nach `close()` keinen Worker-Thread
+  mehr offen; der Prozess endet.** `close()` gibt jetzt eine Lease auf den
+  geteilten Neo-Worker frei statt eine bloße Referenz zu halten; der Worker
+  selbst endet erst, wenn die letzte Lease freigegeben wurde (oder der
+  OpenClaw-Adapter ihn direkt über `gateway_stop` schließt), und startet bei
+  Bedarf in rund 600 ms neu.
+
+### E4.3 — Wiedergabe-Schutz schließt das Fenster zwischen Commit und Merken
+
+Kein Contract-Wechsel (Typen bleiben bei 1.9.0).
+
+#### Behoben
+
+- **Ein Kill zwischen dem LanceDB-Commit einer Zeile und dem Merken des
+  Turns legt bei der Journal-Wiedergabe keine zweite Zeile mehr an.** Nach
+  E4.1 blieb genau dieses Fenster (unter Last einige zehn Millisekunden, im
+  Harness-Kill-Soak auf CI getroffen): Zeile gespeichert, Schlüssel noch
+  nicht geschrieben, die Wiedergabe speicherte den Turn erneut. Jetzt legt
+  die Capture-Pipeline die Zeilen-IDs vor der Speicherschleife fest (Ganzes
+  und alle Chunk-Teile), und der Wiedergabe-Schutz schreibt den Turn vor der
+  ersten Zeile als *pending* mit diesen IDs (fsync, dann atomares Rename).
+  Eine Wiedergabe eines pending-Turns entfernt zuerst die davon
+  vorhandenen Zeilen (Eintrag in `destructive-ops.jsonl`, `source:
+  "capture_replay_rollback"`) und speichert den Turn dann genau einmal — egal
+  ob der Prozess vor, während oder nach der Speicherschleife starb. Ist der
+  Turn fertig, ersetzt der normale Eintrag den pending-Eintrag
+  (`duplicate-turn` wie bisher). Pending-Einträge laufen mit derselben TTL
+  (7 Tage) und Obergrenze (512 je Agent) ab; ein nie wiedergegebener bleibt
+  mit seinen Zeilen als einzige Kopie stehen. Eine Capture, die mit nur
+  teilweise gespeicherten Zeilen zurückkehrt, verhält sich unverändert.
 
 ## [7.18.4] — 2026-10-02
 
@@ -438,10 +1117,12 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   eigene Telegram-Nachricht mit „✅ Annehmen“ und „❌ Ablehnen“. Ein Tipp führt
   denselben autorisierten Befehl aus wie `/plur1bus critical accept|reject` und
   schreibt das Ergebnis unter die Karte, die Knöpfe verschwinden. Der Host
-  prüft den Absender gegen die Telegram-Allowlist; der Handler nimmt nur Klicks
-  aus Direktchats, über den Bot des Agenten, dem die Karte gehört, und aus dem
-  Chat, in den dessen Push geht. Versand über den Telegram-Outbound-Adapter des
-  Hosts an dasselbe Ziel, das der Cron-Plan ableitet
+  prüft den Absender gegen die Telegram-Allowlist; der Handler nimmt einen Klick
+  nur im Direktchat mit dem Absender selbst und nur über den eigenen Bot des
+  Agenten, dem die Karte gehört. Versand über den Telegram-Outbound-Adapter des
+  Hosts an das Zustellziel des eigenen classify-recent-Crons des Agenten
+  (`resolveCronDelivery`, dasselbe Ziel wie bisher der Text), über den Bot aus
+  der eindeutigen Telegram-Bindung des Agenten
   (`lib/critical-button-delivery.js`); scheitert der Versand, gehen die übrigen
   Karten wie bisher als Text über die Cron-Zustellung. Abschaltbar mit
   `criticalPush.buttons: false`. „Alle annehmen/ablehnen“ bleibt per Befehl
@@ -1005,201 +1686,6 @@ Kappe ursprünglich ausgelegt war. Es besteht kein Anpassungsbedarf.
   verlieren.
 
 
-### Hermes 7.12.56-hermes.0
-
-- Native Übernahme der Änderungen aus OpenClaw 7.12.48–7.12.56 unter Erhalt
-  von Profilisolierung, Wartung, Snapshot-/Retrieval-Migration und Desktop.
-- Skill Workshop: nächtliches Mining, begrenzter persistenter Fortschritt,
-  Nutzen/Confidence/Kategorie, explizites Auto-Apply, Benefit-Backfill,
-  sichere Ablehnung/Archivierung und wiederholbare Belegbestätigung.
-- Installer: vollständiges Dashboard, Unified-/gemeinsame Desktop-Dateien,
-  explizite Profilaktivierung und Persistent-Memory-Schalter; wiederherstellbare
-  Materialisierungsmarker schützen zusätzliche UI-Dateien beim Host-Neustart.
-- Controls und Skill-Publikation verwenden das tatsächlich aktive Hermes-Profil.
-  Teilaktivierungen bleiben im Desktop und Web sichtbar und erneut prüfbar.
-- Episoden und schaltbare LLM-Fehlerdiagnose werden nativ angepasst; Details,
-  bewusste Unterschiede und gemessene Gates in
-  `docs/audits/hermes-7.12.56-delta-review.md`.
-- Begleitende Anleitung als Community-Tap für den Hermes Skills Hub:
-  `Cyb3rb1ade/plur1bus-hermes-skills`. Sie ersetzt keine Plugininstallation.
-- Unabhängiges Review: profilübergreifenden UI-Downgrade und wartende optionale
-  Diagnose-Sperre behoben; OpenClaw-Episodenidentität und sichere Fehlerdiagnose
-  zusätzlich korrigiert und als Upstream-PR #151 eingereicht.
-- Native Windows-Prüfung: Skill-Publikation schreibt exakt die gehashten UTF-8-
-  Bytes ohne CRLF-Umwandlung; sichere OS-Fehlercodes bleiben plattformübergreifend
-  identisch. Manuelle Änderungen werden weiterhin strikt geschützt.
-
-### Hermes 7.12.47-hermes.0 — release
-
-- Integrates the pinned OpenClaw `8a148c991123be31bc4f99376c8198447d9bb717`
-  source while retaining Hermes-native payload and distribution paths.
-- Native-port parity and distribution gates are recorded separately in the release
-  verification artifacts; the macOS ARM installer is Developer ID signed and
-  notarized, while Windows installers remain unsigned executables by design.
-
-## Hermes distribution history
-
-### Hermes 7.12.7-hermes.4 — clear profile installation
-
-- Add a native macOS Apple Silicon setup app with graphical all/default/individual
-  profile selection, activation status, preview and explicit install confirmation.
-- Make the PKG's two stages explicit: install the setup app, then configure Hermes.
-- Default guided installation to all existing profiles plus activation; preserve
-  read-only/nonactivating defaults for unattended CLI use.
-- Warn about inconsistent memory-provider/plugin activation and verify both
-  required plugins after activation, including the missing-button Coder case.
-- Prevent Python bytecode writes into the signed setup app. Support Developer ID
-  app and installer signing; keep notarization a separate verified release gate.
-- Retire Intel macOS from the release matrix; retain macOS ARM64, Windows ARM64,
-  Windows x64 and Linux x64, with Linux ARM64 as an additional CI target.
-- No memory schema, model, embedding dimension or retrieval behavior changes.
-
-### Hermes 7.12.7-hermes.3 — independent delta review
-
-- Port missing native 7.12.3–7.12.7 behavior: 24-hour knowledge promotion
-  limits, private LightDream diary, undated transcript guidance, Unicode-safe
-  query refinement and the remote `requestTimeoutMs` setting.
-- Bound prefetch worker admission and cancel queued recalls whose caller
-  deadline elapsed; report whether the request started.
-- Make knowledge confirmation idempotent and reject outstanding approvals
-  after the feature is disabled.
-- Add release checksum validation that rejects self references and removed
-  assets. The existing `.2` checksum manifest was corrected without changing
-  its packages. See `docs/audits/hermes-7.12.7-delta-review.md` for every upstream
-  delta and the Hermes-specific treatment.
-
-### Hermes 7.12.7-hermes.2 — bugfix release
-
-- Fix installer preflight for Hermes' managed in-home `site-packages` bridge
-  while continuing to reject imports escaping both the venv and Hermes home.
-- Add regression coverage for the managed bridge path and refresh release
-  metadata to `7.12.7-hermes.2` / `7.12.7.post2`.
-
-### Hermes 7.12.7-hermes.1 — release candidate
-
-- Portiert die vollständige v7.12.7-Differenz: Workspace-Provenienz für
-  `MEMORY.md`/`USER.md`, begrenzte Remote-Embedding-Anfragen, BigInt-sicheren
-  Recall-Lifecycle, deutsche Umlaut-Query-Verfeinerung, Slot-Diagnose bei
-  Recall-Timeouts sowie 24-Stunden-Fenster für KNOWLEDGE.md-Promotionen.
-- REM-Ausgaben der eigenen Agenten-Partition landen im Agenten-Workspace;
-  `agent-private` und `agent` werden im Dream-Diary gleich behandelt.
-- Hermes-spezifische Provider-/Dimensionsmigration, Dashboard, Installer,
-  Modellverwaltung, per-Profil-Menü und native Distribution bleiben erhalten.
-  Die Upstream-only OpenClaw-Schnittstellen werden dokumentiert und nicht als
-  Hermes-Fähigkeit ausgegeben.
-
-### Hermes 7.12.2-hermes.1 candidate
-
-- Port upstream 7.12.2 Critical Push previews: health and finance are visible
-  by default in authorized owner review; credentials stay hidden. Additional
-  hidden types are configurable through `criticalPush.hideTypes`.
-- Includes the pending native distribution, CPU-first x64 installation and
-  guarded Windows ARM desktop launcher work. This entry is not a release or
-  full feature-parity certificate; final native guest acceptance remains required.
-
-### 7.12.0-hermes.2 / Python 7.12.0.post2 — Distributionskandidat
-
-- Installer-Modellverwaltung: explizites Ziel, Modellvorbereitung/Probe,
-  profilgebundenes Backup und Re-Embedding, separate Prüfung/Aktivierung.
-  Reranker-Wechsel ohne Vektormigration; leere Stores erhalten nach Modellprobe
-  einen gesicherten Konfigurations-Override. Keine ungefragte Modellwahl.
-- Migration darf nur mit passendem, erneut geprüftem Quellbackup aktiviert
-  werden. Vorhandene Memory-IDs, ACLs, Zeitfelder und alte Vektoren bleiben erhalten.
-- Profilfix: Ein neuer Retrieval-Override für ein benanntes Profil wird nicht
-  mehr in die Default-Konfiguration geschrieben, wenn seine eigene Datei fehlt.
-- Gemeinsamer Python-Installer für bestehende Hermes-Installationen: explizites
-  Home/Venv, Profilwahl, Prüfsummen, revisionsgebundene Bestätigung, Sperre gegen
-  parallele Installationen, Backups und gegen nachträgliche Änderungen geschützter
-  Datei-Rollback. Keine implizite Aktivierung oder Änderung von Memory-/Modell-Daten.
-- Portable ZIP/Tar-Bundles, macOS-PKG als Installationsassistent und nativer
-  Windows-EXE-Baupfad; Desktop-only-Modus für getrennte Windows-/WSL-Backends.
-- Windows-Dateisperren über LockFileEx statt Unix-only-Imports; native sichere
-  Dateiöffnung und Flush-/Write-through-Pfade für Checkpoints, Retry-Queue und
-  Generationswechsel. POSIX-Sperren und Verzeichnis-fsync bleiben erhalten.
-- Abhängigkeiten werden im gewählten Hermes-Venv geprüft; neue pip-Konflikte
-  verhindern die Datei-Aktivierung. Gleiche Versionsnummern überspringen den
-  Austausch der beiden Wheels nicht. Pip-Änderungen sind separat protokolliert
-  und ausdrücklich nicht Bestandteil des Datei-Rollbacks.
-- CI-Matrix für macOS Intel/ARM64, Linux x64/ARM64 und Windows x64 mit echter
-  Wheel-Installation, LanceDB-Smoke und Rollback in temporären Homes. Keine
-  automatische Veröffentlichung oder Verwendung von Signier-Zertifikaten.
-- Freigabegrenzen: native Windows-Tests und Signierung müssen separat bestanden
-  sein; die vorhandene Wartungs-Scheduler-Installation bleibt launchd-spezifisch.
-
-- Hermes: schreibgeschützter Desktop-Start-/Profilcheck und unabhängig auffindbare
-  Diagnose in der Befehlspalette. Unbestätigte Profilverbindungen bleiben gesperrt;
-  Sidebar-Unterstützung wird ohne Host-Nachweis ausdrücklich als unbekannt angezeigt.
-- Bestätigter Host-Bauhelfer: revisionsgebundener Plan, Quell-Snapshot, Patch-Prüfung
-  und nicht veröffentlichender Neubau einer separaten Kopie. Bestehende App und
-  Daten bleiben unangetastet; kein automatisches Patchen bei jedem Start.
-
-## [7.12.0-hermes.1] — 2026-09-06
-
-- Native Hermes-Workspace mit Memory-Browser, geprüftem Skill Workshop und
-  profilgebundenen Transport-/Bestätigungsgrenzen.
-- Embedding- und Reranking-Provider konfigurieren; Dimensionswechsel über
-  Backup, separates Staging, Metadatenprüfung und bestätigte Aktivierung.
-- Wiederholte Generationswechsel berücksichtigen neue Captures und stellen
-  bei unterbrochener Aktivierung den vorherigen Pointer wieder her.
-- Linker PLUR1BUS-Menüeintrag für aktivierte Profile; sichere Aktualisierung
-  bei Profilwechsel, verspäteten Antworten und kurzfristigen Verbindungsfehlern.
-- Prüfsummenbasierte Desktop-Verteilung an alle bestehenden Profile. Die zwei
-  nötigen Hermes-Host-Patches sind separat enthalten, nicht automatisch angewandt.
-- Python-Pakete: 7.12.0.post1. Keine automatische Modellumstellung, keine Löschung
-  alter Generationen, kein Eingriff in den OpenClaw-Releasekanal.
-
-## [7.12.0-hermes] — 2026-09-05
-
-### Hermes-Port-Kandidat 7.12.0-hermes (lokal)
-
-- Native Basis aus 7.4.8-hermes.1, kompletter Upstream-Merge bis v7.12.0; Critical-
-  Sammelreview, inaktive Klassifikationskandidaten ausgeschlossen, Hermes-Lifecycle-
-  Isolation, private Dream Diary, explizite Recall-Opt-outs und Remote-Dimensionsprüfung.
-- Hermes-Dashboard mit sitzungs-/revisionsgebundenem Workshop-Review,
-  explizitem Approve/Publish und profilweiter Veröffentlichungswarnung.
-- Quellgebundenes Staging-Re-Embedding mit expliziter erster Generation-Aktivierung
-  und Crash-Recovery; kooperierende Runtimes halten Prozess-Leases bis zum
-  tatsächlichen Worker-Ende. Alte Generation bleibt erhalten. Keine Umschaltung
-  benannter Namespaces, kein automatischer Modellwechsel.
-- Workspace-Quellen: Plan, revisionsgebundene Freigabe, Apply und Widerruf per CLI.
-- Idempotente Reparatur unterbrochener Merge-Materialisierung; Quelle bleibt bis
-  zu einem separaten bestätigten Apply aktiv. Manuell geänderte Mirrors werden
-  nicht überschrieben. Graph-Mirror-Links bleiben im expliziten Rebuild.
-- Embedding-Batch-Coalescing teilt laufende Requests mit Einzelabrufen; Fehler
-  lösen wartende Aufrufer, ohne ungültige Vektoren zu cachen.
-- Schema-/ACL-, Profilrouting-, Symlink- und Retry/Checkpoint-Regressionen;
-  Python-Wheels enthalten nun auch plugin.yaml.
-- Jina v5 Text Nano: gepinnte Q8-ONNX-Artefakte, expliziter Download mit
-  CC-BY-NC-4.0-Freigabe, lokale Inferenz ohne Remote-Code/Auto-Download,
-  512-Token-Grenze, Query-/Document-Präfixe und normalisierte Matryoshka-Vektoren.
-  Kein automatischer Wechsel bestehender Konfigurationen und kein E5-Fallback
-  in den Nano-Vektorraum. Native Vorbereitung und Staging per Operator-CLI.
-- Lokaler BGE-Reranker verwendet den tatsächlichen CrossEncoder-Parameter
-  `cache_dir` statt `cache_folder`; Regressionstest gegen die 3.x-Signatur,
-  begrenzte Eingaben und kein Remote-Code. Echte Nano-/BGE-Inferenz geprüft.
-- Recall-Booster erhalten den expliziten Request-Scope und bleiben additiv:
-  gemischte Legacy-/moderne Private-Kennungen sowie autorisierte Shared-Pool-
-  Treffer können die primären Ergebnisse nicht mehr unbeabsichtigt leeren.
-- Wiederholtes Forget prüft das unveränderte Vorher-Archiv statt es mit der
-  gelöschten Row zu überschreiben; fehlende oder abweichende Archive bleiben
-  gesperrt. BGE unterstützt explizite Revision und lokalen Offline-Betrieb.
-  Die Statusanzeige verlangt für lokale ONNX-Embeddings keinen API-Key.
-- Capture-Retry und Dead-Letter sind nach Agent und ACL-Scope partitioniert,
-  mit exakter Eigentümerprüfung und prozessübergreifend gesperrten Änderungen.
-  Alte ungebundene Queues bleiben unverändert zur manuellen Zuordnung liegen;
-  sie werden keinem Profil automatisch zugeschrieben. Beschädigte Queue-Zeilen
-  bleiben bei Änderungen erhalten, ohne als Capture ausgeführt zu werden.
-- Operator-Status und physisches Optimize verwenden den zertifizierten aktiven
-  Generationspfad auch nach einer Re-Embedding-Umschaltung; alte oder fremde
-  Routen bleiben gesperrt.
-- Der Plugin-Installer vergleicht Inhalte statt nur Größe/Zeitstempel: Updates
-  aus npm-Tarballs mit normalisierten Zeitstempeln lassen keinen gleich großen
-  alten Code zurück. Beide Python-Distributionen werden aktualisiert.
-- Keine Behauptung vollständiger Host-/Workshop-Parität. Jina-v3-Remote-Code-Pfad
-  bleibt bis zum separaten Code-Audit gesperrt. Matrix und lokale Gate-Ergebnisse:
-  `docs/audits/hermes-7.10.0-contract-matrix.md` und `hermes-7.10.0-verification.md`.
-  Delta zu 7.12: `docs/audits/hermes-7.12.0-contract-delta.md`.
-## Upstream source history
 ## [7.12.69] — 2026-09-20
 
 ### Behoben

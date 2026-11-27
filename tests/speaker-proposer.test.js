@@ -11,6 +11,8 @@ import os from "node:os";
 import path from "node:path";
 import { proposeSpeakerNames, storeNewProposals } from "../lib/speaker-proposer.js";
 import { resetSpeakerMappingDbForTests, setManualSpeakerMapping } from "../lib/speaker-mapping-store.js";
+import { bindHostPaths, resetHostPaths } from "../lib/host-paths.js";
+import { envHostPaths } from "../lib/host-services.js";
 
 let originalStateDir;
 let tmpDir;
@@ -20,11 +22,13 @@ describe("speaker-proposer", () => {
     originalStateDir = process.env.OPENCLAW_STATE_DIR;
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "plur1bus-speaker-proposer-"));
     process.env.OPENCLAW_STATE_DIR = tmpDir;
+    bindHostPaths(envHostPaths());
     resetSpeakerMappingDbForTests();
   });
 
   afterEach(async () => {
     resetSpeakerMappingDbForTests();
+    resetHostPaths();
     if (originalStateDir !== undefined) {
       process.env.OPENCLAW_STATE_DIR = originalStateDir;
     } else {

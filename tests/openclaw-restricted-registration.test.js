@@ -45,6 +45,7 @@ const NOOP_CAPABILITIES = [
 ];
 
 const EXPECTED_CLI_COMMANDS = [
+  "plur1bus",
   "plur1bus-command",
   "plur1bus-feature-cron",
   "plur1bus-obsidian",
@@ -181,7 +182,9 @@ describe("manifest CLI declaration", () => {
     for (const entry of manifest.cliCommands) {
       assert.equal(typeof entry.description, "string");
       assert.ok(entry.description.length > 0, `${entry.name} needs a description`);
-      assert.equal(entry.hasSubcommands, false);
+      // Only the maintenance root `plur1bus` (`openclaw plur1bus selftest`,
+      // HM1-R5) has subcommands; every other root stays flat.
+      assert.equal(entry.hasSubcommands, entry.name === "plur1bus", `${entry.name} hasSubcommands`);
     }
   });
 });

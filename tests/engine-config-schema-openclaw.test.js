@@ -1,0 +1,297 @@
+/**
+ * tests/engine-config-schema-openclaw.test.js — E5 Task 4: openclaw.plugin.json's
+ * configSchema and configContracts.secretInputs.paths are generated from
+ * engine/config/engine-config.schema.json (scripts/gen-openclaw-config-schema.mjs),
+ * and --check catches drift.
+ *
+ * The owner's VPS runs this plugin, so the generated configSchema must validate
+ * exactly as the pre-E5 manifest did: the last test compares it with the manifest
+ * at 72b6697f (the E5 base) after stripping only descriptions and annotation
+ * keywords, and checks that every other manifest field is unchanged. The one
+ * allowed schema addition is runtime.lancedbCompaction (E5 Task 6); the one
+ * allowed change elsewhere is five new sensitive uiHints (owner ruling on
+ * E5-R24: the four `*.headers` maps and reminders.webhookUrl are masked, but
+ * secretInputs keeps its eight paths).
+ */
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
+import { spawnSyncBounded } from "./helpers/run-sync.js";
+import { copyFileSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import {
+  ENGINE_ONLY_KEYWORDS,
+  ENGINE_ONLY_ROOT_KEYS,
+  applyEngineSchemaToManifest,
+  deriveOpenClawConfigSchema,
+  deriveSecretInputPaths,
+} from "../adapter/openclaw/config-schema.js";
+import { loadEngineConfigSchema, readAtOf, secretInputPaths, sensitivePaths } from "../engine/config/engine-config-schema.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
+
+const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
+const MANIFEST_FILE = fileURLToPath(new URL("../openclaw.plugin.json", import.meta.url));
+const SCRIPT = fileURLToPath(new URL("../scripts/gen-openclaw-config-schema.mjs", import.meta.url));
+const PRE_E5_COMMIT = "72b6697f";
+
+const readManifest = (file = MANIFEST_FILE) => JSON.parse(readFileSync(file, "utf8"));
+const runGenerator = (args) => spawnSyncBounded(process.execPath, [SCRIPT, ...args], { cwd: REPO_ROOT, encoding: "utf8" });
+
+const SECRET_INPUTS = [
+  "embedding.apiKey",
+  "embedding.fallback.apiKey",
+  "captureChunkingJev.apiKey",
+  "reranker.apiKey",
+  "merging.apiKey",
+  "schicht15.apiKey",
+  "skillMiner.apiKey",
+  "criticalPush.apiKey",
+  "emotion.t3.apiKey",
+];
+// x-sensitive but not a secret input (E5-R24 owner ruling): masked, plain values only.
+const SENSITIVE_PLAIN = [
+  "embedding.routes",
+  "reminders.webhookUrl",
+  "merging.headers",
+  "schicht15.headers",
+  "skillMiner.headers",
+  "criticalPush.headers",
+];
+
+/** Deep copy without `description` and the engine-only keywords, in every object node. */
+function stripAnnotations(node) {
+  if (Array.isArray(node)) return node.map(stripAnnotations);
+  if (!node || typeof node !== "object") return node;
+  const out = {};
+  for (const [key, value] of Object.entries(node)) {
+    if (key === "description" || ENGINE_ONLY_KEYWORDS.includes(key)) continue;
+    out[key] = stripAnnotations(value);
+  }
+  return out;
+}
+
+describe("openclaw.plugin.json generated from engine-config.schema.json", () => {
+  it("the manifest configSchema is derived from the engine schema", () => {
+    const manifest = readManifest();
+    assert.deepStrictEqual(manifest.configSchema, deriveOpenClawConfigSchema(loadEngineConfigSchema()));
+    const text = JSON.stringify(manifest.configSchema);
+    for (const word of ["readAt", "x-tier", "x-sensitive", "x-contract"]) {
+      assert.ok(!text.includes(word), `configSchema must not contain ${word}`);
+    }
+    for (const key of ENGINE_ONLY_ROOT_KEYS) assert.ok(!Object.hasOwn(manifest.configSchema, key), key);
+    assert.equal(Object.keys(manifest.configSchema.properties).length, 58);
+  });
+
+  it("adapter-only keys stay off the engine schema and on the OpenClaw manifest", () => {
+    const engine = loadEngineConfigSchema();
+    const manifest = readManifest();
+    assert.equal(Object.hasOwn(engine.properties, "groupReasoningFilter"), false);
+    assert.equal(Object.hasOwn(engine.properties.runtime.properties, "traceRegistrations"), false);
+    assert.equal(engine.properties.runtime.properties.deferPostTurnLlm.default, false);
+    assert.ok(Object.hasOwn(manifest.configSchema.properties, "groupReasoningFilter"));
+    assert.ok(Object.hasOwn(manifest.configSchema.properties.runtime.properties, "traceRegistrations"));
+    assert.equal(manifest.configSchema.properties.runtime.properties.deferPostTurnLlm.default, true);
+  });
+
+  it("secretInputs follow the $ref secretInput nodes, not every x-sensitive path", () => {
+    const schema = loadEngineConfigSchema();
+    const paths = readManifest().configContracts.secretInputs.paths;
+    assert.deepStrictEqual(paths, deriveSecretInputPaths(schema));
+    assert.deepStrictEqual(paths, SECRET_INPUTS.map((path) => ({ path, expected: "string" })));
+    assert.deepStrictEqual(paths.map((e) => e.path), secretInputPaths(schema));
+    const declared = new Set(paths.map((e) => e.path));
+    for (const path of SENSITIVE_PLAIN) {
+      assert.ok(sensitivePaths(schema).includes(path), `${path} is x-sensitive`);
+      assert.ok(!declared.has(path) && !declared.has(`${path}.*`), `${path} must not be a SecretRef surface`);
+    }
+  });
+
+  it("uiHints sensitive flags agree with x-sensitive", () => {
+    const { uiHints } = readManifest();
+    const flagged = Object.entries(uiHints).filter(([, hint]) => hint.sensitive === true).map(([key]) => key);
+    assert.deepStrictEqual(flagged, sensitivePaths());
+    for (const key of Object.keys(uiHints)) assert.notEqual(readAtOf(key), null, `uiHints key ${key} is not in the schema`);
+  });
+
+  it("--check passes on the repository and fails on a drifted copy", () => {
+    const clean = runGenerator(["--check"]);
+    assert.equal(clean.status, 0, clean.stdout + clean.stderr);
+
+    const copy = join(makeTempDir("plur1bus-manifest-"), "openclaw.plugin.json");
+    copyFileSync(MANIFEST_FILE, copy);
+    const drifted = readManifest(copy);
+    drifted.configSchema.properties.gc.default = "x";
+    writeFileSync(copy, JSON.stringify(drifted, null, 2) + "\n");
+
+    const check = runGenerator(["--check", "--manifest", copy]);
+    assert.equal(check.status, 1);
+    assert.match(check.stdout, /out of date/);
+    assert.deepStrictEqual(readManifest(copy), drifted, "--check must not write");
+
+    const fix = runGenerator(["--manifest", copy]);
+    assert.equal(fix.status, 0, fix.stdout + fix.stderr);
+    assert.equal(readFileSync(copy, "utf8"), readFileSync(MANIFEST_FILE, "utf8"));
+    assert.equal(runGenerator(["--check", "--manifest", copy]).status, 0);
+  });
+
+  it("deriving is idempotent and leaves the input untouched", () => {
+    const schema = loadEngineConfigSchema();
+    const first = deriveOpenClawConfigSchema(schema);
+    assert.deepStrictEqual(deriveOpenClawConfigSchema(schema), first);
+    assert.ok(!Object.isFrozen(first), "the derived schema is a copy");
+    assert.ok(Object.isFrozen(schema) && Object.isFrozen(schema.properties.gc));
+    assert.equal(schema.properties.gc.readAt, "construction");
+    assert.deepStrictEqual(Object.keys(first), ["$defs", "type", "additionalProperties", "properties"]);
+
+    const manifest = readManifest();
+    assert.deepStrictEqual(applyEngineSchemaToManifest(manifest, schema), manifest);
+    assert.deepStrictEqual(Object.keys(applyEngineSchemaToManifest(manifest, schema)), Object.keys(manifest));
+  });
+
+  it("the generated manifest validates exactly as the pre-E5 manifest did", (t) => {
+    const git = spawnSyncBounded("git", ["show", `${PRE_E5_COMMIT}:openclaw.plugin.json`], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    if (git.status !== 0) {
+      t.skip(`git show ${PRE_E5_COMMIT} unavailable (shallow clone?)`);
+      return;
+    }
+    const before = JSON.parse(git.stdout);
+    const after = readManifest();
+    // Allow-list of schema additions since 72b6697f (E5-R25): exactly
+    // runtime.lancedbCompaction (E5 Task 6), and from the merged health-watch
+    // release line healthWatch (7.18.0) and runtime.detachPostTurnWork
+    // (7.18.3). Anything else must still match.
+    const afterSchema = structuredClone(after.configSchema);
+    // PR-10 adds vector-space routing only; the remaining adapter schema is frozen.
+    for (const key of ["routes", "rrfK", "revision", "normalization", "dtype", "prefixScheme", "instruction"]) {
+      assert.ok(Object.hasOwn(afterSchema.properties.embedding.properties, key));
+      delete afterSchema.properties.embedding.properties[key];
+    }
+    // Contract 1.15.0 adds exactly the host secret references (apiKeyRef) and the
+    // configurable HTTP reranker (baseUrl, protocol, size limits, three presets).
+    for (const node of [
+      afterSchema.properties.embedding,
+      afterSchema.properties.merging,
+      afterSchema.properties.schicht15,
+      afterSchema.properties.skillMiner,
+      afterSchema.properties.criticalPush,
+      afterSchema.properties.emotion.properties.t3,
+      afterSchema.properties.reranker,
+    ]) {
+      assert.ok(Object.hasOwn(node.properties, "apiKeyRef"));
+      delete node.properties.apiKeyRef;
+    }
+    for (const key of ["baseUrl", "protocol", "maxDocuments", "maxRequestBytes", "maxResponseBytes"]) {
+      assert.ok(Object.hasOwn(afterSchema.properties.reranker.properties, key));
+      delete afterSchema.properties.reranker.properties[key];
+    }
+    assert.deepStrictEqual(afterSchema.properties.reranker.properties.provider.enum,
+      ["cohere", "jina", "voyage", "remote", "local-transformers", "disabled"]);
+    afterSchema.properties.reranker.properties.provider.enum = ["cohere", "local-transformers", "disabled"];
+    assert.ok(Object.hasOwn(afterSchema.properties.runtime.properties, "lancedbCompaction"));
+    delete afterSchema.properties.runtime.properties.lancedbCompaction;
+    assert.ok(Object.hasOwn(afterSchema.properties.runtime.properties, "detachPostTurnWork"));
+    delete afterSchema.properties.runtime.properties.detachPostTurnWork;
+    assert.ok(Object.hasOwn(afterSchema.properties.runtime.properties, "traceRegistrations"));
+    delete afterSchema.properties.runtime.properties.traceRegistrations;
+    assert.ok(Object.hasOwn(afterSchema.properties.runtime.properties, "deferPostTurnLlm"));
+    delete afterSchema.properties.runtime.properties.deferPostTurnLlm;
+    assert.ok(Object.hasOwn(afterSchema.properties.dreaming.properties.narrative.properties, "diaryFromUserChats"));
+    delete afterSchema.properties.dreaming.properties.narrative.properties.diaryFromUserChats;
+    assert.ok(Object.hasOwn(afterSchema.properties.recall.properties, "fullTextTopRecords"));
+    delete afterSchema.properties.recall.properties.fullTextTopRecords;
+    assert.ok(Object.hasOwn(afterSchema.properties.recall.properties, "fullTextMaxChars"));
+    delete afterSchema.properties.recall.properties.fullTextMaxChars;
+    assert.ok(Object.hasOwn(afterSchema.properties, "captureChunkingJev"));
+    delete afterSchema.properties.captureChunkingJev;
+    assert.ok(Object.hasOwn(afterSchema.properties, "groupReasoningFilter"));
+    delete afterSchema.properties.groupReasoningFilter;
+    assert.deepEqual(afterSchema.properties.captureChunkingMode.enum.slice().sort(), ["automatisch", "beides", "geteilt"]);
+    afterSchema.properties.captureChunkingMode.enum = ["beides", "geteilt"];
+    afterSchema.properties.captureChunkingMode.description = "What a split capture stores: \"beides\" keeps the original row and adds its parts next to it, \"geteilt\" stores only the parts; it has no effect when captureChunking is off.";
+    assert.ok(Object.hasOwn(afterSchema.properties, "healthWatch"));
+    delete afterSchema.properties.healthWatch;
+    // 7.19.0 (ported): the independent Jev emotion owner, emotion.jev.
+    assert.ok(Object.hasOwn(afterSchema.properties.emotion.properties, "jev"));
+    delete afterSchema.properties.emotion.properties.jev;
+    // EmbeddingGemma 2 (pinned dtype variants, bounded sub-batches) added exactly these two local-model options.
+    const localEmbeddingProperties = afterSchema.properties.embedding.properties.local.properties;
+    assert.ok(Object.hasOwn(localEmbeddingProperties, "dtype"));
+    delete localEmbeddingProperties.dtype;
+    assert.ok(Object.hasOwn(localEmbeddingProperties, "maxBatchSize"));
+    delete localEmbeddingProperties.maxBatchSize;
+    // ... and the four EmbeddingGemma 2 preparation profiles at the end of the model-preparation enum.
+    const preparationProfiles = afterSchema.properties.modelPreparation.properties.profile.enum;
+    const egemma2Profiles = ["embeddinggemma-2-128", "embeddinggemma-2-256", "embeddinggemma-2-512", "embeddinggemma-2-768"];
+    assert.deepStrictEqual(preparationProfiles.slice(-4), egemma2Profiles);
+    preparationProfiles.length -= 4;
+    // 7.20.10 (ported): exactly these config keys, all without schema defaults.
+    for (const [node, key] of [
+      [afterSchema.properties.embedding, "cleanText"],
+      [afterSchema.properties.neo.properties.recall, "maxReflections"],
+      [afterSchema.properties.neo.properties.recall, "laneMinRelevance"],
+      [afterSchema.properties.reranker, "maxDocChars"],
+      [afterSchema.properties.recall, "qualityWeighting"],
+      [afterSchema.properties.recall, "volatileStateAnnotation"],
+      // 7.21.1: keyword/recent fallback and the start-up warm recall.
+      [afterSchema.properties.recall, "keywordFallback"],
+      [afterSchema.properties.runtime, "recallPrewarm"],
+      [afterSchema.properties.recall, "mergeTurnParts"],
+      // 7.21.2: origin weighting and confidentiality.
+      [afterSchema.properties.recall, "contextWeighting"],
+    ]) {
+      assert.ok(Object.hasOwn(node.properties, key), key);
+      delete node.properties[key];
+    }
+    // 7.21.1: the CRR timeout default moved from 50 to 250 ms.
+    assert.equal(afterSchema.properties.conversationReactivationRecall.properties.timeoutMs.default, 250);
+    afterSchema.properties.conversationReactivationRecall.properties.timeoutMs.default = 50;
+
+    assert.deepStrictEqual(stripAnnotations(afterSchema), stripAnnotations(before.configSchema));
+    assert.deepStrictEqual(Object.keys(afterSchema.properties), Object.keys(before.configSchema.properties));
+
+    // 7.18.25 (ported): the Jev key dashboard is a control-UI entry right after `kind`.
+    assert.deepStrictEqual(after.controlUi, { entry: "dist/control-ui/jev-key/index.js" });
+    assert.deepStrictEqual(Object.keys(after).filter((key) => key !== "controlUi"), Object.keys(before));
+    // Allow-list of uiHints additions since 72b6697f (E5-R24 owner ruling):
+    // exactly the five plain-only sensitive paths, each sensitive and advanced.
+    const afterHints = structuredClone(after.uiHints);
+    for (const path of SENSITIVE_PLAIN) {
+      assert.ok(!Object.hasOwn(before.uiHints, path), `${path} was not hinted before`);
+      assert.equal(afterHints[path]?.sensitive, true, path);
+      assert.equal(afterHints[path]?.advanced, true, path);
+      delete afterHints[path];
+    }
+    // 7.18.25 (ported): the Jev API key is a SecretInput, sensitive and advanced.
+    assert.ok(!Object.hasOwn(before.uiHints, "captureChunkingJev.apiKey"));
+    assert.equal(afterHints["captureChunkingJev.apiKey"]?.sensitive, true);
+    assert.equal(afterHints["captureChunkingJev.apiKey"]?.advanced, true);
+    delete afterHints["captureChunkingJev.apiKey"];
+    assert.deepStrictEqual(afterHints, before.uiHints);
+    assert.deepStrictEqual(Object.keys(afterHints), Object.keys(before.uiHints));
+    // Allow-list of cliCommands additions since 72b6697f (HM1-R5): exactly
+    // the maintenance root `plur1bus` (`openclaw plur1bus selftest`).
+    const selftestRoot = after.cliCommands.filter((entry) => entry.name === "plur1bus");
+    assert.deepStrictEqual(selftestRoot, [{ name: "plur1bus", description: "PLUR1BUS maintenance commands (selftest)", hasSubcommands: true }]);
+    const afterCli = after.cliCommands.filter((entry) => entry.name !== "plur1bus");
+    // The release version moves with every release (HM1 Task 10); it must equal package.json, nothing else.
+    assert.equal(after.version, JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version);
+    // Allow-list of contracts additions: the EmbeddingGemma 2 adapter id, registered first; every other contract stays as it was.
+    const afterContracts = structuredClone(after.contracts);
+    assert.equal(afterContracts.embeddingProviders[0], "plur1bus-embeddinggemma-2");
+    afterContracts.embeddingProviders.shift();
+    // 7.18.25 (ported): the Jev API key joins the SecretInput paths.
+    const afterConfigContracts = structuredClone(after.configContracts);
+    afterConfigContracts.secretInputs.paths = afterConfigContracts.secretInputs.paths
+      .filter((entry) => entry.path !== "captureChunkingJev.apiKey");
+    const allowed = { cliCommands: afterCli, contracts: afterContracts, configContracts: afterConfigContracts };
+    for (const key of Object.keys(before)) {
+      if (key === "configSchema" || key === "uiHints" || key === "version") continue;
+      assert.deepStrictEqual(Object.hasOwn(allowed, key) ? allowed[key] : after[key], before[key], `manifest field ${key} changed`);
+    }
+  });
+});

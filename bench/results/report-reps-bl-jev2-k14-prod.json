@@ -1,0 +1,215 @@
+{
+ "when": "2026-11-23T16:45:40.142Z",
+ "excludedFile": "data/excluded.json",
+ "excludedCount": 22,
+ "missingExcluded": [],
+ "seed": 1,
+ "boot": 10000,
+ "configs": {
+  "locomo-bl-jev2-k14-prod": {
+   "files": [
+    "/root/plur1bus-bench-2611/results/locomo-bl-jev2-k14-prod-r1.jsonl",
+    "/root/plur1bus-bench-2611/results/locomo-bl-jev2-k14-prod-r2.jsonl",
+    "/root/plur1bus-bench-2611/results/locomo-bl-jev2-k14-prod-r3.jsonl"
+   ],
+   "reps": 3,
+   "alle": {
+    "gesamt": {
+     "questions": 431,
+     "scoredQuestions": 431,
+     "missingCells": 0,
+     "repAccuracy": [
+      0.7053364269141531,
+      0.7122969837587007,
+      0.7192575406032483
+     ],
+     "repMean": 0.7122969837587007,
+     "repMin": 0.7053364269141531,
+     "repMax": 0.7192575406032483,
+     "questionMean": 0.7122969837587005,
+     "unstable": 44,
+     "evidenceHit": 0.9207459207459208
+    },
+    "kat1-4": {
+     "questions": 431,
+     "scoredQuestions": 431,
+     "missingCells": 0,
+     "repAccuracy": [
+      0.7053364269141531,
+      0.7122969837587007,
+      0.7192575406032483
+     ],
+     "repMean": 0.7122969837587007,
+     "repMin": 0.7053364269141531,
+     "repMax": 0.7192575406032483,
+     "questionMean": 0.7122969837587005,
+     "unstable": 44,
+     "evidenceHit": 0.9207459207459208
+    },
+    "locomo-cat1": {
+     "questions": 82,
+     "scoredQuestions": 82,
+     "missingCells": 0,
+     "repAccuracy": [
+      0.5,
+      0.524390243902439,
+      0.573170731707317
+     ],
+     "repMean": 0.5325203252032521,
+     "repMin": 0.5,
+     "repMax": 0.573170731707317,
+     "questionMean": 0.5325203252032519,
+     "unstable": 12,
+     "evidenceHit": 0.9146341463414634
+    },
+    "locomo-cat2": {
+     "questions": 90,
+     "scoredQuestions": 90,
+     "missingCells": 0,
+     "repAccuracy": [
+      0.5777777777777777,
+      0.5666666666666667,
+      0.5777777777777777
+     ],
+     "repMean": 0.5740740740740741,
+     "repMin": 0.5666666666666667,
+     "repMax": 0.5777777777777777,
+     "questionMean": 0.5740740740740742,
+     "unstable": 9,
+     "evidenceHit": 0.8777777777777778
+    },
+    "locomo-cat3": {
+     "questions": 27,
+     "scoredQuestions": 27,
+     "missingCells": 0,
+     "repAccuracy": [
+      0.4074074074074074,
+      0.4074074074074074,
+      0.48148148148148145
+     ],
+     "repMean": 0.43209876543209874,
+     "repMin": 0.4074074074074074,
+     "repMax": 0.48148148148148145,
+     "questionMean": 0.4320987654320988,
+     "unstable": 5,
+     "evidenceHit": 0.72
+    },
+    "locomo-cat4": {
+     "questions": 232,
+     "scoredQuestions": 232,
+     "missingCells": 0,
+     "repAccuracy": [
+      0.8620689655172413,
+      0.8706896551724138,
+      0.853448275862069
+     ],
+     "repMean": 0.8620689655172414,
+     "repMin": 0.853448275862069,
+     "repMax": 0.8706896551724138,
+     "questionMean": 0.8620689655172413,
+     "unstable": 18,
+     "evidenceHit": 0.9612068965517241
+    }
+   },
+   "ohneAusschluss": {
+    "gesamt": {
+     "questions": 409,
+     "scoredQuestions": 409,
+     "missingCells": 0,
+     "repAccuracy": [
+      0.7408312958435208,
+      0.7457212713936431,
+      0.7555012224938875
+     ],
+     "repMean": 0.7473512632436838,
+     "repMin": 0.7408312958435208,
+     "repMax": 0.7555012224938875,
+     "questionMean": 0.7473512632436838,
+     "unstable": 43,
+     "evidenceHit": 0.9238329238329238
+    },
+    "kat1-4": {
+     "questions": 409,
+     "scoredQuestions": 409,
+     "missingCells": 0,
+     "repAccuracy": [
+      0.7408312958435208,
+      0.7457212713936431,
+      0.7555012224938875
+     ],
+     "repMean": 0.7473512632436838,
+     "repMin": 0.7408312958435208,
+     "repMax": 0.7555012224938875,
+     "questionMean": 0.7473512632436838,
+     "unstable": 43,
+     "evidenceHit": 0.9238329238329238
+    },
+    "locomo-cat1": {
+     "questions": 81,
+     "scoredQuestions": 81,
+     "missingCells": 0,
+     "repAccuracy": [
+      0.5061728395061729,
+      0.5308641975308642,
+      0.5802469135802469
+     ],
+     "repMean": 0.5390946502057613,
+     "repMin": 0.5061728395061729,
+     "repMax": 0.5802469135802469,
+     "questionMean": 0.5390946502057612,
+     "unstable": 12,
+     "evidenceHit": 0.9135802469135802
+    },
+    "locomo-cat2": {
+     "questions": 76,
+     "scoredQuestions": 76,
+     "missingCells": 0,
+     "repAccuracy": [
+      0.6710526315789473,
+      0.6447368421052632,
+      0.6710526315789473
+     ],
+     "repMean": 0.662280701754386,
+     "repMin": 0.6447368421052632,
+     "repMax": 0.6710526315789473,
+     "questionMean": 0.662280701754386,
+     "unstable": 8,
+     "evidenceHit": 0.868421052631579
+    },
+    "locomo-cat3": {
+     "questions": 23,
+     "scoredQuestions": 23,
+     "missingCells": 0,
+     "repAccuracy": [
+      0.4782608695652174,
+      0.4782608695652174,
+      0.5652173913043478
+     ],
+     "repMean": 0.5072463768115942,
+     "repMin": 0.4782608695652174,
+     "repMax": 0.5652173913043478,
+     "questionMean": 0.5072463768115942,
+     "unstable": 5,
+     "evidenceHit": 0.7142857142857143
+    },
+    "locomo-cat4": {
+     "questions": 229,
+     "scoredQuestions": 229,
+     "missingCells": 0,
+     "repAccuracy": [
+      0.8733624454148472,
+      0.8820960698689956,
+      0.8646288209606987
+     ],
+     "repMean": 0.8733624454148471,
+     "repMin": 0.8646288209606987,
+     "repMax": 0.8820960698689956,
+     "questionMean": 0.8733624454148472,
+     "unstable": 18,
+     "evidenceHit": 0.9650655021834061
+    }
+   }
+  }
+ },
+ "comparisons": {}
+}

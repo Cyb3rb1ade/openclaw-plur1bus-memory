@@ -50,7 +50,7 @@ describe("shouldSkipAutoRecallForInternalTurn", () => {
   it("skips OpenClaw active-memory child sessions", () => {
     assert.strictEqual(
       shouldSkipAutoRecallForInternalTurn({ prompt: "memory_recall internal context" }, {
-        sessionKey: "agent:bernhardine:telegram:bernhardine:direct:1211667028:active-memory:ffe3629431db",
+        sessionKey: "agent:bernhardine:telegram:bernhardine:direct:10000003:active-memory:aaaaaaaaaaaa",
       }),
       true,
     );

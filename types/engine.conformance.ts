@@ -1,0 +1,252 @@
+/**
+ * types/engine.conformance.ts — compile-only assertions.
+ *
+ * A .d.ts on its own barely type-checks anything: this file makes
+ * `npm run typecheck` fail if the contract drifts from the decisions
+ * frozen in B8, or from the shapes the two adapters rely on. It is never
+ * imported at runtime and emits nothing.
+ */
+
+import type {
+  AdminOps, AgentContext, AgentJobHealth, CaptureOptions, CaptureHandle, CheckpointReason, ContextBlock, ContractVersion,
+  CriticalButtonPushArgs, CriticalButtonPushResult, Deferral, Degraded, Disposable, Engine, EngineConfig,
+  EngineConfigKey, EngineConfigReadAt, EngineConfigSchema,
+  EngineEventName, EngineStatus, EmbeddingProbeError, EmbeddingServeResult, HostFetch, HostServices,
+  HostCapabilities, IpcAddress, JobLastRun, JobName, JobRegistry, JobRun, JobTrigger, MemoryOps, MemoryOpError, MemoryOpErrorCode,
+  MemoryImportOutcome, MemoryImportRejectReason, MemoryProposalStatus, MemoryRebindResult, MemoryUnbindResult, ModelsStatus, ModelState, ObsidianOps, Principal, RecallOptions, RecallQuery, RecallResult, RecallTiming,
+  ProviderCredentialConfig, RemoteRerankerConfig, RerankProtocol, SchemaVersion, SecretPurpose, SecretStore, StoreAdoptIdentitySource, StoreAdoptIncompatibleReason, StoreOps, TurnOrigin, TurnRecord,
+} from "./engine.js";
+import type { createEngine } from "./engine.js";
+
+/** Compile-time equality assertion.
+ *
+ *  The invariance form, not a two-way `extends`. A mutual-assignability check
+ *  passes when either side is widened to `any` (`any` is assignable both
+ *  ways), so `trust: any` would have satisfied the old `Exact`. Comparing two
+ *  identically-shaped generic signatures instead makes the checker test type
+ *  *identity*, which `any` fails in both directions. */
+type Exact<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+function assertTrue<T extends true>(): void { void 0 as unknown as T; }
+
+// B8 decision 1: trust, not proof.
+assertTrue<Exact<Principal["trust"], "proved" | "inferred">>();
+
+// B8 decision 2: TurnOrigin is a string union and AgentContext is separate.
+assertTrue<Exact<TurnOrigin, "user" | "cron" | "subagent" | "heartbeat" | "system">>();
+assertTrue<Exact<AgentContext["origin"], TurnOrigin>>();
+assertTrue<Exact<AgentContext["background"], boolean>>();
+
+// B8 decision 3: capture is non-blocking.
+assertTrue<Exact<ReturnType<Engine["capture"]>, CaptureHandle>>();
+
+// B8 decision 4: degraded is a structured object or null, never a boolean.
+assertTrue<Exact<RecallResult["degraded"], Degraded | null>>();
+
+// The six named blocks and their droppability are the engine's output shape.
+const blocks: ContextBlock[] = [
+  { name: "neo", text: "", droppable: true, chars: 0 },
+  { name: "start", text: "", droppable: true, chars: 0 },
+  { name: "memories", text: "", droppable: true, chars: 0 },
+  { name: "time", text: "", droppable: false, chars: 0 },
+  { name: "temporal", text: "", droppable: false, chars: 0 },
+  { name: "reminder", text: "", droppable: false, chars: 0 },
+];
+void blocks;
+
+// The recall signal is mandatory (host-contract f.1).
+declare const query: RecallQuery;
+assertTrue<Exact<(typeof query)["signal"], AbortSignal>>();
+declare const turn: TurnRecord;
+assertTrue<Exact<(typeof turn)["signal"], AbortSignal>>();
+
+// A job run always carries an outcome, including the skip and incomplete paths.
+// 1.4.0: five outcomes, abandoned included.
+declare const run: JobRun;
+assertTrue<Exact<(typeof run)["outcome"], "completed" | "skipped" | "incomplete" | "failed" | "abandoned">>();
+// 1.4.0: JobRun is the union of the 1.2.0 and spec 3.3 field sets.
+assertTrue<Exact<(typeof run)["runId"], string>>();
+assertTrue<Exact<(typeof run)["phase"], "light" | "rem" | "deep" | null>>();
+assertTrue<Exact<(typeof run)["trigger"], JobTrigger>>();
+assertTrue<Exact<(typeof run)["finishedAt"], number>>();
+assertTrue<Exact<(typeof run)["attempt"], number>>();
+assertTrue<Exact<(typeof run)["cost"]["ms"], number>>();
+assertTrue<Exact<(typeof run)["counts"], Record<string, number>>>();
+// A run triggered by capture (light-dream) is distinguishable from cron/manual/harness.
+// 1.4.1: "unknown" marks a crash row recovered from a corrupt start marker.
+assertTrue<Exact<JobTrigger, "cron" | "manual" | "harness" | "capture" | "unknown">>();
+// 1.4.0: the spec's option shapes for run() and history().
+assertTrue<Exact<NonNullable<Parameters<JobRegistry["run"]>[2]>["trigger"], JobTrigger | undefined>>();
+assertTrue<Exact<Parameters<JobRegistry["history"]>[1], { job?: JobName; since?: number; limit?: number } | undefined>>();
+
+// 1.4.0: deferral kinds and the timing object replace the untyped timings map.
+declare const result: RecallResult;
+assertTrue<Exact<(typeof result)["deferrals"], Deferral[]>>();
+assertTrue<Exact<(typeof result)["deferrals"][number]["kind"], "clipped" | "dropped">>();
+assertTrue<Exact<(typeof result)["deferrals"][number]["reason"], "global-cap" | "memories-cap">>();
+assertTrue<Exact<Deferral["block"], ContextBlock["name"]>>();
+assertTrue<Exact<Deferral["from"], number>>();
+assertTrue<Exact<Deferral["to"], number>>();
+assertTrue<Exact<keyof Deferral, "block" | "kind" | "from" | "to" | "reason">>();
+assertTrue<Exact<(typeof result)["timing"], RecallTiming>>();
+assertTrue<Exact<(typeof result)["timing"]["totalMs"], number>>();
+assertTrue<Exact<(typeof result)["timing"]["phases"], Record<string, unknown> | null>>();
+// timings (1.2.0) is gone.
+assertTrue<Exact<"timings" extends keyof RecallResult ? true : false, false>>();
+// Every block reports its length.
+assertTrue<Exact<ContextBlock["chars"], number>>();
+// The recall budget is optional and partial.
+assertTrue<Exact<RecallQuery["budget"], Partial<{ softMs: number; hardMs: number; capChars: number }> | undefined>>();
+
+// 1.4.0: CheckpointReason is the widened union.
+assertTrue<Exact<CheckpointReason, "compaction" | "session-end" | "shutdown" | "manual">>();
+
+// 1.4.0: close takes an optional budget; createEngine takes an optional test-only third argument.
+assertTrue<Exact<Parameters<Engine["close"]>, [opts?: { budgetMs?: number }]>>();
+assertTrue<Exact<Parameters<typeof createEngine>[2], { internals?: Record<string, unknown> } | undefined>>();
+assertTrue<Exact<ReturnType<typeof createEngine>, Engine>>();
+assertTrue<Exact<Engine["contract"], ContractVersion>>();
+assertTrue<Exact<ContractVersion, "1.16.0">>();
+
+// 1.5.0: typed MemoryOps surface (E1 Task 2).
+assertTrue<Exact<Engine["memory"], MemoryOps>>();
+assertTrue<Exact<MemoryOpErrorCode, "not-found" | "denied" | "invalid-input" | "approval-required" | "conflict" | "storage" | "unsupported" | "identity-already-bound" | "ledger-corrupt" | "lock-lost" | "lock-busy" | "EMBEDDER_UNAVAILABLE" | "EMBEDDING_IDENTITY_MISMATCH">>();
+// 1.6.0: MemoryOpError.detail — optional (a MemoryOpError without it is valid), string values only.
+assertTrue<Exact<MemoryOpError["detail"], Readonly<Record<string, string>> | undefined>>();
+assertTrue<{} extends Pick<MemoryOpError, "detail"> ? true : false>();
+assertTrue<Exact<MemoryOps["list"], (q: import("./engine.js").MemoryListQuery, p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryListResult>>>();
+assertTrue<Exact<MemoryOps["show"], (id: string, p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryCard>>>();
+assertTrue<Exact<MemoryOps["forget"], (id: string, p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryForgetResult>>>();
+assertTrue<Exact<MemoryOps["correct"], (id: string, newText: string, p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryCorrectResult>>>();
+assertTrue<Exact<MemoryOps["share"], (id: string, target: "workspace" | "user", p: Principal, a: AgentContext, opts?: { allowSensitive?: boolean }) => Promise<import("./engine.js").MemoryShareResult>>>();
+assertTrue<Exact<MemoryOps["state"], (p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryState>>>();
+// E1 Task 7 fix round 1 (E1-R11): tombstones is number | null — null means
+// the registry was unreadable, never laundered into "zero tombstones".
+assertTrue<Exact<import("./engine.js").MemoryState["tombstones"], number | null>>();
+// The channel registry and the three new engine events.
+assertTrue<Exact<ReturnType<Engine["channels"]["list"]>, string[]>>();
+assertTrue<Exact<Extract<EngineEventName, `recall.${string}`>, "recall.degraded" | "recall.block-clipped" | "recall.block-dropped" | "recall.completed">>();
+
+// 1.6.0: AdminOps.share/forget alias Engine.memory; ObsidianOps; migrate; MemoryOps.propose/proposals (E2 Task 1).
+assertTrue<Exact<Engine["admin"], AdminOps>>();
+assertTrue<Exact<AdminOps["share"], MemoryOps["share"]>>();
+assertTrue<Exact<AdminOps["forget"], MemoryOps["forget"]>>();
+assertTrue<Exact<AdminOps["obsidian"], ObsidianOps>>();
+assertTrue<Exact<ObsidianOps["detect"], (p: Principal, a: AgentContext, opts?: { candidates?: string[] }) => Promise<import("./engine.js").ObsidianDetectResult>>>();
+assertTrue<Exact<ObsidianOps["prepare"], (vaultPath: string, p: Principal, a: AgentContext) => Promise<import("./engine.js").ObsidianPrepareResult>>>();
+assertTrue<Exact<ObsidianOps["confirm"], (nonce: string, p: Principal, a: AgentContext) => Promise<import("./engine.js").ObsidianConfirmResult>>>();
+assertTrue<Exact<AdminOps["migrate"], (from: SchemaVersion, to: SchemaVersion) => Promise<import("./engine.js").MigrationResult>>>();
+assertTrue<Exact<MemoryOps["propose"], (sharedId: string, newText: string, p: Principal, a: AgentContext, opts?: { note?: string }) => Promise<import("./engine.js").MemoryProposeResult>>>();
+assertTrue<Exact<MemoryOps["proposals"]["list"], (q: import("./engine.js").MemoryProposalListQuery, p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryProposalListResult>>>();
+assertTrue<Exact<MemoryOps["proposals"]["accept"], (proposalId: string, p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryProposalAcceptResult>>>();
+assertTrue<Exact<MemoryOps["proposals"]["reject"], (proposalId: string, p: Principal, a: AgentContext, opts?: { note?: string }) => Promise<import("./engine.js").MemoryProposalRejectResult>>>();
+assertTrue<Exact<MemoryProposalStatus, "pending" | "accepted" | "rejected" | "stale">>();
+assertTrue<Exact<Extract<EngineEventName, `memory.${string}`>, "memory.proposal">>();
+assertTrue<Exact<EngineStatus["storeSchema"], { current: SchemaVersion | null; expected: SchemaVersion }>>();
+
+// 1.11.0: memory.import and stores.adopt.
+assertTrue<Exact<MemoryOps["import"], (req: import("./engine.js").MemoryImportRequest, p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryImportResult>>>();
+// 1.12.0: memory.rebind / unbind (additive).
+assertTrue<Exact<MemoryOps["rebind"], (req: import("./engine.js").MemoryRebindRequest, p: Principal, a: AgentContext) => Promise<MemoryRebindResult>>>();
+assertTrue<Exact<MemoryOps["unbind"], (req: import("./engine.js").MemoryUnbindRequest, p: Principal, a: AgentContext) => Promise<MemoryUnbindResult>>>();
+assertTrue<Exact<keyof MemoryRebindResult, "rebindId" | "matched" | "rebound" | "skipped" | "dryRun">>();
+assertTrue<Exact<keyof MemoryUnbindResult, "rebindId" | "matched" | "unbound" | "skipped" | "skippedModified" | "dryRun">>();
+// 1.13.0: memory.unimport (additive) and MemoryImportRequest.importRunId.
+assertTrue<Exact<MemoryOps["unimport"], (req: import("./engine.js").MemoryUnimportRequest, p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryUnimportResult>>>();
+assertTrue<Exact<import("./engine.js").MemoryUnimportOutcome, "unimported" | "kept-modified" | "already-forgotten" | "already-unimported" | "missing" | "failed">>();
+assertTrue<Exact<import("./engine.js").MemoryUnimportKeptReason, "superseded" | "content-changed" | "binding-changed" | "metadata-changed" | "edited" | "shared" | "rebound" | "other-run">>();
+assertTrue<Exact<keyof import("./engine.js").MemoryUnimportResult, "agentId" | "importRunId" | "dryRun" | "selected" | "unimported" | "keptModified" | "alreadyForgotten" | "alreadyUnimported" | "missing" | "failed" | "remaining" | "cards" | "derived" | "links">>();
+// 1.16.0: memory.link, MemoryCard.links, unimport links, Engine.capabilities (additive).
+assertTrue<Exact<MemoryOps["link"], (id: string, req: import("./engine.js").MemoryLinkRequest, p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryLinkResult>>>();
+assertTrue<Exact<import("./engine.js").MemoryLinkOutcome, "linked" | "already-linked" | "already-source">>();
+assertTrue<Exact<keyof import("./engine.js").MemoryLinkResult, "id" | "linkId" | "outcome" | "importRunId" | "dryRun">>();
+assertTrue<Exact<keyof import("./engine.js").MemoryLink, "linkId" | "sourceRef" | "provenance" | "importRunId" | "linkedAt">>();
+assertTrue<Exact<import("./engine.js").MemoryCard["links"], import("./engine.js").MemoryLink[] | undefined>>();
+assertTrue<Exact<import("./engine.js").MemoryUnimportResult["links"], import("./engine.js").MemoryUnimportLinksResult | undefined>>();
+assertTrue<Exact<import("./engine.js").MemoryUnimportLinkOutcome, "unlinked" | "already-unlinked">>();
+assertTrue<Exact<Engine["capabilities"], import("./engine.js").EngineCapabilities>>();
+assertTrue<Exact<import("./engine.js").EngineCapabilities["memoryLink"], boolean>>();
+assertTrue<Exact<import("./engine.js").MemoryImportRequest["importRunId"], string | undefined>>();
+assertTrue<Exact<MemoryImportOutcome, "created" | "matched-existing" | "rejected">>();
+assertTrue<Exact<MemoryImportRejectReason, "invalid-input" | "tombstone-blocked" | "principal-unresolved" | "empty-text" | "provenance-not-imported" | "previously-imported-deleted" | "aborted" | "storage">>();
+assertTrue<Exact<Engine["stores"], StoreOps>>();
+assertTrue<Exact<StoreOps["adopt"], (req: import("./engine.js").StoreAdoptRequest) => Promise<import("./engine.js").StoreAdoptResult>>>();
+assertTrue<Exact<StoreAdoptIdentitySource, "manifest" | "probe">>();
+assertTrue<Exact<StoreAdoptIncompatibleReason, "path-unreadable" | "not-a-store" | "schema-unreadable" | "schema-mismatch" | "identity-unreadable" | "identity-mismatch" | "identity-unverifiable" | "dimension-mismatch" | "target-running">>();
+assertTrue<Exact<import("./engine.js").MemoryCard["provenance"], "imported" | undefined>>();
+
+// 1.7.0: EmbeddingService probe/serve; HostCapabilities.pushCriticalButtons (E3 Task 1).
+assertTrue<Exact<Engine["embedding"]["probe"], (opts?: { signal?: AbortSignal; refresh?: boolean }) => Promise<import("./engine.js").EmbeddingProbeResult>>>();
+assertTrue<Exact<Engine["embedding"]["serve"], (address?: IpcAddress | null) => Promise<EmbeddingServeResult>>>();
+assertTrue<Exact<EmbeddingProbeError, "aborted" | "provider-failed" | "invalid-vector" | "dimension-mismatch">>();
+assertTrue<Exact<EmbeddingServeResult["address"], IpcAddress | null>>();
+assertTrue<EmbeddingServeResult extends Disposable ? true : false>();
+assertTrue<Exact<HostCapabilities["pushCriticalButtons"], ((args: CriticalButtonPushArgs) => Promise<CriticalButtonPushResult | null>) | undefined>>();
+assertTrue<Exact<CriticalButtonPushArgs["warning"], string>>();
+
+// 1.8.0: status health, models, journal, shared memory, unsupported (E4 Task 1).
+assertTrue<Exact<Engine["models"]["warm"], (opts?: { signal?: AbortSignal; refresh?: boolean }) => Promise<ModelsStatus>>>();
+assertTrue<Exact<ModelState, "loading" | "ready" | "failed" | "disabled">>();
+assertTrue<Exact<EngineStatus["journal"], import("./engine.js").JournalBacklog | null>>();
+assertTrue<Exact<EngineStatus["sharedMemory"]["mode"], "fd-capability" | "verified-path" | "unavailable">>();
+assertTrue<"unsupported" extends MemoryOpErrorCode ? true : false>();
+assertTrue<"ledger-corrupt" extends MemoryOpErrorCode ? true : false>();
+assertTrue<"lock-lost" extends MemoryOpErrorCode ? true : false>();
+assertTrue<"lock-busy" extends MemoryOpErrorCode ? true : false>();
+assertTrue<Exact<AgentJobHealth["lastRuns"], Partial<Record<JobName, JobLastRun>>>>();
+
+// 1.9.0: engine config schema, warm-only recall (E5 Task 1).
+assertTrue<Exact<EngineConfigReadAt, "construction" | "live">>();
+assertTrue<Exact<EngineConfigKey["tier"], "basic" | "advanced">>();
+assertTrue<Exact<EngineConfigSchema["x-contract"], ContractVersion>>();
+assertTrue<Exact<RecallQuery["warmOnly"], boolean | undefined>>();
+const warmQuery: RecallQuery = { ...query, warmOnly: true };
+void warmQuery;
+
+// A minimal host satisfies HostServices: everything optional stays optional.
+const minimalHost: HostServices = {
+  logger: { info() {}, warn() {}, error() {}, debug() {} },
+  stateDir: "/tmp/plur1bus",
+  configPath: () => "/tmp/plur1bus/openclaw.json",
+  workspaceDir: async () => undefined,
+  config: (): EngineConfig => ({}),
+  platform: {
+    securePath: () => ({ applied: true, mechanism: "chmod" }),
+    ipcAddress: () => ({ kind: "unix-socket", address: "/tmp/plur1bus/owner.sock" }),
+    isUnsafeLink: () => false,
+    canonicalIdentityPath: (p: string) => p,
+  },
+  runtime: null,
+};
+void minimalHost;
+
+// 1.3.0: routing and path overrides are optional host capabilities.
+const hostWithRouting: HostServices = { ...minimalHost, routing: async () => ({}), pathOverrides: { openclawHome: () => undefined } };
+void hostWithRouting;
+
+// 1.4.0: capabilities is optional and open; its two named members are typed.
+const hostWithCapabilities: HostServices = { ...minimalHost, capabilities: { resolvePath: (p: string) => p, registrationMode: "full", skillWorkshop: null } };
+void hostWithCapabilities;
+assertTrue<Exact<NonNullable<HostServices["capabilities"]>["registrationMode"], string | undefined>>();
+assertTrue<Exact<HostCapabilities["resolvePath"], ((path: string) => string) | undefined>>();
+assertTrue<Exact<HostCapabilities["memoryArchiveDir"], (() => string) | undefined>>();
+const hostWithButtons: HostServices = { ...minimalHost, capabilities: { pushCriticalButtons: async () => null } };
+void hostWithButtons;
+const hostWithJournal: HostServices = { ...minimalHost, capabilities: { journalBacklog: () => ({ entries: 0, oldestAt: null }) } };
+void hostWithJournal;
+
+// Per-call options are additive, optional and keep capture's non-blocking handle.
+assertTrue<Exact<Parameters<Engine["recall"]>[1], RecallOptions | undefined>>();
+assertTrue<Exact<Parameters<Engine["capture"]>[1], CaptureOptions | undefined>>();
+assertTrue<Exact<RecallOptions["reranker"], "on" | "off" | undefined>>();
+assertTrue<Exact<CaptureOptions["deferPostTurnLlm"], boolean | undefined>>();
+
+// 1.15.0: optional network ports. fetch is WHATWG-compatible; the secret store resolves (ref, purpose).
+assertTrue<Exact<HostServices["fetch"], HostFetch | undefined>>();
+assertTrue<Exact<HostServices["secrets"], SecretStore | undefined>>();
+assertTrue<Exact<Parameters<SecretStore["resolve"]>, [ref: string, purpose: SecretPurpose]>>();
+assertTrue<Exact<ReturnType<SecretStore["resolve"]>, Promise<string>>>();
+const hostWithPorts: HostServices = { ...minimalHost, fetch: (input, init) => fetch(input, init), secrets: { resolve: async () => "k" } };
+void hostWithPorts;
+assertTrue<Exact<ProviderCredentialConfig["apiKeyRef"], string | undefined>>();
+assertTrue<Exact<RemoteRerankerConfig["provider"], "cohere" | "jina" | "voyage" | "remote">>();
+assertTrue<Exact<RerankProtocol, "cohere" | "jina" | "voyage" | "tei">>();

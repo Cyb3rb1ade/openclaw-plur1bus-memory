@@ -18,6 +18,8 @@ liegen entsprechend unter `plugins.entries.memory-lancedb-namespaced.config.runt
 | `canonicalFirst` | `boolean` | `true` | Kanonische Repräsentanten vor nicht-kanonischen bevorzugen |
 | `canonicalMinScore` | `number` | `0.30` | Mindest-Score für ein Memory, um als kanonisch gelten zu können |
 | `canonicalMaxItems` | `number` | `5` | Maximal `N` kanonische Items pro Cluster im finalen Prompt |
+| `fullTextTopRecords` | `integer` | `3` | Anzahl der bestplatzierten Treffer, die mit gespeichertem Volltext statt Kurzfassung in den Prompt kommen. `0` stellt nur Zusammenfassungen wieder her. |
+| `fullTextMaxChars` | `integer` | `2000` | Zeichenlimit je Volltext-Treffer. Längere Einträge werden gekürzt und mit `truncated="true"` markiert. |
 
 ### Prompt-Injektions-Budgets
 
@@ -32,7 +34,7 @@ Der äußere `memories`-Block, den `applyGlobalInjectBudget` tatsächlich sieht,
 ist größer — er hängt an diese bereits gedeckelte Ausgabe zusätzlich die
 Persona-/Mood-/Reaction-/Dream-Echo-/Open-Threads-/Widerspruchs- und
 Reaktivierungs-Direktiven sowie die Knowledge-Update-, Konflikt- und
-Skill-Proposal-Nudges an (im Recall-Hook in `index.js`)
+Skill-Proposal-Nudges an (`engine/recall/assemble-prompt-context.js:1085,1190`)
 — Text, den `memoriesMaxChars` nicht kennt und nicht begrenzt. Ob
 `globalInjectMaxChars` überhaupt bindet, hängt also von der Summe aus dem
 `memoriesMaxChars`-gedeckelten Anteil, diesen zusätzlichen Direktiven/Nudges
@@ -65,6 +67,167 @@ Passt selbst bei den `<memory-record>`-Blöcken kein einziger Record mehr in
 das verbleibende Budget, wird auch dort der ganze Block verworfen.
 Nicht-droppable Blöcke (Zeit, temporale Kontinuität, Reminder) werden von
 `globalInjectMaxChars` nie angetastet.
+
+### Zustandsangaben datieren (7.20.10)
+
+| Key | Typ | Default | Beschreibung |
+|-----|-----|---------|--------------|
+| `volatileStateAnnotation.enabled` | `boolean` | `true` | Setzt beim Rendern `[Stand TT.MM.JJJJ]` hinter Zustandsmarker (aktuell, derzeit, läuft, live, latest, currently …), denen innerhalb von 30 Zeichen eine Versionsnummer oder ein Modellname folgt. Anker ist `createdAt` (Systemzeit der Erfassung), nie `updatedAt`; `validFrom`/`validUntil` bleiben unberührt. Der gespeicherte Text ändert sich nicht. |
+| `volatileStateAnnotation.minAgeDays` | `number` | `2` | Jüngere Records bleiben ohne Label. |
+| `volatileStateAnnotation.maxPerRecord` | `integer` | `2` | Höchstens so viele Labels je Record. |
+
+Ausgenommen sind Zitate, Inline-Code, Stellen mit einem Datum im Umkreis von
+60 Zeichen und Tags wie `n8n:latest`. Ein annotierter Record trägt
+`state-as-of="JJJJ-MM-TT"`, der Block dann eine Zeile `STATE AS OF: …`.
+7.20.10 wendet das im Neo-Block (`<plur1bus-recall>`) und im LanceDB-Block
+(`<relevant-memories>`, auch Semantic-Lens-Zeilen) an. Dort ist der Anker
+`versionCreatedAt` einer Version, sonst `createdAt`; Träume und kanonische
+Abschnitte (KNOWLEDGE.md) bleiben wörtlich. `memory_recall`/`memory_search`
+geben den gespeicherten Text unverändert aus.
+
+### Auto-Recall-Regeln (7.20.10)
+
+Nur der automatische Recall vor jedem Turn; `memory_recall`, `memory_search`,
+der Host-Recall und der Messstand sehen dieselbe Auswahl und Reihenfolge wie
+bisher. Gespeichert, archiviert oder gelöscht wird nichts.
+
+- **Echo der Anfrage:** Erinnerungen, die die aktuelle Nachricht nur
+  wiederholen (gleicher Text, Enthaltensein mit Mindestanteil, Wort-Jaccard
+  ≥ 0,9), fallen weg; ein anderer Treffer rückt nach.
+- **Laufendes Gespräch:** Neue Erinnerungen tragen die Spalte `sessionKey`
+  (Sitzung des Captures). Treffer derselben Sitzung, die nach der letzten
+  Kompaktierung entstanden sind, stehen noch im Kontext und fallen weg. Ohne
+  Kompaktierung gelten die letzten 6 Stunden, nie früher als die älteste
+  Nachricht im Kontext (nach `/new` bleibt der Schlüssel, der Kontext ist
+  leer). Ältere Zeilen ohne `sessionKey` sind nicht betroffen. Für den
+  Neo-Block gilt dieselbe Regel: neue Turns und Kandidaten tragen den
+  Schlüssel in `origin.sessionKey` (`origin.sessionId` ist die Lauf-ID und
+  wechselt je Lauf).
+- **Qualitätsgewicht:** Endscore = Score nach dem Rerank × Gewicht, danach
+  neu sortiert. CRR und Semantic Lens holen die ausgelassenen Echos nicht
+  zurück. Die Decision-Trace zeigt die Stufen `query-echo`, `session-echo`
+  und `quality-weight`.
+
+| Key | Typ | Default | Beschreibung |
+|-----|-----|---------|--------------|
+| `qualityWeighting.enabled` | `boolean` | `true` | Gewicht anwenden. `false` lässt nur die beiden Echo-Regeln aktiv. |
+| `qualityWeighting.floor` | `number` (0–1) | `0.35` | Untergrenze des Gewichts. |
+| `qualityWeighting.staleAssistant` | `boolean` | `true` | 7.21.1: alte Assistenten-Antworten und Floskeln zusätzlich abwerten (siehe unten). |
+| `mergeTurnParts` | `boolean` | `true` | 7.21.1: Einträge desselben Zugs und Sprechers zu einem zusammenlegen; Neo-Einträge, deren Wörter schon in einer gerenderten Erinnerung stehen, fallen aus dem Neo-Block. |
+| `keywordFallback.enabled` | `boolean` | `true` | 7.21.1: Schlüsselwort-/Jüngste-Einträge-Suche, wenn der Anfragevektor nicht rechtzeitig kommt (siehe „Recall-Budget und Rückfall“). |
+
+Regeln (Faktoren werden multipliziert): reine Host-Hülle ohne Nutzlast
+(„Continue the OpenClaw runtime event.“, „Exec failed (…)“, eingefangener
+Recall-Block) 0,4; Host-Meldung mit Nutzlast („Exec completed (…) :: …“,
+Cron-Zustellung, `[Subagent Task]`) 0,6; inhaltsleere Selbstvorstellung eines
+Agenten („Ich bin ein …-Agent. Meine Aufgabe ist …“, bis 500 Zeichen, nie bei
+Nutzertext) 0,4;
+nur Platzhalterzeilen 0,35, Thinking-Präfix 0,7; Füllwortanteil (ähm, äh, hmm …
+ganz; also, halt, quasi … halb) ab 15 % 0,75, ab 8 % 0,9; unter 30 bzw. 60
+Zeichen ohne Zahl, URL oder Bezeichner 0,8 bzw. 0,9 (gewöhnliche Namen zählen
+nicht als Anker);
+Assistenten-Behauptung (`sourceMessageRole` assistant) 0,9. Herkunft allein
+(Subagent, Cron) wertet nicht ab. Der Talk-Mode-Präfix des Hosts („Talk Mode
+active. Reply in a concise, spoken tone.“) zählt nicht mit; die Äußerung
+dahinter wird wie Nutzertext gewogen und auch bei der Echo-Prüfung, beim
+Einbetten (Erinnerung und Anfrage) und im Wort-Score von Neo ohne Präfix
+verglichen.
+
+Seit 7.21.1 (`qualityWeighting.staleAssistant`, Standard an): Assistenten-
+Antworten ohne Inhaltsanker oder unter 200 Zeichen sinken mit dem Alter
+(ab 14 Tagen × 0,8, ab 60 × 0,65, ab 180 × 0,55). Antworten mit Zahl, URL,
+Bezeichner oder Zitat und mindestens 200 Zeichen gelten als informativ und
+sinken erst nach 60 Tagen, dann × 0,85. Floskeln ohne Inhalt („Danke fürs
+Teilen!“, „Gute Nachrichten: …“, „Game-Changer“, bis 400 Zeichen) × 0,6.
+Nutzeraussagen altern nie. Mit `mergeTurnParts` werden Einträge mit gleicher
+`sourceTurnId` und gleicher Sprecherrolle für den Prompt zu einem Eintrag
+zusammengelegt (Teile, die ein anderer Teil enthält, entfallen); Teilstücke
+einer Chunk-Gruppe und Träume nicht. Gespeichert wird nichts davon.
+
+### Herkunft und Vertraulichkeit (7.21.2)
+
+`recall.contextWeighting` gilt für den Auto-Recall, CRR, Semantic Lens, den
+Neo-Block und `memory_recall`/`memory_search` in einem erkennbaren Chat (nicht
+für CLI und Webchat). Derselbe Chat ist die ganze Gruppe bzw. der ganze DM.
+
+| Key | Typ | Default | Beschreibung |
+|-----|-----|---------|--------------|
+| `contextWeighting.enabled` | `boolean` | `true` | Gewichtung und Vertraulichkeitsfilter. |
+| `contextWeighting.weights.sameChat` | `number` (0–1) | `1` | Derselbe Chat. |
+| `contextWeighting.weights.groupInDirect` | `number` | `0.85` | Gruppenwissen im DM. |
+| `contextWeighting.weights.otherGroup` | `number` | `0.5` | Erinnerung aus einer anderen Gruppe. |
+| `contextWeighting.weights.unknown` | `number` | `0.5` | Herkunft unbekannt. |
+| `contextWeighting.weights.foreignDirect` | `number` | `0.35` | DM-Erinnerung in einer Gruppe oder einem anderen DM. |
+| `contextWeighting.maxForeignPerBlock` | `integer` (0–100) | `5` | Höchstens so viele fremde Erinnerungen je Block. |
+| `contextWeighting.owners` | `{agentId: string[]}` | – | Besitzer je Agent (`telegram:<id>`); ohne Eintrag die Allowlist des Kanal-Kontos, wenn sie genau eine Person nennt. Im DM mit dem Besitzer (bewiesener Absender) zählt Altbestand ohne `sessionKey` als derselbe Chat. |
+| `contextWeighting.classifier.enabled` | `boolean` | `true` | Hintergrund-Einstufung eingereihter fremder Erinnerungen per LLM (Route von `criticalPush`, sonst `merging`). |
+| `contextWeighting.classifier.intervalMs` | `number` | `120000` | Abstand der Läufe (mindestens 30 s). |
+| `contextWeighting.classifier.batchSize` | `integer` (1–50) | `20` | Erinnerungen je LLM-Aufruf. |
+
+Vertraulich (`confidential`) sind Gesundheit, Finanzen, Beziehung/Intimes,
+Familienkonflikte, Adressen/Zugangsdaten und Rechtliches; `personal` ist harmlos
+Persönliches, alles andere `banal`. Fremde vertrauliche oder nicht eingestufte
+Erinnerungen erscheinen nie; in Gruppen braucht eine fremde Erinnerung ein
+LLM-Urteil, sonst wird sie beim ersten Auftreten zurückgehalten und eingereiht.
+Die Urteile liegen in `{baseDbPath}/_sensitivity/verdicts.jsonl` (ohne Text).
+
+### Recall-Budget und Rückfall (7.21.1)
+
+Der Auto-Recall hat ein festes Budget (`runtime.recallTimeoutMs`). Damit es
+nicht vom Neo-Vorlauf aufgebraucht wird:
+
+- Der Neo-Vorlauf darf ab Beginn des Recalls höchstens
+  `min(neo.recall.global.embedTimeoutMs, recallTimeoutMs / 4)` brauchen (bei
+  12 000 ms also 3 000 ms). Danach überspringt er globale Suche und Lanes; die
+  Logzeile `recall prelude` zeigt `budget=…ms(exceeded)`.
+- Der Store-Recall wartet auf den Anfragevektor höchstens bis ein Viertel des
+  Budgets übrig ist (mindestens 1,5 s bzw. das halbe Budget, höchstens 3 s
+  Reserve); hat der Vorlauf das Embedding
+  schon als langsam gesehen, nur noch ein Achtel des Budgets (200 ms–1,5 s).
+- Kommt der Vektor nicht oder scheitert das Embedding, sucht der Recall nach
+  Wörtern der Nachricht (bis zu sechs, ohne Füllwörter) und nach den
+  Einträgen der letzten 7 Tage, mit denselben Toren wie der Vektorweg
+  (Lebenszyklus, ACL, Echo, Qualitätsgewicht). Der Block trägt
+  `retrieval="keyword-recent-fallback"` und einen Hinweis an das Modell; das
+  Ergebnis meldet `degraded.reason = "embedding-unavailable"`.
+  `recall.keywordFallback.enabled: false` stellt den alten Weg wieder her.
+- Ein Stall des Main-Threads (Logzeile `main-thread stall`) unterbricht auch
+  Timer; ist er länger als das Budget, bleibt der Recall leer.
+
+`runtime.recallPrewarm` (Standard an): 20 s nach `gateway_start` läuft je
+Chat-Agent ein lesender Warm-Recall (Embedding-Verbindung, Neo-Vektor-Cache,
+LanceDB-Handles), ohne Reranker und ohne Schreiben.
+
+| Key | Typ | Default | Beschreibung |
+|-----|-----|---------|--------------|
+| `runtime.recallPrewarm.enabled` | `boolean` | `true` | Warm-Recall nach dem Start. |
+| `runtime.recallPrewarm.delayMs` | `number` (0–600 000) | `20000` | Wartezeit nach `gateway_start`. |
+| `runtime.recallPrewarm.agents` | `string[]` (≤ 8) | Schlüssel von `chatModels`, sonst die Agenten aus `obsidianBridge.workspaces` | Welche Agenten. |
+| `conversationReactivationRecall.timeoutMs` | `number` | `250` | Seit 7.21.1 250 statt 50 ms (begrenzt auf 10–2000 ms). |
+
+### Neo im Auto-Recall (7.20.10)
+
+Unter `config.neo.recall` (neben `global`). Gilt nur für den Auto-Recall-Hook;
+`memory_search` routet wie bisher über alle Lanes und liest weiter Behavior Cards.
+
+| Key | Typ | Default | Beschreibung |
+|-----|-----|---------|--------------|
+| `maxReflections` | `integer` | `4` | Assistant-Einträge (`assistant_claim/plan/suggestion`) landen nur noch in `agent_private_reflections`, höchstens so viele. `0` schaltet sie ab. |
+| `laneMinRelevance` | `number` oder `object` | aus | Mindestwert für den Textbezug `max(Kosinus, Wort-Jaccard)`. Eine Zahl gilt für alle Lanes, ein Objekt je Lane (`default` für die übrigen), z. B. `{ "default": 0.45, "agent_private_reflections": 0.55 }`. Ohne Anfragevektor (Embedding-Timeout) zählt nur der Jaccard. |
+
+Seit 7.20.10 im Auto-Recall: Lanes nur bei passender Kategorie (kein Überlauf
+in fremde Lanes), ohne `recent_turns` und `behavior_cards`, kein Selbst-Echo
+der aktuellen Anfrage, keine Einträge des laufenden Gesprächs, die noch im
+Kontext stehen, keine Platzhalterzeilen (`[visible thinking]` …), gleicher
+Text nur einmal, fast gleicher Text (Wort-Jaccard ≥ 0,7, auch mit anderen
+Zahlen oder Daten) ebenfalls nur einmal: die Gruppe bekommt den Platz zum
+Score ihres besten Eintrags, gezeigt wird der neueste (`createdAt`). Damit
+belegt eine Statuszeile in mehreren Fassungen nur einen Platz mit dem jüngsten
+Stand; der Preis: zwei Texte mit über 70 % gleichen Wörtern über verschiedene
+Dinge (z. B. zwei Termine, die sich nur im Datum unterscheiden) teilen sich im
+Auto-Recall einen Platz, `memory_search` findet beide. Danach wird nach der Dedupe gegen den LanceDB-Block neu geroutet,
+Einträge auf 300 Zeichen gekürzt, über alle Lanes nach Score sortiert, mit
+`created-at`/`age` aus `createdAt`.
 
 ---
 
@@ -198,6 +361,28 @@ setzt ihn als `model`/`local.model` und BGE als kontrollierten Fallback:
 }
 ```
 
+### Cohere-Reranker: Modell und Kostenbremse (7.20.10)
+
+`reranker.model` wählt das Cohere-Modell; seit 7.21.1 ist der Default
+`rerank-v5.0-fast` (vorher `rerank-v3.5`). Wer v3.5 behalten will, setzt
+`reranker.model: "rerank-v3.5"`. Rerank 4 und 5 (`rerank-v5.0-fast`,
+`rerank-v5.0-pro`, 32k Kontext) laufen über
+denselben v2-Aufruf (`model`, `query`, `documents`, `top_n`). `return_documents`
+schickt PLUR1BUS seit 7.20.10 nicht mehr; es gehört nicht zur v2-Schnittstelle.
+
+| Key | Typ | Default | Beschreibung |
+|-----|-----|---------|--------------|
+| `maxDocChars` | `integer` | `1400` | Jedes Dokument wird vor dem Senden auf so viele Zeichen gekürzt, abzüglich dessen, was die Anfrage über 400 Zeichen hinaus belegt, nie unter 300. `0` schaltet die Kürzung ab, Werte von 1 bis 99 zählen als 100. |
+
+Abrechnung: `rerank-v3.5` zählt Suchen (bis zu 100 Dokumente je Suche; ein
+Dokument, das mit der Anfrage über 500 Tokens kommt, wird geteilt und zählt
+mehrfach). Rerank 5 (`rerank-v5.0-fast`, Standard seit 7.21.1) rechnet nach
+Eingabe-Tokens ab (`meta.billed_units.input_tokens`); hier begrenzt
+`maxDocChars` die Kosten direkt. Gekürzt
+wird nur der Text an Cohere; Recall-Ausgabe und lokaler Rückfall-Reranker
+sehen den vollen Text. Die Anfrage selbst wird nicht gekürzt: Ist sie allein
+länger als etwa 1800 Zeichen, liegt jedes Paar trotzdem über 500 Tokens.
+
 Als optionales Jina-v3-Embedding wird nur das folgende gepinnte Profil
 akzeptiert. `dimensions` darf ausschliesslich 32, 64, 128, 256, 512, 768 oder
 1024 sein. Query und Passage werden intern ueber die veroeffentlichten
@@ -263,6 +448,62 @@ bewusst an und rechnet mit dem entsprechenden Arbeitsspeicher.
 }
 ```
 
+Provider-Wizard und Installer empfehlen es als erste Option (einheitlicher lokaler
+Standard); Jina v5 Nano (CC BY-NC 4.0) und E5 bleiben waehlbar.
+
+Seit der naechsten Version ist `google/embeddinggemma-2` (Apache-2.0, 768
+Dimensionen, 8K Kontext, Mean-Pooling) als lokales Embedding gepinnt, ohne
+Lizenzbestaetigung. Es ist der Standard fuer **neu angelegte** Stores, die
+keinen Provider waehlen (kein `embedding.provider`, noch keine Speicherdaten);
+ein Store mit Daten und jede ausdrueckliche Provider-Wahl bleiben unveraendert,
+auch ein bloßes `"provider": "local-transformers"` nimmt weiter E5. Ein Wechsel
+eines bestehenden Stores laeuft nur ueber die Re-Embedding-Migration
+(plan/apply/resume/rollback). `dimensions` darf 768, 512, 256 oder 128 sein
+(Matryoshka: gekuerzt und neu normalisiert). Anfrage und Dokument werden ueber
+die Prompts `task: search result | query: ` und `title: none | text: `
+unterschieden; der Provider verweigert abweichende Prompts. `dtype` waehlt die
+gepinnte Praezision (`q8` Standard, `q4`, `fp32`; je eigene Artefakte mit
+SHA-256, ein anderer dtype ist ein anderer Vektorraum), `maxTokens` (32 bis 8192,
+Standard 512) kappt jeden Text, `maxBatchSize` (1 bis 64, Standard 16) teilt
+grosse Batches.
+
+```json
+{
+  "embedding": {
+    "provider": "local-transformers",
+    "dimensions": 768,
+    "local": {
+      "model": "google/embeddinggemma-2",
+      "revision": "daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+      "dimensions": 768,
+      "dtype": "q8",
+      "maxTokens": 512,
+      "cacheDir": "${OPENCLAW_HOME}/models/plur1bus"
+    }
+  },
+  "modelPreparation": { "profile": "embeddinggemma-2-768" }
+}
+```
+
+### OpenClaw Embedding-Adapter
+
+Das Plugin registriert über `registerEmbeddingProvider` und `contracts.embeddingProviders` vier
+Embedding-Adapter für OpenClaw:
+- `plur1bus-embeddinggemma-2`: Lokales EmbeddingGemma 2 (`google/embeddinggemma-2`, Apache-2.0, keine
+  Lizenzbestätigung). Standard-Präzision `q8` (alternativ `q4`, `fp32` über `local.dtype` wählbar),
+  Standard-Dimension 768d mit Matryoshka-Optionen 128, 256, 512, 768. Empfohlener lokaler Eintrag.
+- `plur1bus-openai`: Remote-Adapter für `text-embedding-3-large` (oder konfiguriertes Modell).
+- `plur1bus-openai-compatible`: Generischer OpenAI-kompatibler Remote-Adapter.
+- `plur1bus-e5-small`: Lokales E5-Small (`intfloat/multilingual-e5-small`, 384d).
+
+Bestehende Stores behalten ihren Adapter unverändert; ein Wechsel auf den neuen Adapter
+läuft über den bestehenden Re-Embedding-Pfad (Fingerprint) mit Hinweis auf Dauer und Speicherbedarf.
+
+Der opt-in Test mit dem echten Modell: `PLUR1BUS_REAL_EGEMMA2=1 node --test
+tests/embeddinggemma2-real-model.test.js` (laedt rund 346 MB, optional
+`PLUR1BUS_REAL_MODEL_CACHE=<dir>`). Alternativ über den Adapter:
+`PLUR1BUS_REAL_EGEMMA2=1 node --test tests/openclaw-memory-embedding-adapters.test.js`.
+
 Die Bestaetigung ist kein reiner UI-Hinweis: Ohne sie verweigern sowohl der
 aktive Provider als auch Re-Embedding-Probes und der zentrale Artefakt-
 Downloader Jina vor Netzwerk- oder Modellzugriff. Vorbereitung, Zielprobe und
@@ -283,6 +524,98 @@ einen OpenAI-kompatiblen Embedding-Provider. Der SDK-Standard von zehn Minuten
 ließ eine hängende Anfrage einen Recall bis zum Worker-Timeout blockieren. Der
 Provider wiederholt fehlgeschlagene Batches selbst; das SDK wiederholt nicht.
 
+### Bereinigte Einbettung (7.20.10)
+
+Roh speichern, bereinigt einbetten: Neue Erinnerungen (Capture nach dem Turn,
+`memory_store`, Store-Merges) behalten ihren Text wörtlich, der Vektor entsteht
+aus einer bereinigten Kopie. Die Spalte `embeddingTextMode` hält fest, woraus
+der Vektor stammt: `raw` (gespeicherter Text, Bestand), `clean-v1` oder
+`clean-v1-nospeaker`.
+
+| Key | Typ | Default | Beschreibung |
+|-----|-----|---------|--------------|
+| `embedding.cleanText.enabled` | `boolean` | `true` | Bereinigt einbetten. `false` bettet wie bisher den gespeicherten Text ein (`raw`). |
+| `embedding.cleanText.stripSpeaker` | `boolean` | `false` | Auch das Rollenpräfix (`User:`/`Assistant:`) und den Sprecher direkt hinter einem Transkript-Umschlag (`Christian:`) weglassen (`clean-v1-nospeaker`). Bleibt aus, bis gemessen ist. |
+
+Regelsatz `clean-v1` (lib/embedding-text.js, eingefroren; eine Änderung wird
+`clean-v2`): führender Zeitstempel (`[2026-11-24 09:43]`,
+`[Tue 2026-11-24 09:43 GMT+1]`), Metadatenblöcke des Hosts
+(`Conversation info (untrusted metadata):` mit JSON), Umschlag der
+Sprachnachrichten (`[Audio transcript (…)]: "…"`) und Medien-Köpfe
+(`[Audio]`, `User text:`, `Transcript:`), Medien- und Anhang-Stummel als ganze
+Zeile (`[User schickte audio …]`), Kanal-Köpfe alter Eingangsumschläge
+(`[Telegram … id:…]`, nur mit `id:` und nicht als Linktext),
+Platzhalterzeilen (`[visible thinking]`, `[visible toolCall: …]`) und
+`<think>`-Blöcke, der Talk-Mode-Präfix des Hosts („Talk Mode active. Reply in a
+concise, spoken tone.“ samt ElevenLabs- und Unterbrechungszeile; ein
+Rollenpräfix davor bleibt), Bühnenanweisungen aus einer festen Wortliste (in eckigen
+Klammern wie `[räuspert sich]`, in runden wie `(lacht)` oder `(Pause)` nur in
+einem Transkript; nie als Linktext oder direkt hinter einem Bezeichner) und
+Füllwörter (ähm, äh, hm, mhm …) nur als eigenes Wort zwischen Leerraum und
+Satzzeichen (nicht in URLs, Pfaden, Bezeichnern, nicht als Einheit hinter
+einer Zahl, nicht großgeschrieben mitten im Satz). Klammern mit anderem
+Inhalt bleiben stehen. Bleibt nur Hülle übrig, wird der Rohtext eingebettet (`raw`).
+
+Die Anfrage des Auto-Recalls verliert nur die Hüllen (Zeitstempel, Metadaten,
+Transkript-Umschlag, Talk-Mode-Präfix, Stummel), nicht Füllwörter oder Bühnenanweisungen: Sie
+ist kurz und live, und derselbe Anfragevektor sucht auch im Neo-Index, dessen
+Vektoren roh bleiben. Rerank, Echo-Prüfung und alle anderen Stufen lesen
+weiter die unveränderte Anfrage; `memory_recall`/`memory_search` und der
+Messstand betten die Anfrage wie bisher ein.
+
+Bis der Bestand migriert ist, vergleicht die Duplikatprüfung beim Capture
+bereinigte neue Vektoren mit rohen alten; einzelne Beinahe-Dubletten können
+in dieser Zeit durchrutschen.
+
+**Bestand migrieren** (`scripts/reembed-clean.mjs`, je Agent):
+
+```bash
+node scripts/reembed-clean.mjs --agent main --dry-run          # Anzahl, Regeln, Tokens, Kosten, maskierte Beispiele
+./scripts/backup-snapshot.sh                                    # bei gestopptem Gateway
+node scripts/reembed-clean.mjs --agent main --apply --snapshot ~/.openclaw/.snapshots/plur1bus-YYYYMMDD-HHMMSS
+```
+
+Das Skript wählt Zeilen mit `embeddingTextMode = 'raw'` (Standard nur
+`status = 'active'`, `--status all` für alle). Ändert die Bereinigung den Text
+nicht, stellt es nur den Modus um (kein API-Aufruf); sonst bettet es über den
+Embedding-Provider des Plugins neu ein (`--batch-size`, `--min-interval-ms`,
+`--max-rows`). Geschrieben werden nur `vector` und `embeddingTextMode`; je
+Block prüft es, dass alle anderen Spalten gleich geblieben sind, vor jedem
+Schreiben den Median des Kosinus alt/neu über alle Blöcke des Laufs (unter
+`--min-cosine`, Standard 0,2, bricht es ab, bevor der Block geschrieben wird:
+Vektoren aus einem fremden Raum bei gleicher Dimension, etwa ein falsches
+Modell oder ein `OPENAI_BASE_URL` in der Shell; `0` schaltet ab), am Ende
+Zeilenzahl und fehlende Vektoren, danach `table.optimize()` (`--no-optimize`
+schaltet ab; bei `--max-rows` erst nach dem letzten Teil). Im Produktivpfad verlangt
+`--apply` einen gestoppten Gateway, ein ausgeliefertes Plugin ≥ 7.20.10 und
+einen Snapshot unter `~/.openclaw/.snapshots` mit denselben LanceDB-Versionen
+wie live. Jeder Lauf schreibt `started`/`committed`/`failed` per
+`appendDestructiveOpLog` in den Workspace des Agenten; Checkpoint und Bericht
+liegen unter `memory/reembed-clean/`. Der Checkpoint entsteht vor dem ersten
+Schreibzugriff und hält nach jedem eigenen Schreibzugriff den Versionsstand der
+Tabelle fest. Der Stand wird fortgeschrieben, nicht von der Platte übernommen:
+vor jedem eigenen Schreibzugriff darf keine unbekannte Versionsdatei
+dazugekommen sein, danach genau eine (`update`, `mergeInsert` und `addColumns`
+legen je eine an; den Stand nach `table.optimize()` übernimmt das Skript erst
+nach der Zeilenprüfung, der Lauf ist dann fertig). Vor jedem Block prüft es
+den Gateway erneut. Ein abgebrochener oder gestaffelter Lauf wird mit demselben Aufruf und
+demselben Snapshot fortgesetzt, solange live genau diesen Stand hat (live hat
+dann mehr Versionen als der Snapshot, alle von diesem Lauf). Hat jemand anderes
+geschrieben, mitten im Lauf oder zwischen zwei Teilläufen (Gateway gestartet,
+eine Kompaktierung per Cron), oder wurde ein Block hart abgebrochen (SIGKILL,
+OOM), bricht das Skript ab, ohne den fremden Stand zu übernehmen: dann bei
+gestopptem Gateway einen frischen Snapshot ziehen und mit ihm neu starten, er
+wird die neue Basis. Der Gateway bleibt deshalb zwischen Teilläufen gestoppt.
+Ctrl-C oder SIGTERM beenden den laufenden Block, schreiben `failed` und den
+Checkpoint und beenden den ganzen Lauf: weitere `--agent` werden nicht mehr
+begonnen (im Bericht `skipped: interrupted`); ein zweites Signal beendet
+sofort. Der Probelauf vom 24.11.2026 (Regeln
+dieses Releases): main 1.075 Zeilen neu
+(≈ 156.000 Tokens), bernhardine 2.310 (≈ 247.000), heisenberg 19; der Rest
+nur Modus. In den 1.075 stecken die 27 Talk-Mode-Zeilen von main (die anderen
+Agenten haben keine): ohne den Präfix sind 19 davon kürzer als 30 Zeichen
+("Ja", "Normal") und haben im Auto-Recall das Gewicht 0,8.
+
 ### Embedding-Dimensionen
 
 Die PLUR1BUS-Operator-Ansicht trennt Embedding- und Reranker-Modelle. Fuer
@@ -291,7 +624,7 @@ Die PLUR1BUS-Operator-Ansicht trennt Embedding- und Reranker-Modelle. Fuer
 dafuer bewaehrte Presets und markiert die jeweilige Standardbreite. Das lokale
 `intfloat/multilingual-e5-small` liefert fest 384 Dimensionen. Das getrennte
 Jina-v3-Embedding unterstuetzt exakt 32/64/128/256/512/768/1024 Dimensionen,
-das Jina-v5-Nano-Embedding exakt 32/64/128/256/512/768.
+das Jina-v5-Nano-Embedding exakt 32/64/128/256/512/768 und EmbeddingGemma 2 exakt 128/256/512/768.
 Der Jina-v2-Reranker und BGE sind Reranker und besitzen keine Memory-
 Vektordimension.
 
@@ -333,6 +666,40 @@ Fehler, Abbruch oder zu wenig Platz bleibt die aktive Generation unveraendert.
 
 ---
 
+## HTTP-Reranker, `apiKeyRef` und Host-Egress (Vertrag 1.15.0)
+
+`reranker.provider` kennt neben `local-transformers` die HTTP-Varianten
+`cohere`, `jina`, `voyage` und `remote`. Die drei ersten sind Presets mit
+Vorgaben, die alle überschreibbar sind; `remote` hat keine Vorgaben.
+
+| Option | Bedeutung |
+|---|---|
+| `baseUrl` | Basis-URL; Ziel ist `{baseUrl}/rerank`, außer die URL endet schon auf `/rerank`. Vorgaben: `https://api.cohere.com/v2`, `https://api.jina.ai/v1`, `https://api.voyageai.com/v1`; bei `remote` Pflicht. Keine Zugangsdaten in der URL. |
+| `protocol` | `cohere`/`jina` (`{model, query, documents, top_n}` → `results`; Cohere, Jina, vLLM, Infinity, LocalAI), `voyage` (`top_k` → `data`), `tei` (`{query, texts}` → `[{index, score}]`). Vorgabe aus dem Preset, bei `remote` `cohere`. |
+| `model` | Vorgaben `rerank-v5.0-fast` (seit 7.21.1, vorher `rerank-v3.5`), `jina-reranker-v2-base-multilingual`, `rerank-2.5`; bei `remote` ohne Vorgabe (Server-Standard). |
+| `apiKeyRef` / `apiKeyEnv` / `apiKey` | Schlüsselquelle, Reihenfolge wie genannt, danach `COHERE_API_KEY`/`JINA_API_KEY`/`VOYAGE_API_KEY`. `remote` darf ohne Schlüssel laufen. |
+| `maxDocuments` / `maxRequestBytes` / `maxResponseBytes` | Grenzen pro Aufruf, Vorgaben 1000 / 4 MiB / 1 MiB. |
+
+`enabled: true` bleibt nötig. Antworten werden geprüft und auf
+`[{index, relevance_score}]` normalisiert. Ein Fehler führt nie still zu einem
+anderen Modell: ohne `fallbackProvider: "local-transformers"` läuft der Recall
+ungerankt weiter.
+
+`apiKeyRef` gibt es zusätzlich bei `embedding`, `embedding.routes[].provider`
+und den Feature-LLM-Overrides (`merging`, `schicht15`, `skillMiner`,
+`criticalPush`, `emotion.t3`). Der Wert ist ein Name im Secret-Store des Hosts
+(`HostServices.secrets.resolve(ref, purpose)`), nie der Schlüssel selbst. Ohne
+Store oder bei fehlgeschlagener Auflösung bricht der Provider ab, ohne eine
+Anfrage zu senden. Embedding und Reranker halten einen aufgelösten Schlüssel
+höchstens 60 s und verwerfen ihn bei HTTP 401/403; LLM-Aufrufe lösen ihn bei
+jedem Aufruf neu auf. OpenClaw bietet keinen solchen Store.
+
+Übergibt der Host `HostServices.fetch`, laufen alle ausgehenden Anfragen der
+Engine darüber (Embedding, Reranker, eigene LLM-Aufrufe, Webhooks,
+Modell-Downloads); sonst gilt das globale `fetch` wie bisher.
+
+---
+
 ## Träume in OpenClaws Traumseite (7.7.0)
 
 OpenClaws Control UI zeigt unter Einstellungen → Memory → Dreams das Tagebuch
@@ -351,6 +718,11 @@ Nutzerpartitionen nie.
 `dreaming.narrative.diary` steht standardmässig auf `true`. Die Zeitangabe
 folgt `timezone` aus der Plugin-Konfiguration. Derselbe Traum wird nicht
 zweimal eingetragen; ein Fehlschlag beim Schreiben bricht den Traum nicht ab.
+
+`dreaming.narrative.diaryFromUserChats` (Standard `false`, 7.18.15) lässt
+Light-Träume aus dem Chat mit einem identifizierten Nutzer (`scope: "user"`)
+ins Tagebuch. Nur für Agenten mit genau einem Besitzer: `DREAMS.md` liegt im
+Workspace des Agenten.
 
 Damit das Tagebuch einen Autor hat, sollte das verwaltete Träumen des Hosts aus
 sein. Der Host liest diesen Schalter aus dem Eintrag des Memory-Slot-Besitzers,
@@ -458,6 +830,10 @@ Gelesen wird nur das Ende der Logs von heute und gestern (höchstens 8 MiB je Da
 `runtime.detachPostTurnWork` (Standard `false`) ist ein Workaround für openclaw/openclaw#162941. OpenClaw reicht die Identität eines Turns per `AsyncLocalStorage` an alle asynchronen Folgeaufrufe weiter. Die Nachbearbeitung, die PLUR1BUS nach `agent_end` einreiht (Capture, Episoden, Gesprächserkenntnisse, Light Dream), läuft erst nach dem Turn — dessen Identität ist dann widerrufen, und Plugin-LLM-Aufrufe scheitern mit `LLM_COMPLETION_NOT_AUTHORIZED` (im Dashboard: Ursache „turn authority already expired“).
 
 Mit `true` läuft diese Arbeit in einem Snapshot, der bei der Plugin-Registrierung genommen wird. Ein Snapshot stellt alle Host-Kontexte jenes Moments wieder her, nicht nur die Turn-Identität; deshalb ist der Schalter standardmäßig aus und sollte nach dem Einschalten ein paar Turns lang beobachtet werden. Wirkt nach einem Gateway-Neustart.
+
+## Light-Traum und Episoden nach dem Turn (7.18.14)
+
+`runtime.deferPostTurnLlm` reiht Light-Traum und Episoden-Extraktion nach `agent_end` in eine Dateischlange ein. In der Engine ist der Standard `false` (inline, inklusive `jobs.run("light-dream")`). Unter OpenClaw setzt der Adapter `true` und plant den Cron `post-turn-refine` (alle 20 Minuten, FIFO je Agent), weil Plugin-LLM-Aufrufe nach dem Turn sonst abgelehnt werden. Fehlt die Planung (`capabilities.postTurnRefineScheduled`), fällt die Engine auf den Inline-Pfad zurück.
 
 ## Registrierungen nachverfolgen (7.18.5)
 
@@ -660,6 +1036,28 @@ credentials ändern sich dadurch nicht.
 
 ---
 
+## LanceDB-Fragment-Kompaktierung (`runtime.lancedbCompaction`)
+
+Jedes `add()`/`update()` schreibt ein neues LanceDB-Fragment. Bisher lief `optimize()` nur im nächtlichen `dailyConsolidation.lancedbOptimize`-Job, der standardmäßig aus ist — ohne ihn wuchsen Capture- und Recall-Latenz mit jedem weiteren Turn. Seit E5 zählt ein eigener Kompaktierer die Schreibzugriffe je Agent und stößt `optimizeTable` an, sobald die Fragmentzahl die Schwelle erreicht — unabhängig vom nächtlichen Job.
+
+| Key | Typ | Default | Beschreibung |
+|-----|-----|---------|--------------|
+| `runtime.lancedbCompaction.enabled` | `boolean` | `true` | Kompaktierung aktivieren. **Einziger Aus-Schalter** — `dailyConsolidation.lancedbOptimize.enabled` steuert ausschließlich den nächtlichen Job und schaltet diese Kompaktierung nicht ab (und umgekehrt). |
+| `runtime.lancedbCompaction.fragmentThreshold` | `integer` | `64` | Fragmentzahl je Agent-Tabelle, ab der `optimizeTable` läuft (Minimum 8). |
+| `runtime.lancedbCompaction.checkEveryWrites` | `integer` | `16` | Nach so vielen Schreibzugriffen wird die Fragmentzahl geprüft (Minimum 1). |
+| `runtime.lancedbCompaction.checkIntervalMs` | `integer` | `600000` | Zusätzliche Prüfung per Timer, alle 10 Minuten (Minimum 60000). |
+| `runtime.lancedbCompaction.timeoutMs` | `integer` | `60000` | Timeout eines einzelnen `optimize()`-Laufs (Minimum 10000). |
+
+### Verhalten
+
+- **Standardmäßig aktiv auf jedem Host, auch OpenClaw** (Owner-Entscheidung 2026-09-27).
+- Ohne verfügbare `table.stats()` (keine Tabelle, fehlgeschlagener oder abgelaufener Stats-Read) zählt der Kompaktierer ersatzweise die Schreibzugriffe seit der letzten Kompaktierung als Fragment-Schätzung — er prüft und kompaktiert also auch dann.
+- Ein Prozess-weiter Optimize-Lock (einer je Tabellenpfad) serialisiert diesen Kompaktierer, weitere Engines im selben Prozess, `dailyConsolidation` und den Dashboard-Runner: Der Kompaktierer überspringt statt zu warten, wenn eine Tabelle schon optimiert wird; `dailyConsolidation` und das Dashboard warten stattdessen in FIFO-Reihenfolge.
+- Erreicht nur die pro-Agent-Tabelle (`memories`), dieselbe, die `dailyConsolidation.lancedbOptimize` bereits abdeckt — geteilte Pools und explizit zusätzliche Namespaces kompaktiert weder dieser Kompaktierer noch `dailyConsolidation`.
+- **Bekanntes Restrisiko:** Ein zeitgesteuertes Aufräumen (`cleanupOlderThan` hier, ebenso bei `dailyConsolidation`s eigenem Optimize) kann Versionen löschen, die älter als das Retention-Fenster sind, während ein lang laufender Lesevorgang noch darauf zugreift — dasselbe Risiko, das `dailyConsolidation`s Optimize bereits vor E5 trug; E5 führt es nicht neu ein und behebt es nicht.
+
+---
+
 ## Schalter und Entscheidungen im Reiter
 
 Mit `controlUi.writeActions: "all"` trägt jede Feature-Karte ihren Schalter
@@ -850,6 +1248,19 @@ Jeder aktivierte Chat-Aufruf löst genau einen von vier Route-Modi auf:
 - `openclaw-override`: ein feature-lokales `model` ohne direkte Transportfelder; OpenClaw verwaltet Provider und Credentials.
 - `direct-override`: feature-lokales `model` plus `baseUrl`, aufgelöstes `apiKey` oder nicht-leere `headers`; der bestehende begrenzte OpenAI-kompatible Direktpfad wird verwendet.
 - `unavailable`: die Route kann sicher keinen Request senden. Direct transport without a feature-local model fails closed as an ambiguous partial override.
+
+**Geheime Werte ohne SecretRef.** `merging.headers`, `schicht15.headers`,
+`skillMiner.headers`, `criticalPush.headers` und `reminders.webhookUrl` sind im
+Engine-Config-Schema `x-sensitive` (Owner-Entscheidung zu E5-R24): jede
+Oberfläche maskiert sie — in OpenClaw über `uiHints[…].sensitive` (eine
+Header-Map wird als Ganzes durch den Redaktions-Platzhalter ersetzt und beim
+Speichern wiederhergestellt), in Engine/Harness über
+`redactSensitiveConfig`. Anders als die acht `*.apiKey`-Felder sind sie
+**keine** OpenClaw-SecretInputs (`configContracts.secretInputs.paths` bleibt
+bei acht Pfaden): Werte werden weiterhin im Klartext eingetragen, ein
+SecretRef-Objekt wird dort nicht aufgelöst. Ein `${VAR}` in
+`reminders.webhookUrl` löst die Engine wie bisher selbst gegen ihre
+Allow-List auf.
 
 `failed` ist der stabile Diagnosewert für einen gescheiterten Transport, kein
 fünfter Auswahlmodus. Erfolgreiche native Ergebnisse übernehmen ausschließlich

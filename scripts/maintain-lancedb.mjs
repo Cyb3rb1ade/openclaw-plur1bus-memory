@@ -32,7 +32,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { extname, join, relative } from "node:path";
+import { extname, join, relative, sep } from "node:path";
 import { homedir } from "node:os";
 import { appendDestructiveOpLog, resolveInside, safeAgentId } from "../lib/sql-safety.js";
 
@@ -102,6 +102,11 @@ function backupPrunedManifests(base, versionsDir, toRemove, backupRoot) {
   );
 }
 
+/** The last three segments of a versions directory, "/"-joined for display (path.sep splits: win32 paths use "\\"). */
+function displayVersionsDir(versionsDir) {
+  return versionsDir.split(sep).slice(-3).join("/");
+}
+
 function pruneTable(base, versionsDir, keep, apply, backupRoot) {
   const manifests = sortedManifests(versionsDir);
   const total = manifests.length;
@@ -111,12 +116,12 @@ function pruneTable(base, versionsDir, keep, apply, backupRoot) {
   const icon = status === "ok" ? "✓" : "✗";
 
   if (toRemove.length === 0) {
-    console.log(`  ${icon} ${versionsDir.split("/").slice(-3).join("/")}/_versions: ${total} versions  [${status}]`);
+    console.log(`  ${icon} ${displayVersionsDir(versionsDir)}/_versions: ${total} versions  [${status}]`);
     return { removed: 0, total, status };
   }
 
   const label = apply ? `pruning ${toRemove.length} → keeping ${keep}` : `would prune ${toRemove.length} → keep ${keep}`;
-  console.log(`  ${icon} ${versionsDir.split("/").slice(-3).join("/")}/_versions: ${total} versions  [${status}]  (${label})`);
+  console.log(`  ${icon} ${displayVersionsDir(versionsDir)}/_versions: ${total} versions  [${status}]  (${label})`);
 
   if (apply) {
     backupPrunedManifests(base, versionsDir, toRemove, backupRoot);

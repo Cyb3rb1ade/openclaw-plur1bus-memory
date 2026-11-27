@@ -92,6 +92,15 @@ const TABLE_NAME = "memories";
       "previousEpistemicStatus",
       "validFrom",
       "validUntil",
+      // E1 Task 8 fix round 1: MemoryDB's own migration adds chunkGroupId too.
+      "chunkGroupId",
+      // 7.20.10: Sitzung des Captures für den Auto-Recall.
+      "sessionKey",
+      // 7.20.10: Text der Einbettung (raw/clean-v1).
+      "embeddingTextMode",
+      // 7.21.2: Vertraulichkeit ('' = nicht eingestuft) und Herkunft des Urteils.
+      "sensitivity",
+      "sensitivitySource",
     ];
 
     for (const col of v6Columns) {
@@ -126,6 +135,10 @@ const TABLE_NAME = "memories";
     assert.ok(oldRow.validUntil == 0, "default validUntil = 0 (no known bound, still open)");
     assert.equal(typeof oldRow.validFrom, "bigint", "migrated LanceDB int64 validFrom must exercise the native BigInt path");
     assert.equal(typeof oldRow.validUntil, "bigint", "migrated LanceDB int64 validUntil must exercise the native BigInt path");
+    assert.strictEqual(oldRow.sessionKey, "", "default sessionKey = empty (Bestand: keine Sitzung bekannt)");
+    assert.strictEqual(oldRow.embeddingTextMode, "raw", "default embeddingTextMode = raw (Bestand: Vektor aus dem gespeicherten Text)");
+    assert.strictEqual(oldRow.sensitivity, "", "default sensitivity = empty (Bestand: nicht eingestuft)");
+    assert.strictEqual(oldRow.sensitivitySource, "", "default sensitivitySource = empty");
 
     // 6. Verify idempotency: init() again should not throw
     await memoryDb.init();
@@ -205,6 +218,11 @@ const TABLE_NAME = "memories";
         previousEpistemicStatus: "",
         validFrom: 0,
         validUntil: 0,
+        chunkGroupId: "",
+        sessionKey: "",
+        embeddingTextMode: "raw",
+        sensitivity: "",
+        sensitivitySource: "",
       },
     ]);
 
@@ -304,5 +322,34 @@ const TABLE_NAME = "memories";
     assert.equal(row.epistemicStatusActor, "human:owner");
     assert.equal(row.epistemicStatusReason, "direct confirmation");
     assert.equal(row.previousEpistemicStatus, "observed");
+
+    // 7.20.10: sessionKey kommt mit, ein Writer ohne das Feld bekommt "".
+    await memoryDb.store({
+      id: "fresh-session",
+      text: "Captured in a running conversation",
+      vector: new Float32Array(VECTOR_DIM).fill(0.4),
+      importance: 0.5,
+      category: "fact",
+      createdAt: Date.now(),
+      sessionKey: "agent:main:telegram:direct:1",
+    });
+    const sessionRows = await memoryDb.table.query().toArray();
+    assert.equal(sessionRows.find((r) => r.id === "fresh-session").sessionKey, "agent:main:telegram:direct:1");
+    assert.equal(sessionRows.find((r) => r.id === "fresh-1").sessionKey, "", "store() ohne sessionKey schreibt den Default");
+
+    // 7.20.10: embeddingTextMode kommt mit, ein Writer ohne das Feld bekommt "raw".
+    await memoryDb.store({
+      id: "fresh-clean",
+      text: "[Tue 2026-11-24 09:43 GMT+1] Ähm, captured with a clean vector",
+      vector: new Float32Array(VECTOR_DIM).fill(0.5),
+      importance: 0.5,
+      category: "fact",
+      createdAt: Date.now(),
+      embeddingTextMode: "clean-v1",
+    });
+    const modeRows = await memoryDb.table.query().toArray();
+    assert.equal(modeRows.find((r) => r.id === "fresh-clean").embeddingTextMode, "clean-v1");
+    assert.equal(modeRows.find((r) => r.id === "fresh-clean").text, "[Tue 2026-11-24 09:43 GMT+1] Ähm, captured with a clean vector", "der Text bleibt wörtlich");
+    assert.equal(modeRows.find((r) => r.id === "fresh-1").embeddingTextMode, "raw", "store() ohne embeddingTextMode schreibt den Default");
   });
 });

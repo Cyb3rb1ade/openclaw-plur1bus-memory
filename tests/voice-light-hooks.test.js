@@ -44,7 +44,7 @@ async function register(t, overrides = {}) {
   return { baseDbPath, handlers };
 }
 
-const voiceCtx = { agentId: "main", messageProvider: "discord-voice", sessionKey: "agent:main:discord:channel:1518159522076823592" };
+const voiceCtx = { agentId: "main", messageProvider: "discord-voice", sessionKey: "agent:main:discord:channel:1000000000000000004" };
 
 test("a light voice turn gets only the light guidance and no recall", async (t) => {
   const { baseDbPath, handlers } = await register(t);

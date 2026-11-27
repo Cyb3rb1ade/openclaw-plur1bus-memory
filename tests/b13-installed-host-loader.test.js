@@ -13,28 +13,11 @@ function findPinnedOpenClawLoader() {
   const packageRoot = dirname(dirname(require.resolve("openclaw")));
   const packageJson = join(packageRoot, "package.json");
   const pkg = require(packageJson);
-  assert.equal(pkg.version, "2026.8.2", "loader test must use the exact target OpenClaw release");
+  assert.equal(pkg.version, "2026.8.33", "loader test must use the exact installed OpenClaw release");
   return join(packageRoot, "dist", "plugins", "loader.js");
 }
 
-async function cleanupRegisteredLifecycles(registries) {
-  const failures = [];
-  for (const registry of [...registries].reverse()) {
-    for (const entry of [...(registry?.runtimeLifecycles || [])].reverse()) {
-      if (typeof entry?.lifecycle?.cleanup !== "function") continue;
-      try {
-        await entry.lifecycle.cleanup();
-      } catch (error) {
-        failures.push(error);
-      }
-    }
-  }
-  if (failures.length) {
-    throw new AggregateError(failures, "installed host lifecycle cleanup failed");
-  }
-}
-
-it("loads reply_dispatch routing through the exact OpenClaw 2026.8.2 plugin loader", async () => {
+it("loads reply_dispatch routing through the exact OpenClaw 2026.8.33 plugin loader", async () => {
   const loaderPath = findPinnedOpenClawLoader();
   assert.ok(existsSync(loaderPath), `pinned OpenClaw plugin loader is unavailable: ${loaderPath}`);
   // macOS resolves its per-user temporary root to a path that can exceed the
@@ -79,7 +62,6 @@ it("loads reply_dispatch routing through the exact OpenClaw 2026.8.2 plugin load
     },
   };
   const logs = [];
-  const registries = [];
   const logger = Object.fromEntries(["debug", "info", "warn", "error"].map((level) => [
     level,
     (...args) => logs.push([level, ...args]),
@@ -96,7 +78,6 @@ it("loads reply_dispatch routing through the exact OpenClaw 2026.8.2 plugin load
       throwOnLoadError: true,
       logger,
     });
-    registries.push(registry);
     const plugin = registry.plugins.find((entry) => entry.id === pluginId);
     assert.equal(plugin?.status, "loaded");
     assert.equal(realpathSync(plugin.source), realpathSync(join(projectRoot, "index.js")));
@@ -201,13 +182,11 @@ it("loads reply_dispatch routing through the exact OpenClaw 2026.8.2 plugin load
     });
     assert.match(deniedGroup.text, /not configured|allowed list|nicht autorisiert/i);
 
-    // The second registry intentionally uses a different authorization config.
-    // Finish the first active runtime generation before clearing loader caches
-    // or registering that independent snapshot.
-    await cleanupRegisteredLifecycles(registries.splice(0));
+    // clearPluginLoaderCache entfiel mit OpenClaw 2026.7.2; die verbleibenden
+    // Cleanups existieren in allen unterstützten Host-Versionen.
     loader.clearPluginLoaderCache?.();
     loader.clearPluginRegistryLoadCache?.();
-
+    loader.clearActivatedPluginRuntimeState?.();
     const allowlistConfig = {
       ...config,
       plugins: {
@@ -233,7 +212,6 @@ it("loads reply_dispatch routing through the exact OpenClaw 2026.8.2 plugin load
       throwOnLoadError: true,
       logger,
     });
-    registries.push(allowlistRegistry);
     const allowlistForget = allowlistRegistry.commands.find(
       (entry) => entry.pluginId === pluginId && entry.command?.name === "forget",
     );
@@ -250,16 +228,15 @@ it("loads reply_dispatch routing through the exact OpenClaw 2026.8.2 plugin load
     assert.match(wrongChat.text, /chat.*allowed|allowed.*chat|nicht autorisiert/i);
     assert.doesNotMatch(wrongChat.text, /must-not-reach-memory-query/);
   } finally {
-    try {
-      await cleanupRegisteredLifecycles(registries);
-    } finally {
-      loader.clearPluginLoaderCache?.();
-      loader.clearPluginRegistryLoadCache?.();
-      for (const [name, value] of Object.entries(previousEnv)) {
-        if (value === undefined) delete process.env[name];
-        else process.env[name] = value;
-      }
-      rmSync(isolatedHome, { recursive: true, force: true });
+    // clearPluginLoaderCache entfiel mit OpenClaw 2026.7.2; die verbleibenden
+    // Cleanups existieren in allen unterstützten Host-Versionen.
+    loader.clearPluginLoaderCache?.();
+    loader.clearPluginRegistryLoadCache?.();
+    loader.clearActivatedPluginRuntimeState?.();
+    for (const [name, value] of Object.entries(previousEnv)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
     }
+    rmSync(isolatedHome, { recursive: true, force: true });
   }
 });

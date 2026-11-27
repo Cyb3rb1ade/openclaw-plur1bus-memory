@@ -8,6 +8,7 @@ const manifest = JSON.parse(readFileSync(new URL("../openclaw.plugin.json", impo
 const credentialPaths = Object.freeze([
   "embedding.apiKey",
   "embedding.fallback.apiKey",
+  "captureChunkingJev.apiKey",
   "reranker.apiKey",
   "merging.apiKey",
   "schicht15.apiKey",

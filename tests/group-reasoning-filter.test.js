@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { shortHash } from "../lib/log-redact.js";
 import {
   isForeignReasoningMessage,
   isGroupHookContext,
@@ -7,20 +8,20 @@ import {
   collectHumanSenderIds,
 } from "../lib/group-reasoning-filter.js";
 
-const GROUP_KEY = "agent:main:telegram:group:-1003839640481:topic:5778";
-const DM_KEY = "agent:main:telegram:direct:55736530";
+const GROUP_KEY = "agent:main:telegram:group:-1000000000001:topic:1001";
+const DM_KEY = "agent:main:telegram:direct:10000001";
 
 test("recognises streamed reasoning previews", () => {
   assert.equal(isForeignReasoningMessage("🧠 The exec result is returning null"), true);
   assert.equal(isForeignReasoningMessage("  💭 hmm"), true);
   assert.equal(isForeignReasoningMessage("<think>plan</think> answer"), true);
   assert.equal(isForeignReasoningMessage("Reasoning: first check the cron"), true);
-  assert.equal(isForeignReasoningMessage("Bernhardine: 🧠 Ich prüfe zuerst"), true);
-  assert.equal(isForeignReasoningMessage("[Bernhardine]: 🧠 Ich prüfe zuerst"), true);
+  assert.equal(isForeignReasoningMessage("PeerBot: 🧠 Ich prüfe zuerst"), true);
+  assert.equal(isForeignReasoningMessage("[PeerBot]: 🧠 Ich prüfe zuerst"), true);
 });
 
 test("leaves ordinary messages alone", () => {
-  assert.equal(isForeignReasoningMessage("Bernd, was denkst du? 🧠"), false);
+  assert.equal(isForeignReasoningMessage("Alex, was denkst du? 🧠"), false);
   assert.equal(isForeignReasoningMessage("Gute Idee"), false);
   assert.equal(isForeignReasoningMessage(""), false);
   assert.equal(isForeignReasoningMessage(undefined), false);
@@ -78,7 +79,9 @@ test("7.20.2: bot senders are still filtered and the log names sender and prefix
     logger: { info: (m) => logs.push(m) },
   });
   assert.deepEqual(filter({ body: "🧠 Ich prüfe zuerst", isGroup: true, senderId: "8123456789" }, { sessionKey: GROUP_KEY }), { handled: true });
-  assert.match(logs[0], /sender=8123456789/);
+  // main logs the sender as a hash, never the raw peer id.
+  assert.match(logs[0], new RegExp(`sender=${shortHash("8123456789")}`));
+  assert.ok(!logs[0].includes("8123456789"), "log must not contain the raw sender id");
   assert.match(logs[0], /prefix=🧠/);
   assert.ok(!logs[0].includes("Ich prüfe"), "log must not contain message text");
 });

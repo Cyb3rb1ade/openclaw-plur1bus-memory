@@ -43,13 +43,16 @@ describe("Blitzlicht-Schwelle (Phase 3)", () => {
   });
 
   it("das Schema nennt Schwelle und Herkunft", () => {
+    // E5-R23: this description was translated from German to English in
+    // engine/config/engine-config.schema.json (nested descriptions), and the
+    // manifest is now generated from it (npm run gen:config-schema).
     const manifest = JSON.parse(readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"));
     const text = manifest.configSchema.properties.memoryDynamics.properties.flashbulbEncoding.description;
-    assert.match(text, /0,80/);
-    assert.match(text, /Phase-3-Pilotlauf/);
-    // 7.15.3: Entschieden wird einmal je Zeile im Refine-Pfad, nicht beim
-    // Erfassen — der Capture-Pfad erreicht die Schwelle mit Tier 2 nie.
-    assert.match(text, /einmal je Zeile/);
-    assert.match(text, /nie nachträglich eingebrannt/);
+    assert.match(text, /0\.80/);
+    assert.match(text, /phase-3 pilot run/);
+    // 7.15.3: the decision is made once per row on the refine path, not at
+    // capture time — the capture path never reaches the threshold with tier 2.
+    assert.match(text, /once per row/);
+    assert.match(text, /never retroactively burned in/);
   });
 });

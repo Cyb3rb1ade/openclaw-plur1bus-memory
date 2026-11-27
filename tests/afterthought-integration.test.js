@@ -3,9 +3,9 @@ import { test } from "node:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { makeTempDir } from "./helpers/temp-dir.js";
-import { registerAfterthoughtActivityHooks } from "../lib/afterthought-hooks.js";
+import { registerAfterthoughtActivityHooks } from "../adapter/openclaw/afterthought-hooks.js";
 import { observeAfterthoughtActivity, runConversationAfterthoughtJob } from "../lib/afterthought-reflection.js";
-import { createAfterthoughtHost } from "../lib/afterthought-host.js";
+import { createAfterthoughtHost } from "../adapter/openclaw/afterthought-host.js";
 
 test("interactive hooks schedule full-history reflection, original-chat delivery and context exactly once", async () => {
   const workspaceDir = makeTempDir("afterthought-integration-");

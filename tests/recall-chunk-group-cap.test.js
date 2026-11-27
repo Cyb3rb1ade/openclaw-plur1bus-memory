@@ -36,9 +36,9 @@ const treffer = (group, text) => {
 };
 
 describe("Gruppenschluessel", () => {
-  it("nimmt chunkGroupId, sonst sourceTurnId, sonst nichts", () => {
+  it("nimmt nur chunkGroupId — sourceTurnId steht fuer den ganzen Gespraechszug", () => {
     assert.strictEqual(chunkGroupKey({ chunkGroupId: "g1", sourceTurnId: "t1" }), "g1");
-    assert.strictEqual(chunkGroupKey({ sourceTurnId: "t1" }), "t1");
+    assert.strictEqual(chunkGroupKey({ sourceTurnId: "t1" }), null);
     assert.strictEqual(chunkGroupKey({}), null);
     assert.strictEqual(chunkGroupKey(null), null);
     assert.strictEqual(chunkGroupKey({ chunkGroupId: "" }), null);

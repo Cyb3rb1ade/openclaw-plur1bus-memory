@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { registerAfterthoughtActivityHooks } from "../lib/afterthought-hooks.js";
+import { registerAfterthoughtActivityHooks } from "../adapter/openclaw/afterthought-hooks.js";
 
 function fixture(options = {}) {
   const hooks = new Map(); const observed = [];

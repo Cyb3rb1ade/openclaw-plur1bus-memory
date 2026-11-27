@@ -6,7 +6,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { makeTempDir } from "./helpers/temp-dir.js";
 import {
@@ -208,7 +208,8 @@ describe("pruneHookNeoStoreFiles", () => {
 
 describe("daily consolidation wiring", () => {
   it("prunes the hook store after the partition stores", () => {
-    const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+    // main: the consolidate-daily job body lives in the engine.
+    const source = readFileSync(new URL("../engine/jobs/internal-job-bodies.js", import.meta.url), "utf8");
     assert.match(source, /dailyStoreDirs\.add\(dailyStore\.paths\.workspaceDir\)/);
     assert.match(source, /hookStorePrune = pruneHookNeoStoreFiles\(commandStore, dailyStoreDirs\)/);
     assert.match(source, /hookStorePrune,\n\s+candidateIndex,/);
@@ -218,7 +219,7 @@ describe("daily consolidation wiring", () => {
 describe("createNeoStore with a directory name", () => {
   it("resolves an existing canonical directory name to itself instead of nesting a new one", () => withTmp((root) => {
     const byKey = createNeoStore(root, "main");
-    const dirName = byKey.paths.workspaceDir.split("/").pop();
+    const dirName = basename(byKey.paths.workspaceDir);
     assert.match(dirName, /^main--[0-9a-f]{20}$/);
     const byDirName = createNeoStore(root, dirName);
     assert.strictEqual(byDirName.paths.workspaceDir, byKey.paths.workspaceDir);

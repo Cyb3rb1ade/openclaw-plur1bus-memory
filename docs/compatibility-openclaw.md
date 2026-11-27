@@ -10,9 +10,33 @@ The immutable build baseline is `openclaw@2026.8.2`, commit
 `0965053fe6b9341776df147a6934b7485c60b5ca`, and npm integrity
 `sha512-I9aqK1attaONePpWs2gPqh23s1s1EDcN/6icF2AAfONdtowu4156QD7g6oD7KlA2vQ9yiqnvlAVH6yduvGH9Ig==`.
 The package is built and tested against a host in its own supported range
-rather than against a beta no operator runs. This matters beyond metadata: the
-installed-host loader test drives that exact OpenClaw plugin loader, so the
-build baseline decides which host contract the fast test loop measures.
+rather than against a beta no operator runs. The build baseline is release
+metadata only; it is not the host the fast test loop runs against. The
+installed-host loader test and the `feature-cron-plugin-runtime` host test load
+the OpenClaw that `npm ci` installs, which is the development pin
+`devDependencies.openclaw` (`2026.8.33`, see the table below), and assert that
+exact version.
+
+## Which OpenClaw version means what
+
+The sections below were written release by release, so older sentences name
+versions that were current then. This table is the current answer; every row
+names its source of truth.
+
+| Role | Version | Source of truth |
+| --- | --- | --- |
+| Compatibility floor (the one floor) | `2026.8.1`, plugin API `>=2026.8.1` | `package.json` `openclaw.compat.minGatewayVersion` and `openclaw.compat.pluginApi`. Enforced at install time by the host and by the Host-Addons installer (`scripts/dist/installer/compat.mjs`); the plugin code performs no version check of its own (capability detection only, no version-string branch). `package.json` declares no `peerDependencies`; `engines` constrains Node only. |
+| Tested in CI: `min` | `2026.8.1`, resolved from the packed plugin's own `minGatewayVersion` | Host-Addons `.github/workflows/plugin-dist.yml` (`openclaw: [min, latest]`); recorded as `OpenClaw 2026.8.1 (ea80657)` in Host-Addons `docs/distribution/openclaw-cli-facts.md`. |
+| Tested in CI: `latest` | `npm view openclaw dist-tags.latest` at run time; `2026.9.6` (`eb377ac`) when last recorded, 2026-09-28 | Same workflow and facts file. It moves with every OpenClaw release; the recorded value is a dated observation. |
+| Build baseline (release metadata) | `openclaw@2026.8.2` | `package.json` `openclaw.build.openclawVersion` and `pluginSdkVersion`, pinned by `tests/dev-openclaw-pin.test.js` and `tests/release-750-compat.test.js`. |
+| Development pin (what the test suite loads) | `openclaw@2026.8.33` | `package.json` `devDependencies.openclaw`, `package-lock.json`, asserted by `tests/dev-openclaw-pin.test.js`, `tests/b13-installed-host-loader.test.js` and `tests/feature-cron-plugin-runtime.test.js`. It is the lowest 2026.8.x line with a patched `undici`. |
+| Manually verified targets | `2026.8.2` (full runtime matrix, 7.5.0), `2026.9.1` (loader plus full suite, 7.5.6) | The sections "Scope of the compatibility claim" and "OpenClaw 2026.9.1" below. |
+
+Four different version numbers are therefore expected: floor, CI `latest`, build
+baseline and development pin each answer a different question. Only the floor
+is a compatibility claim; the others describe what was built or tested.
+
+## Upstream base
 
 The PLUR1BUS upstream base is the official annotated Git tag `v7.4.10`
 (tag object `f6cf0e75b4f8df509cac7b68bc437a25d650af73`), dereferencing exact commit
@@ -32,8 +56,9 @@ PLUR1BUS uses only public OpenClaw capabilities:
   make PLUR1BUS the exclusive memory owner and advertise `memory_recall` as
   the deterministic recall tool.
 - `registerEmbeddingProvider` plus `contracts.embeddingProviders` exposes the
-  three reusable PLUR1BUS embedding adapters through OpenClaw's generic
-  provider contract. The retired memory-specific registrar is not used.
+  four reusable PLUR1BUS embedding adapters (`plur1bus-embeddinggemma-2`,
+  `plur1bus-openai`, `plur1bus-openai-compatible`, `plur1bus-e5-small`) through
+  OpenClaw's generic provider contract. The retired memory-specific registrar is not used.
 - `registerGatewayMethod` registers the PLUR1BUS Gateway method.
 - `registerCli` registers the PLUR1BUS CLI.
 - `openclaw/plugin-sdk/gateway-runtime` submits exact, allowlisted feature
@@ -172,22 +197,29 @@ mining.
 
 ## Feature-overlap policy
 
-| OpenClaw feature | PLUR1BUS overlap | Compatibility policy |
-| --- | --- | --- |
-| Exclusive memory slot and `memory-core` tools | Recall, capture, search, persistence | Select `memory-lancedb-namespaced`; PLUR1BUS registers the native memory capability, so `memory-core` is not a second active memory owner. |
-| Active Memory | Pre-reply deep recall can call `memory_recall` while PLUR1BUS also has `autoRecall` | Native integration is supported through `deterministicRecallToolName`. Enable only one automatic pre-reply lane per agent; the compatibility lab disables Active Memory and tests PLUR1BUS hooks directly. Raw private-transcript recall is explicitly not claimed. |
-| Memory-core dreaming | Consolidation, REM, promotion, diary | Set persisted `plugins.entries.memory-lancedb-namespaced.config.dreaming.enabled: false` when PLUR1BUS owns dreaming. Otherwise OpenClaw intentionally loads `memory-core` as a sidecar. The lab also disables `memory-core` explicitly. |
-| Skill Workshop self-learning | Skill Miner proposals and approval | PLUR1BUS feeds the Workshop and never bypasses its scanner, hashes, ownership, or rollback. Use Workshop autonomous `propose`/`off` when the PLUR1BUS miner is enabled. |
-| System-owned skill collection review | Skill Miner cron creates Workshop proposals | The OpenClaw job reviews its collection; the PLUR1BUS job mines memory evidence. They have distinct ownership and job IDs. The lab verifies that each proposal is submitted once and that neither job applies a skill autonomously. |
-| Scheduled tasks / cron dispatcher | PLUR1BUS consolidation, classifier, REM, miner, afterthought jobs | PLUR1BUS uses OpenClaw's public Gateway/CLI dispatcher and exact allowlisted commands; OpenClaw owns delivery, `NO_REPLY`, run status, and restart behavior. |
-| Config-watcher handoff and restart recovery | Provider reload, model preparation, re-embedding checkpoints, automatic capture | Durable PLUR1BUS state remains under its own volume. Preparation begins only after the replacement plugin service is active; shutdown aborts and checkpoints owned work before disposal. Resumed OpenClaw turns do not create a second PLUR1BUS runtime generation. |
-| Configurable model-selection scopes | Agent-inherited models for PLUR1BUS feature LLM calls | PLUR1BUS consumes the effective OpenClaw runtime model for the target agent/session and does not persist its own sticky chat-model selection. A feature-specific direct-provider override is used only when its provider configuration is complete. |
-| Session provenance and `openclaw memory forget` | PLUR1BUS origin metadata, archive-first `/forget`, tombstones | The OpenClaw command operates on `memory-core`; PLUR1BUS forget operates only on its selected LanceDB memory slot and remains confirmation-bound and recoverable. Provenance is preserved in each store; there is no cross-store deletion or implicit import. |
-| Compaction memory flush | Durable capture before compaction | PLUR1BUS supplies no file-memory flush plan because conversation capture is handled by typed hooks. This avoids a second file-memory write lane. |
-| `USER.md` user model | Preference and relationship memories | `USER.md` remains the authoritative current directive; PLUR1BUS is provenance-bearing recall/history. Do not auto-promote contradictory PLUR1BUS observations into `USER.md`. |
-| Standing intents | PLUR1BUS reminders | Complementary: OpenClaw owns event-conditioned intents; exact-time work stays on scheduled tasks/PLUR1BUS reminder state. Do not represent the same obligation in both. |
-| Memory Wiki / Obsidian mode | PLUR1BUS Obsidian Bridge and semantic graph | Keep a single writer per vault. The baseline disables both optional bridges; a separate isolated-vault probe enables PLUR1BUS apply/watch mode. The host-managed watcher mirrors authorized LanceDB records outbound and queues inbound candidates only; inbound memory mutation requires a separate authorized apply. Cross-plugin artifact import remains outside the 7.5.0 release claim. |
-| Session/workspace ownership | Per-agent and per-workspace ACLs | OpenClaw session Owner is responsibility/display metadata, not authorization. PLUR1BUS authorizes by canonical agent, workspace, sender/chat ACL, and memory scope. `sessions.create({ cwd })` is resolved through `spawnedCwd` with feature-detected legacy fallbacks. Automatic captures remain agent-private; explicit workspace-scope cards are the workspace-isolated data path. |
+| OpenClaw feature | PLUR1BUS overlap | Compatibility policy | Harness behaviour |
+| --- | --- | --- | --- |
+| Exclusive memory slot and `memory-core` tools | Recall, capture, search, persistence | Select `memory-lancedb-namespaced`; PLUR1BUS registers the native memory capability, so `memory-core` is not a second active memory owner. | n/a (harness owns this) — the harness has no plugin slot; the engine is the only memory owner. |
+| Active Memory | Pre-reply deep recall can call `memory_recall` while PLUR1BUS also has `autoRecall` | Native integration is supported through `deterministicRecallToolName`. Enable only one automatic pre-reply lane per agent; the compatibility lab disables Active Memory and tests PLUR1BUS hooks directly. Raw private-transcript recall is explicitly not claimed. | n/a (harness owns this) — one automatic pre-reply lane, `Engine.recall`. |
+| Memory-core dreaming | Consolidation, REM, promotion, diary | Set persisted `plugins.entries.memory-lancedb-namespaced.config.dreaming.enabled: false` when PLUR1BUS owns dreaming. Otherwise OpenClaw intentionally loads `memory-core` as a sidecar. The lab also disables `memory-core` explicitly. | n/a (harness owns this) — the harness scheduler owns every phase (ADR-009, owner A6). |
+| Skill Workshop self-learning | Skill Miner proposals and approval | PLUR1BUS feeds the Workshop and never bypasses its scanner, hashes, ownership, or rollback. Use Workshop autonomous `propose`/`off` when the PLUR1BUS miner is enabled. | Live — the harness exposes the same proposal lane; PLUR1BUS never applies a skill autonomously. |
+| System-owned skill collection review | Skill Miner cron creates Workshop proposals | The OpenClaw job reviews its collection; the PLUR1BUS job mines memory evidence. They have distinct ownership and job IDs. The lab verifies that each proposal is submitted once and that neither job applies a skill autonomously. | Live — distinct job ids stay distinct; the harness scheduler runs the PLUR1BUS miner only. |
+| Scheduled tasks / cron dispatcher | PLUR1BUS consolidation, classifier, REM, miner, afterthought jobs | PLUR1BUS uses OpenClaw's public Gateway/CLI dispatcher and exact allowlisted commands; OpenClaw owns delivery, `NO_REPLY`, run status, and restart behavior. | n/a (harness owns this) — in-process `Engine.jobs.run()`, never a host cron (owner A6, D4). |
+| Job run ledger (PR-08 run semantics) | Every PLUR1BUS job run (cron-triggered internal jobs, light dream, harness runs) | M1b-1 records every run — skips included — as one row in `<baseDbPath>/_jobs/<agentId>/ledger.jsonl`, with a start marker per running body for crash detection. Behaviour changes against 7.15.x: `incomplete` retries up to three attempts, then `abandoned`; `already_processed` comes from the ledger (any row whose `keys` hold the key, or an abandoned key) instead of `run-state.json`, whose REM completions are migrated once; `rem`/`deep` share a breaker of 3 LLM sessions per agent per UTC day, in-flight runs included; a singleton or `rem`/`deep` job already running for the agent is skipped `already_running`. OpenClaw still owns cron delivery and run status; the ledger is PLUR1BUS-internal and single-process (one engine per installation). | Live — the harness scheduler calls `Engine.jobs.run()` and reads `Engine.jobs.history()` from the same ledger. |
+| Config-watcher handoff and restart recovery | Provider reload, model preparation, re-embedding checkpoints, automatic capture | Durable PLUR1BUS state remains under its own volume. Preparation begins only after the replacement plugin service is active; shutdown aborts and checkpoints owned work before disposal. Resumed OpenClaw turns do not create a second PLUR1BUS runtime generation. | Live — the core daemon supervises the engine; `Engine.close()` gets a real teardown budget. |
+| Configurable model-selection scopes | Agent-inherited models for PLUR1BUS feature LLM calls | PLUR1BUS consumes the effective OpenClaw runtime model for the target agent/session and does not persist its own sticky chat-model selection. A feature-specific direct-provider override is used only when its provider configuration is complete. | Live — the harness supplies the effective model through `HostServices.llm`. |
+| Session provenance and `openclaw memory forget` | PLUR1BUS origin metadata, archive-first `/forget`, tombstones | The OpenClaw command operates on `memory-core`; PLUR1BUS forget operates only on its selected LanceDB memory slot and remains confirmation-bound and recoverable. Provenance is preserved in each store; there is no cross-store deletion or implicit import. | Live — `AdminOps.forget` stays archive-first and confirmation-bound; no cross-store deletion. |
+| Compaction memory flush | Durable capture before compaction | PLUR1BUS supplies no file-memory flush plan because conversation capture is handled by typed hooks. This avoids a second file-memory write lane. | n/a (harness owns this) — `Engine.checkpoint(agentId, "compaction")` (M1b-1, `engine/checkpoint/checkpoint-store.js`); an explicit `event.compactedAt`/`RecallQuery.compactedAt`, when a host supplies one, still wins over what the checkpoint store would otherwise infer. |
+| Recall budget and cancellation | `RecallQuery.signal` reaching every recall dependency; an aborted/timed-out recall returning completed blocks (spec §3.2) | The engine's own soft/hard recall budget (`lib/runtime-scheduler.js`) is the single owner of recall timing; a host's own signal is additive cancellation, not a second budget authority. | OpenClaw: `register-recall-hook.js` supplies its own `AbortSignal.timeout(recallTimeoutMs + 250)` — a margin over the scheduler's own hard timeout, so the scheduler stays the one that actually times a recall out and its timeout diagnostics are not silently pre-empted. Harness: G6 — its own budget and cancellation policy, independent of OpenClaw's margin. |
+| `USER.md` user model | Preference and relationship memories | `USER.md` remains the authoritative current directive; PLUR1BUS is provenance-bearing recall/history. Do not auto-promote contradictory PLUR1BUS observations into `USER.md`. | Proposed: live — the harness keeps an identity file and a user file per agent (owner D14); PLUR1BUS stays provenance-bearing recall and never auto-promotes into them. |
+| Standing intents | PLUR1BUS reminders | Complementary: OpenClaw owns event-conditioned intents; exact-time work stays on scheduled tasks/PLUR1BUS reminder state. Do not represent the same obligation in both. | Proposed: live — the harness owns exact-time reminders; event-conditioned intents stay out of scope for v0.1. |
+| Memory Wiki / Obsidian mode | PLUR1BUS Obsidian Bridge and semantic graph | Keep a single writer per vault. The baseline disables both optional bridges; a separate isolated-vault probe enables PLUR1BUS apply/watch mode. The host-managed watcher mirrors authorized LanceDB records outbound and queues inbound candidates only; inbound memory mutation requires a separate authorized apply. Cross-plugin artifact import remains outside the 7.5.0 release claim. | Proposed: live — one writer per vault, unchanged; the harness mounts the same Obsidian bridge through `AdminOps.obsidian`. |
+| Session/workspace ownership | Per-agent and per-workspace ACLs | OpenClaw session Owner is responsibility/display metadata, not authorization. PLUR1BUS authorizes by canonical agent, workspace, sender/chat ACL, and memory scope. `sessions.create({ cwd })` is resolved through `spawnedCwd` with feature-detected legacy fallbacks. Automatic captures remain agent-private; explicit workspace-scope cards are the workspace-isolated data path. | n/a (harness owns this) — the harness mints a `Principal` with `trust: "proved"` at admission; no ticket chain (ADR-007, host-contract §c.2). |
+
+The **Harness behaviour** column is the drift tripwire for risk R2 in
+`PLUR1BUS-Harness/docs/engine-extraction.md` §d: a row whose OpenClaw side
+changes without this cell changing is an unreviewed divergence. Cells marked
+*Proposed* are this workstream's reading and are open at the M1a owner gate.
 
 The lab configuration makes every conflict decision explicit: PLUR1BUS owns
 the memory slot; `memory-core`, Active Memory, OpenClaw dreaming, PLUR1BUS
@@ -209,6 +241,7 @@ verified.
 | E5 embedding | `intfloat/multilingual-e5-small` | `614241f622f53c4eeff9890bdc4f31cfecc418b3` | `onnx/model.onnx` |
 | Optional multilingual Jina v3 embedding (CC BY-NC 4.0) | `jinaai/jina-embeddings-v3` base `ab036b023d30b4d1138c4c3bfa9f0c445ab455d6`; Q8 conversion `ldwformat/jina-embeddings-v3-Q8-onnx` | `68ed94909d564380f954be27ae2e133214c1adc9` | local `onnx/model_quantized.onnx` from pinned `model.onnx` |
 | Optional Jina v5 Text Nano embedding (CC BY-NC 4.0, lab test pending) | `jinaai/jina-embeddings-v5-text-nano-retrieval` | `ac5d898c8d382b17167c33e5c8af644a3519b47d` | `onnx/model_quantized.onnx` + `onnx/model_quantized.onnx_data` |
+| EmbeddingGemma 2 embedding (Apache-2.0; default of newly created stores) | `google/embeddinggemma-2` base `914f7f89142e33e77833254d9c9b90c3cef7303b`; ONNX export `onnx-community/embeddinggemma-2-ONNX` | `daa72c51243991dfcaf9f9137d2c573d8f7790c0` | `onnx/model_quantized.onnx` + `onnx/model_quantized.onnx_data` (q4 and fp32 pinned as alternatives) |
 | Optional Jina v2 reranker (CC BY-NC 4.0) | `jinaai/jina-reranker-v2-base-multilingual` | `9cfeff2df7d40d1b78e75e5e9cebec92a99813c9` | `onnx/model_quantized.onnx` |
 | BGE reranker (recommended default, Apache 2.0) | `woxpas-ai/bge-reranker-v2-m3-onnx` | `c44ebc43de724ae8816668bb44d2e728e17faa18` | `onnx/model_quantized.onnx` |
 
@@ -295,9 +328,10 @@ Evidence:
   the `reply_dispatch` hook, and the named registrations) is present.
 - The full suite runs against 2026.9.1: 4176 assertions pass. The two failures
   are not compatibility defects. `feature-cron-plugin-runtime` asserts the
-  installed host is exactly the 2026.8.2 build baseline, which is the pin doing
-  its job, and `local-inference-dependency` fails identically on 2026.8.2 in the
-  same sandbox.
+  installed host is exactly the pinned development host (2026.8.2 at the time
+  of that run, `2026.8.33` today), which is the pin doing its job, and
+  `local-inference-dependency` fails identically on 2026.8.2 in the same
+  sandbox.
 - Host contract comparison, 2026.8.2 against 2026.9.1: the accepted plugin API
   range is unchanged at `>=2026.5.17`, all 42 hook names are identical, every
   registrar used here is present, the export map only gains

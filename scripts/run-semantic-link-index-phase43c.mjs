@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Operator tool: prints index results (may contain note titles/paths) on purpose; do not ship its output to shared logs.
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { safeAgentId } from "../lib/sql-safety.js";

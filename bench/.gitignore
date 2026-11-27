@@ -10,6 +10,14 @@ db-capture*/
 results/*probe*
 results/*smoke*
 
+# Ausnahme: Task 19's kuratierter, kleiner Ergebnis-Report für den Owner
+# (B6-Budgetentscheidung) — bewusst eingecheckt, kein Wegwerf-Probelauf.
+!results/2026-09-22-recall-budget-probe.md
+
+# Ausnahme: Task 14's Re-Run desselben Reports gegen RecallResult.timing
+# (recall.completed statt recallTimingSink) — ebenfalls bewusst eingecheckt.
+!results/2026-09-24-recall-budget-probe.md
+
 # Alles, was Produktiverinnerungen enthält — NIEMALS einchecken.
 # Die Stichproben der Emotions-Analyse tragen echte Texte aus den Stores
 # (medizinische Daten, persönliche Geschichte).
@@ -17,3 +25,18 @@ analysis/**/sample.jsonl
 analysis/**/results.jsonl
 analysis/**/snapshots/
 review-twins/
+
+# Eigene Schluessel des Messstands — NIEMALS einchecken. Das Muster deckt
+# auch Sicherungskopien wie .env.bench.bak-<datum> ab, die ebenfalls
+# Schluessel tragen.
+.env.bench*
+
+# Sicherungskopien aus der Arbeit am Messstand (run.mjs.bak-<datum> usw.)
+*.bak-*
+
+# Recall-Cache (lib/recall-cache.mjs): Anfragetexte, Treffer und
+# Anfragevektoren, rund 75 MB je Konfiguration. Wird bei Bedarf neu gefuellt.
+results/recall-cache/
+
+# Logdateien der Laeufe
+results/*.log

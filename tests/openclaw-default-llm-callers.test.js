@@ -12,6 +12,7 @@ import { extractEpisodesFromTurns } from "../lib/episodes.js";
 import { resolveMemoryRequestContext, userPoolKey, workspacePoolKey } from "../lib/memory-request-context.js";
 import { storeSharedMemory } from "../lib/shared-memory.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
+import { readRuntimeSources } from "./helpers/runtime-sources.js";
 
 const repoSource = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 const VECTOR_DIM = 384;
@@ -168,7 +169,9 @@ async function observeOfficialTurn(api, { agentId, workspaceDir, runId, prompt, 
 }
 
 test("generic chat callers declare owner-specific OpenClaw routes", () => {
-  const source = repoSource("index.js");
+  // Task 13b: the route descriptors are built in engine/create-engine.js
+  // (register()'s construction half, index.js before).
+  const source = readRuntimeSources().engine.createEngine;
   const routeOwners = [
     ["captureSummaryLlmCfg", "capture-summary"],
     ["recallQueryLlmCfg", "recall-query-summary"],
@@ -197,8 +200,11 @@ test("generic chat callers declare owner-specific OpenClaw routes", () => {
 });
 
 test("generic chat caller inventory contains no cross-feature route fallback", () => {
-  const sources = [
-    "index.js",
+  // index.js plus every engine and adapter module: step 9 part 1 moved the
+  // LLM wrappers and their callers (callLlm, summarizeForCapture,
+  // updateKnowledgeMd, …) out of index.js into engine/**.
+  const runtime = readRuntimeSources().all.join("\n");
+  const sources = runtime + "\n" + [
     "lib/jobs/daily-consolidation.js",
     "lib/jobs/memory-compaction.js",
     "lib/jobs/conflict-resolver.js",
@@ -222,7 +228,8 @@ test("generic chat caller inventory contains no cross-feature route fallback", (
 });
 
 test("the router seam prefers the call-local scheduler signal", () => {
-  const source = repoSource("index.js");
+  // callLlm moved to engine/runtime/llm-calls.js in step 9 part 1.
+  const source = readRuntimeSources().engine.llmCalls;
   assert.match(
     source,
     /signal:\s*llmCfg\?\.callContext\?\.signal\s*\?\?\s*llmCfg\?\.signal/,
@@ -505,7 +512,7 @@ test("episode enrichment receives only the episode owner descriptor", async () =
   assert.equal(calls[0].resultCacheContext.purpose, "episode-analysis");
 });
 
-test("tool and auto-recall query summaries carry global agent and scheduler context", async (t) => {
+test("tool query summary carries global agent context; auto-recall shortens instead (7.21.3)", async (t) => {
   const baseDbPath = makeTempDir("plur1bus-global-query-routes-");
   t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
   const originalEmbedPassage = LocalTransformersEmbeddingProvider.prototype.embedPassage;
@@ -555,19 +562,19 @@ test("tool and auto-recall query summaries carry global agent and scheduler cont
   await api._emit("before_prompt_build", autoTurn.event, autoTurn.ctx);
 
   const summaryCalls = runtimeCalls.filter((call) => call.purpose === "recall-query-summary");
-  assert.equal(summaryCalls.length, 2);
+  // 7.21.3: only memory_recall summarizes; the automatic recall embeds a
+  // head/tail excerpt (shortenAutoRecallQuery) and never waits for an LLM.
+  assert.equal(summaryCalls.length, 1);
   // The host resolves the agent itself; plugins must not send one.
   assert.equal(Object.hasOwn(summaryCalls[0], "agentId"), false);
-  assert.equal(Object.hasOwn(summaryCalls[1], "agentId"), false);
-  assert.equal(summaryCalls[1].signal instanceof AbortSignal, true);
   assert.equal(Object.hasOwn(summaryCalls[0], "model"), false);
-  assert.equal(Object.hasOwn(summaryCalls[1], "model"), false);
 });
 
 test("verified auto-recall tickets and /memory compose authorized shared pools", async (t) => {
-  // Shared pool reads route through fd-backed directory capabilities; platforms
-  // without a stat-verifiable fd alias (e.g. darwin, see lib/directory-capability.js)
-  // fail closed and disable shared reads, so the composed pools stay empty there.
+  // This case exercises shared pool reads over fd-backed directory
+  // capabilities (Linux). darwin and win32 read shared pools through
+  // verified-path mode since E4.2 (ADR 0001); covering them here is a
+  // follow-up, so the case still skips without fd aliases.
   if (!stableDirectoryCapabilitiesSupported()) {
     t.skip("stable directory capabilities are unavailable on this platform; shared pool reads are disabled");
     return;

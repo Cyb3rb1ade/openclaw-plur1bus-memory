@@ -572,3 +572,108 @@ test("internal emotion-refine still clears importance when tier 3 is disabled bu
   assert.equal(row.importanceStatus, "final");
   assert.equal(Number(row.importance), 0.8);
 });
+
+// Live 12.-27.11.2026 (Agent main): Claude 5.x verweigert einzelne
+// Erinnerungstexte per Sicherheitsfilter (stop_reason "refusal", null
+// Ausgabetoken). OpenClaw wirft dafür nicht, sondern löst die Completion mit
+// text "" und stopReason "error" auf. classifyEncoding sieht eine leere
+// Antwort (callFailed), und drei solcher Zeilen am Kopf der Warteschlange
+// lösten den Breaker in jedem Lauf aus — 959 Zeilen dahinter blieben
+// unbewertet. Eine Zeile, die schon in einem früheren Lauf gescheitert ist,
+// darf den Breaker nicht mehr auslösen und rückt in der Abfolge nach hinten.
+function refusalRuntime(agentId, marker, calls) {
+  return {
+    async complete(params) {
+      const refused = (params.messages || []).some(
+        (m) => typeof m.content === "string" && m.content.includes(marker),
+      );
+      calls.push(refused ? "refused" : "ok");
+      return refused
+        ? { text: "", stopReason: "error", provider: "anthropic", model: "fake", agentId, usage: {} }
+        : { text: ENCODING_RESPONSE, stopReason: "stop", provider: "fake", model: "fake", agentId, usage: {} };
+    },
+  };
+}
+
+async function runRefine(api, agentId, workspaceDir, runtimeLlm) {
+  const result = await findCommand(api).handler({
+    args: "internal emotion-refine",
+    agentId,
+    channel: "cron",
+    workspaceDir,
+    runtimeContext: { llm: runtimeLlm },
+  });
+  return JSON.parse(result.text.replace(/^[^{]*/, ""));
+}
+
+test("internal emotion-refine: refused rows at the queue head do not block it on the next run", async (t) => {
+  const { baseDbPath, workspaceDir } = withTempPaths(t);
+  const agentId = "emotion-refine-refusal-agent";
+  const MARKER = "REFUSAL_MARKER_TEXT";
+  const calls = [];
+  const runtimeLlm = refusalRuntime(agentId, MARKER, calls);
+  const pluginModule = await loadFreshPlugin();
+  const refusedIds = [
+    "77777777-7777-4777-8777-777777777001",
+    "77777777-7777-4777-8777-777777777002",
+    "77777777-7777-4777-8777-777777777003",
+  ];
+  for (const id of refusedIds) {
+    await seedPending(pluginModule, baseDbPath, agentId, { id, text: `${MARKER} verweigerter Text` });
+  }
+  const goodId = "77777777-7777-4777-8777-777777777004";
+  await seedPending(pluginModule, baseDbPath, agentId, { id: goodId, text: "Ein ganz normaler, gut bewertbarer Satz." });
+  const api = createApi(baseDbPath, { emotion: { t3: { enabled: true } } }, runtimeLlm);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
+
+  // Erster Lauf: eine frische leere Antwort ist von einer toten Route nicht
+  // zu unterscheiden — der Breaker greift wie bisher.
+  const first = await runRefine(api, agentId, workspaceDir, runtimeLlm);
+  assert.equal(first.failed, 3);
+  assert.equal(first.refined, 0);
+
+  // Zweiter Lauf: die drei bekannten Fehlzeilen warten ihre Frist ab, die
+  // gute Zeile dahinter wird bewertet.
+  calls.length = 0;
+  const second = await runRefine(api, agentId, workspaceDir, runtimeLlm);
+  assert.equal(second.refined, 1, "die Zeile hinter den verweigerten wird erreicht");
+  assert.equal(second.deferred, 3, "verweigerte Zeilen warten ihre Wiederholungsfrist ab");
+  assert.equal(second.failed, 0);
+  assert.deepEqual(calls, ["ok"], "keine erneuten Aufrufe für die verweigerten Zeilen innerhalb der Frist");
+
+  assert.equal((await readRow(pluginModule, baseDbPath, agentId, goodId)).emotionStatus, "final");
+  for (const id of refusedIds) {
+    const row = await readRow(pluginModule, baseDbPath, agentId, id);
+    assert.equal(row.emotionStatus, "pending_t3", "nie ein geratener Wert: die Zeile bleibt offen");
+  }
+});
+
+test("internal emotion-refine: a dead route still trips the breaker on later runs", async (t) => {
+  const { baseDbPath, workspaceDir } = withTempPaths(t);
+  const agentId = "emotion-refine-dead-route-runs-agent";
+  let callCount = 0;
+  const runtimeLlm = {
+    async complete() {
+      callCount++;
+      throw new Error("provider down");
+    },
+  };
+  const pluginModule = await loadFreshPlugin();
+  for (let i = 0; i < 8; i++) {
+    await seedPending(pluginModule, baseDbPath, agentId, {
+      id: `88888888-8888-4888-8888-88888888800${i}`,
+      text: `Zeile Nummer ${i}.`,
+    });
+  }
+  const api = createApi(baseDbPath, { emotion: { t3: { enabled: true } } }, runtimeLlm);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
+
+  const first = await runRefine(api, agentId, workspaceDir, runtimeLlm);
+  assert.equal(first.failed, 3);
+  callCount = 0;
+  const second = await runRefine(api, agentId, workspaceDir, runtimeLlm);
+  assert.equal(second.failed, 3, "frische Zeilen lösen den Breaker weiterhin aus");
+  assert.equal(second.deferred, 3);
+  assert.equal(callCount, 3, "eine tote Route kostet je Lauf höchstens drei Aufrufe");
+  assert.equal(second.refined, 0);
+});

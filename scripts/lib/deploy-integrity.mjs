@@ -1,6 +1,11 @@
-import { existsSync, readFileSync, copyFileSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync, readFileSync, copyFileSync, mkdirSync, unlinkSync, writeFileSync,
+  lstatSync, readdirSync, realpathSync, renameSync, chmodSync, statSync, constants as fsConstants,
+} from "node:fs";
 import { createHash } from "node:crypto";
+import { homedir } from "node:os";
 import { dirname, join, relative, resolve as resolvePath, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 
 /**
  * Canonical list of files that must be present and byte-identical in the
@@ -12,6 +17,7 @@ import { dirname, join, relative, resolve as resolvePath, sep } from "node:path"
  * add it here. Tests enforce this.
  */
 export const DEPLOY_FILES = [
+  "lib/providers/embedding-identity.js",
   "index.js",
   "openclaw.plugin.json",
   // package.json wurde bis 7.2.1 nur fuer die Versionspruefung GELESEN, aber
@@ -22,8 +28,97 @@ export const DEPLOY_FILES = [
   // Laufzeit nimmt zwar das Plugin-Manifest, aber zwei widersprechende
   // Versionsangaben im selben Verzeichnis fuehren jede Diagnose in die Irre.
   "package.json",
+  // ── adapter (OpenClaw-only, engine-extraction M1a) ──────────────────────────
+  "adapter/openclaw/register-turn-route.js",
+  "adapter/openclaw/register-maintenance-hook.js",
+  "adapter/openclaw/register-recall-hook.js",
+  "adapter/openclaw/register-recall-prewarm.js",
+  "adapter/openclaw/proved-turn-principals.js",
+  "adapter/openclaw/register-capture-hook.js",
+  "adapter/openclaw/register-commands.js",
+  "adapter/openclaw/register-prompt-supplements.js",
+  "adapter/openclaw/register-tools.js",
+  "adapter/openclaw/register-gateway.js",
+  "adapter/openclaw/register-cron.js",
+  "adapter/openclaw/register-voice-mode.js",
+  "adapter/openclaw/join-recall.js",
+  "adapter/openclaw/turn-principal.js",
+  "adapter/openclaw/host-probes.js",
+  "adapter/openclaw/plugin.js",
+  "adapter/openclaw/config-schema.js",
+  "adapter/openclaw/obsidian-review-cron-commands.js",
+  // ── engine (host-neutral, engine-extraction M1a) ────────────────────────────
+  "engine/admin/obsidian.js",
+  "engine/capture/capture-turn.js",
+  "engine/capture/light-dream-identity.js",
+  "engine/capture/post-turn-work.js",
+  "engine/capture/turn-replay-guard.js",
+  "engine/checkpoint/checkpoint-store.js",
+  "engine/commands/command-helpers.js",
+  "engine/commands/plur1bus-command.js",
+  "engine/config/engine-config-schema.js",
+  "engine/config/engine-config.schema.json",
+  "engine/config/live-config.js",
+  "engine/create-engine.js",
+  "engine/events.js",
+  "engine/identity/principal.js",
+  "engine/internals.js",
+  "engine/jobs/internal-job-bodies.js",
+  "engine/jobs/job-ledger.js",
+  "engine/jobs/job-registry.js",
+  "engine/jobs/job-specs.js",
+  "engine/jobs/rem-outcome.js",
+  "engine/jobs/run-state-migration.js",
+  "engine/knowledge/knowledge-pending.js",
+  "engine/lifecycle/close-resources.js",
+  "engine/memory-ops/context.js",
+  "engine/memory-ops/errors.js",
+  "engine/memory-ops/read.js",
+  "engine/memory-ops/write.js",
+  "engine/memory-ops/shared.js",
+  "engine/memory-ops/proposal-store.js",
+  "engine/memory-ops/proposals.js",
+  "engine/memory-ops/import-digest.js",
+  "engine/memory-ops/import-id.js",
+  "engine/memory-ops/import-ledger.js",
+  "engine/memory-ops/import-lock.js",
+  "engine/memory-ops/import.js",
+  "engine/memory-ops/rebind-ledger.js",
+  "engine/memory-ops/rebind.js",
+  "engine/memory-ops/unimport-ledger.js",
+  "engine/memory-ops/unimport.js",
+  "engine/memory-ops/link-ledger.js",
+  "engine/memory-ops/link.js",
+  "engine/stores/adopt.js",
+  "engine/providers/embedding-service.js",
+  "engine/providers/model-readiness.js",
+  "engine/providers/legacy-providers.js",
+  "engine/providers/runtime-reranker.js",
+  "engine/recall/assemble-prompt-context.js",
+  "engine/recall/minimal-maintenance.js",
+  "engine/recall/namespace-recall.js",
+  "engine/recall/neo-prelude.js",
+  "engine/recall/recall-params.js",
+  "engine/recall/recall-result.js",
+  "engine/recall/system-supplement.js",
+  "engine/recall/warm-recall-path.js",
+  "engine/runtime/constants.js",
+  "engine/runtime/debug-log.js",
+  "engine/runtime/env-config.js",
+  "engine/runtime/llm-calls.js",
+  "engine/runtime/semantic-discovery.js",
+  "engine/status/status-reporter.js",
+  "engine/store/agent-db-pool.js",
+  "engine/store/control-health.js",
+  "engine/store/fragment-compactor.js",
+  "engine/store/lancedb-loader.js",
+  "engine/store/memory-db.js",
+  "engine/store/schema-version.js",
+  "engine/tools/memory-tools.js",
   // ── core runtime ──────────────────────────────────────────────────────────
   "lib/neo-arch.js",
+  // 7.20.10: von neo-arch.js importiert (Selbst-Echo im Auto-Recall).
+  "lib/query-echo.js",
   "lib/neo-worker-runner.js",
   "lib/neo-worker-runtime.js",
   "lib/abort.js",
@@ -31,10 +126,23 @@ export const DEPLOY_FILES = [
   "lib/memory-merge-safety.js",
   "lib/contradiction-detector.js",
   "lib/recall-pipeline.js",
+  "lib/recall-keyword-fallback.js",
+  "lib/recall-turn-merge.js",
+  "lib/recall-context.js",
+  "lib/sensitivity.js",
+  "lib/sensitivity-queue.js",
+  // 7.20.10: von recall-pipeline.js importiert (Qualitätsgewicht im Auto-Recall).
+  "lib/recall-quality.js",
+  // 7.20.10: bereinigte Einbettung (Capture, memory_store, Auto-Recall-Anfrage).
+  "lib/embedding-text.js",
   "lib/runtime-scheduler.js",
   "lib/runtime-shutdown.js",
+  "lib/local-model-generation.js",
   "lib/recall-budget.js",
   "lib/with-timeout.js",
+  "lib/log-redact.js",
+  "lib/provider-error.js",
+  "lib/private-fs.js",
   "lib/safe-logging.js",
   "lib/llm-call.js",
   "lib/llm-failure.js",
@@ -119,6 +227,7 @@ export const DEPLOY_FILES = [
   "lib/memory-doctor.js",
   "lib/memory-dynamics.js",
   "lib/memory-fact-quality.js",
+  "lib/graph-edge-index.js",
   "lib/memory-graph.js",
   "lib/memory-merge-safety.js",
   "lib/memory-request-context.js",
@@ -137,6 +246,7 @@ export const DEPLOY_FILES = [
   "lib/score.js",
   "lib/semantic-input.js",
   "lib/semantic-lens-index.js",
+  "lib/semantic-lens-writer.js",
   "lib/sql-safety.js",
   "lib/text-utils.js",
   // ── setup/config contract + temporal (v6.7.0+) ─────────────────────────────
@@ -147,6 +257,7 @@ export const DEPLOY_FILES = [
   "lib/setup/feature-cron-plugin-runtime.js",
   "lib/setup/skill-workshop-plugin-runtime.js",
   "lib/setup/skill-workshop-dashboard.js",
+  "lib/feature-cron-specs.js",
   "lib/setup/feature-cron-plan.js",
   "lib/setup/feature-cron-bootstrap.js",
   "lib/setup/control-ui-plugin-runtime.js",
@@ -159,18 +270,23 @@ export const DEPLOY_FILES = [
   "lib/setup/obsidian-vault-plugin-runtime.js",
   "lib/setup/reembedding-plugin-runtime.js",
   "lib/setup/workspace-policy-plugin-runtime.js",
+  "lib/setup/harness-coexistence.js",
   "lib/temporal-context.js",
   "lib/temporal-filter.js",
   "lib/temporal-provenance.js",
   // ── multi-namespace + provider system (v6.7.0) ────────────────────────────
   "lib/multi-namespace-pool.js",
   "lib/directory-capability.js",
+  "lib/verified-path-directory.js",
   "lib/namespace-config.js",
   "lib/providers/config-normalize.js",
   "lib/providers/dimension-guard.js",
   "lib/providers/dimensions.js",
   "lib/providers/embedding-local-transformers.js",
+  "lib/native/sharp-stub.js",
+  "lib/native/sharp-unavailable.js",
   "lib/providers/local-transformers-shared-pool.js",
+  "lib/peercred.js",
   "lib/providers/scoped-embedding-ipc.js",
   "lib/providers/local-model-artifacts.js",
   "lib/providers/embedding-openai.js",
@@ -178,9 +294,11 @@ export const DEPLOY_FILES = [
   "lib/providers/factory.js",
   "lib/providers/legacy-provider-migration.js",
   "lib/providers/openclaw-memory-embedding-adapters.js",
+  "lib/providers/rerank-signal.js",
   "lib/providers/reranker-chained.js",
   "lib/providers/reranker-cohere.js",
   "lib/providers/reranker-local-transformers.js",
+  "lib/providers/reranker-remote.js",
   "lib/providers/secret-input.js",
   // ── local model preparation (v7.5.0) ────────────────────────────────────
   "lib/model-preparation/coordinator.js",
@@ -235,8 +353,8 @@ export const DEPLOY_FILES = [
   "lib/proactive-governor.js",
   "lib/dream-echo.js",
   "lib/afterthought.js",
-  "lib/afterthought-hooks.js",
-  "lib/afterthought-host.js",
+  "adapter/openclaw/afterthought-hooks.js",
+  "adapter/openclaw/afterthought-host.js",
   "lib/afterthought-reflection.js",
   "dist/control-ui/jev-key/index.js",
   "lib/internal-cron-reply.js",
@@ -251,6 +369,7 @@ export const DEPLOY_FILES = [
   "lib/dreaming/dreaming-status-provider.js",
   "lib/chat-model.js",
   "lib/conversation-compaction-model.js",
+  "lib/agent-temperament.js",
   "lib/episode-watermark.js",
   "lib/episodes.js",
   "lib/jobs/auto-accept-stale-criticals.js",
@@ -360,6 +479,18 @@ export const DEPLOY_FILES = [
   "lib/obsidian/weekly-synthesis.js",
   "lib/pattern-detector-embedding.js",
   "lib/pattern-detector.js",
+  "lib/platform.js",
+  "lib/windows-acl-parse.js",
+  "lib/read-directory-acl.vbs",
+  // Not yet imported by index.js (Task 6, PR-02a) — listed early so Task 7's
+  // index.js rewrite, which does import it, does not trip the DEPLOY_FILES
+  // coverage tests.
+  "lib/host-services.js",
+  "lib/host-paths.js",
+  "lib/host-network.js",
+  "lib/host-sdk-loader.js",
+  "lib/plugin-meta.js",
+  "lib/feature-crons-hint.js",
   "lib/proactive-nudge.js",
   "lib/query-refiner.js",
   "lib/temporal-parser.js",
@@ -380,6 +511,11 @@ export const DEPLOY_FILES = [
   "scripts/migrate-neo-workspace-generations.mjs",
   "scripts/provider-wizard.mjs",
   "scripts/reindex-provider.mjs",
+  // 7.20.10: Bestand bereinigt neu einbetten (embeddingTextMode raw → clean-v1).
+  "scripts/reembed-clean.mjs",
+  "scripts/sensitivity-backfill.mjs",
+  // 7.21.5: origin.sessionKey fuer alte Neo-Kandidaten (Host-DBs nur lesend).
+  "scripts/neo-origin-backfill.mjs",
   "scripts/repair-dreaming-cron.mjs",
   "scripts/repair-installed-plugin.mjs",
   "scripts/backfill-manual-core-markers.mjs",
@@ -387,16 +523,28 @@ export const DEPLOY_FILES = [
   "scripts/importance-metrics.mjs",
   "scripts/dedupe-memory-ids.mjs",
   "scripts/importance-backfill.mjs",
+  "scripts/lint-engine-imports.mjs",
+  "scripts/lint-no-api-outside-adapter.mjs",
   "scripts/repair-tombstones.mjs",
   "scripts/reapply-tombstones.mjs",
   "scripts/run-graph-links-once.mjs",
   "scripts/run-semantic-discover-once.mjs",
   "scripts/run-semantic-link-index-phase43c.mjs",
+  "scripts/typecheck.mjs",
+  "scripts/gen-openclaw-config-schema.mjs",
   "scripts/verify-plugin-deploy.mjs",
   "scripts/verify-workspace-writer.mjs",
   "scripts/lib/deploy-integrity.mjs",
   "scripts/lib/installer-config.mjs",
   "scripts/lib/patch-agents-memory-instructions.mjs",
+  // HM1 Task 3: store snapshot step (installer update/adoption path).
+  "scripts/snapshot-store.mjs",
+  "lib/snapshot/store-snapshot.js",
+  // HM1 Task 2: `openclaw plur1bus selftest`.
+  "lib/setup/selftest-plugin-runtime.js",
+  "lib/selftest/addon-probes.js",
+  "lib/selftest/run-selftest.js",
+  "lib/selftest/selftest-host.js",
 ];
 
 const REEXPORT_LINE_RE = /^\s*export\s+(?:\*|\{[^}]*\})\s*(?:as\s+[A-Za-z0-9_$]+\s*)?from\s*["']([^"']+)["']\s*;?\s*$/;
@@ -712,6 +860,298 @@ export function validateDeployment({
   return { ok: preflight.ok && results.every((r) => r.ok), preflight, results };
 }
 
+// ── Packaged auxiliary files (advisory tier) ────────────────────────────────
+//
+// DEPLOY_FILES is the strict, hand-maintained code contract: a mismatch fails
+// the check. Everything else the package ships (CHANGELOG.md, README.md, the
+// docs listed in package.json `files`, the emotional-state-injector extension,
+// code that index.js does not import) was never compared at all, so a
+// v7.20.2 install kept October-era docs and lacked four shipped runbooks/audits
+// while every code file matched the tag. The auxiliary tier closes that gap
+// without widening what can break a gateway start: it is derived from the
+// source checkout's own package.json `files` (so it can never drift from what
+// npm ships), refreshed best-effort with an archive before each overwrite,
+// never deletes anything, and never changes the check's exit status.
+
+const GLOB_CHARS_RE = /[*?[\]{}!]/;
+// npm-packlist excludes these even inside a directory listed in `files`.
+const NPM_IGNORED_DIRS = new Set([".git", ".svn", ".hg", "CVS", "node_modules"]);
+const NPM_IGNORED_FILE_RE = /^(?:\.DS_Store|\.npmrc|\.npmignore|\.gitignore|npm-debug\.log|\.lock-wscript|\.wafpickle-\d+|\._.*|\..*\.swp|.*\.orig)$/;
+// npm always packs these from the package root, `files` or not.
+const NPM_ALWAYS_INCLUDED_RE = /^(?:package\.json|readme(?:\.[^/]*)?|licen[cs]e(?:\.[^/]*)?)$/i;
+
+function isInsideDir(root, candidate) {
+  return candidate === root || candidate.startsWith(`${root}${sep}`);
+}
+
+function lstatOrNull(path) {
+  try {
+    return lstatSync(path);
+  } catch {
+    return null;
+  }
+}
+
+function walkPackagedDir(root, relDir, out) {
+  for (const entry of readdirSync(join(root, relDir), { withFileTypes: true })) {
+    const rel = `${relDir}/${entry.name}`;
+    if (entry.isDirectory()) {
+      if (!NPM_IGNORED_DIRS.has(entry.name)) walkPackagedDir(root, rel, out);
+    } else if (entry.isFile() && !NPM_IGNORED_FILE_RE.test(entry.name)) {
+      out.add(rel);
+    }
+  }
+}
+
+/**
+ * Lists the files npm packs for the package at repoDir, derived from its
+ * package.json `files` plus npm's always-included root files and `main`.
+ * Supports the entry forms this package uses (plain files and directories);
+ * glob entries and entries escaping the package are reported, not guessed.
+ * Never throws.
+ *
+ * @param {string} repoDir
+ * @returns {{files: string[], errors: string[]}} sorted repo-relative POSIX paths
+ */
+export function listPackagedFiles(repoDir) {
+  const root = resolvePath(repoDir);
+  const errors = [];
+  let pkg;
+  try {
+    pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  } catch {
+    return { files: [], errors: ["package-json-unreadable"] };
+  }
+  if (!Array.isArray(pkg?.files)) {
+    return { files: [], errors: ["package-files-missing"] };
+  }
+
+  const out = new Set();
+  const entries = [...pkg.files];
+  if (typeof pkg.main === "string") entries.push(pkg.main);
+  for (const rawEntry of entries) {
+    if (typeof rawEntry !== "string" || rawEntry.trim() === "") {
+      errors.push("unsupported-files-entry");
+      continue;
+    }
+    const entry = rawEntry.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
+    if (GLOB_CHARS_RE.test(entry)) {
+      errors.push(`unsupported-files-entry:${rawEntry}`);
+      continue;
+    }
+    const absolute = resolvePath(root, entry);
+    if (absolute === root || !isInsideDir(root, absolute)) {
+      errors.push(`files-entry-escapes:${rawEntry}`);
+      continue;
+    }
+    const stat = lstatOrNull(absolute);
+    if (!stat) continue; // npm silently skips entries that do not exist
+    const rel = relative(root, absolute).split(sep).join("/");
+    try {
+      if (stat.isDirectory()) walkPackagedDir(root, rel, out);
+      else if (stat.isFile()) out.add(rel);
+    } catch {
+      errors.push(`files-entry-unreadable:${rawEntry}`);
+    }
+  }
+  try {
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (entry.isFile() && NPM_ALWAYS_INCLUDED_RE.test(entry.name)) out.add(entry.name);
+    }
+  } catch {
+    errors.push("package-root-unreadable");
+  }
+  return { files: [...out].sort(), errors };
+}
+
+/**
+ * Packaged files outside the strict DEPLOY_FILES manifest (docs, changelog,
+ * README, auxiliary extensions, code index.js never imports).
+ *
+ * @param {string} repoDir
+ * @param {string[]} [strictFiles]
+ * @returns {{files: string[], errors: string[]}}
+ */
+export function listAuxiliaryPackagedFiles(repoDir, strictFiles = DEPLOY_FILES) {
+  const strict = new Set(strictFiles);
+  const packaged = listPackagedFiles(repoDir);
+  return { files: packaged.files.filter((file) => !strict.has(file)), errors: packaged.errors };
+}
+
+/**
+ * Archive directory for one repair run: ~/.openclaw-backups/plur1bus-repair-<ts>.
+ * Only computes the path; callers create it when they first archive a file.
+ *
+ * @param {{home?: string, now?: Date}} [options]
+ * @returns {string}
+ */
+export function repairBackupRoot({ home = homedir(), now = new Date() } = {}) {
+  // Second resolution (e.g. 20261121T150912Z): runs in the same minute used
+  // to share one directory under the old minute-resolution name.
+  const ts = now.toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+  return join(home, ".openclaw-backups", `plur1bus-repair-${ts}`);
+}
+
+function nearestExistingRealpath(path) {
+  let current = path;
+  while (!lstatOrNull(current)) {
+    const parent = dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+  return realpathSync(current);
+}
+
+function archiveDeployedFile(deployPath, backupDir, file) {
+  const backupRoot = resolvePath(backupDir);
+  const target = resolvePath(backupRoot, file);
+  if (!isInsideDir(backupRoot, target) || target === backupRoot) throw new Error("backup path escapes");
+  mkdirSync(dirname(target), { recursive: true });
+  try {
+    copyFileSync(deployPath, target, fsConstants.COPYFILE_EXCL);
+  } catch (err) {
+    if (err?.code !== "EEXIST") throw err;
+    // Already archived in this run (e.g. by backupDeployDir): fine only if it
+    // is the same content; otherwise this overwrite would lose a version.
+    if (sha256(target) !== sha256(deployPath)) throw new Error("backup slot holds different content");
+  }
+  return target;
+}
+
+function writeFileAtomically(deployPath, content, mode) {
+  mkdirSync(dirname(deployPath), { recursive: true });
+  const tmpPath = `${deployPath}.plur1bus-refresh-${process.pid}-${Date.now()}`;
+  try {
+    writeFileSync(tmpPath, content, { flag: "wx", mode });
+    chmodSync(tmpPath, mode);
+    renameSync(tmpPath, deployPath);
+  } catch (err) {
+    try {
+      if (lstatOrNull(tmpPath)) unlinkSync(tmpPath);
+    } catch (cleanupErr) {
+      err.message = `${err.message}; temp cleanup failed: ${cleanupErr.message}`;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Compares packaged auxiliary files between the source checkout and the
+ * deployed extension and, with refresh=true, restores stale or missing ones.
+ * Advisory: never throws, never deletes, never touches a path outside the
+ * given file list or outside deployDir, never writes through a symlink, and
+ * archives every existing deployed file into backupDir before overwriting it
+ * (no backupDir → stale files are reported, not overwritten).
+ *
+ * @param {{deployDir: string, repoDir: string, files: string[], refresh?: boolean, dryRun?: boolean, backupDir?: string|null}} options
+ * @returns {{ok: boolean, results: Array<{file: string, status: "current"|"stale"|"missing"|"refreshed"|"skipped"|"failed", reason?: string, backupPath?: string}>}}
+ */
+export function syncAuxiliaryFiles({
+  deployDir,
+  repoDir,
+  files,
+  refresh = false,
+  dryRun = false,
+  backupDir = null,
+}) {
+  const deployBase = resolvePath(deployDir);
+  const repoBase = resolvePath(repoDir);
+  let deployReal = null;
+  try {
+    deployReal = realpathSync(deployBase);
+  } catch {
+    deployReal = null;
+  }
+  const mayWrite = refresh && !dryRun;
+
+  const results = files.map((file) => {
+    try {
+      if (!deployReal) return { file, status: "skipped", reason: "deploy-dir-missing" };
+      const deployPath = resolvePath(deployBase, file);
+      const repoPath = resolvePath(repoBase, file);
+      if (!isInsideDir(deployBase, deployPath) || !isInsideDir(repoBase, repoPath)) {
+        return { file, status: "skipped", reason: "path-escapes" };
+      }
+
+      const sourceStat = lstatOrNull(repoPath);
+      if (!sourceStat) return { file, status: "skipped", reason: "missing-repo-source" };
+      if (!sourceStat.isFile()) return { file, status: "skipped", reason: "repo-source-not-regular-file" };
+
+      const deployStat = lstatOrNull(deployPath);
+      if (deployStat && !deployStat.isFile()) {
+        // Symlink or directory placed by an operator: never write through it.
+        return { file, status: "skipped", reason: "deploy-path-not-regular-file" };
+      }
+      const anchor = nearestExistingRealpath(deployPath);
+      if (!anchor || !isInsideDir(deployReal, anchor)) {
+        return { file, status: "skipped", reason: "deploy-path-escapes" };
+      }
+
+      const content = readFileSync(repoPath);
+      const digest = sha256Content(content);
+      if (deployStat && sha256(deployPath) === digest) return { file, status: "current" };
+
+      const drift = deployStat ? "stale" : "missing";
+      if (!refresh) return { file, status: drift };
+      if (dryRun) return { file, status: drift, reason: "dry-run" };
+
+      let backupPath;
+      if (deployStat) {
+        if (!backupDir) return { file, status: drift, reason: "no-backup-dir" };
+        try {
+          backupPath = archiveDeployedFile(deployPath, backupDir, file);
+        } catch {
+          return { file, status: drift, reason: "backup-failed" };
+        }
+      }
+
+      writeFileAtomically(deployPath, content, statSync(repoPath).mode & 0o777);
+      if (sha256(deployPath) !== digest) {
+        return { file, status: "failed", reason: "refresh-verify-mismatch", ...(backupPath ? { backupPath } : {}) };
+      }
+      return { file, status: "refreshed", reason: drift, ...(backupPath ? { backupPath } : {}) };
+    } catch {
+      return { file, status: "failed", reason: mayWrite ? "refresh-write-failed" : "compare-failed" };
+    }
+  });
+
+  return {
+    ok: results.every((r) => r.status === "current" || r.status === "refreshed"),
+    results,
+  };
+}
+
+/**
+ * Human-readable lines for a syncAuxiliaryFiles report: one line per file
+ * that is not current, then a summary. Shared by the verify and repair CLIs.
+ *
+ * @param {{results: Array<{file: string, status: string, reason?: string}>}} report
+ * @param {string[]} [listErrors]
+ * @returns {string[]}
+ */
+export function describeAuxiliaryReport(report, listErrors = []) {
+  const labels = {
+    stale: "STALE",
+    missing: "MISSING",
+    refreshed: "FIXED",
+    skipped: "SKIP",
+    failed: "WARN",
+  };
+  const lines = [];
+  for (const note of listErrors) lines.push(`NOTE    package file list: ${note}`);
+  for (const r of report.results) {
+    if (r.status === "current") continue;
+    const label = (labels[r.status] ?? r.status.toUpperCase()).padEnd(7);
+    lines.push(`${label} ${r.file}${r.reason ? `  (${r.reason})` : ""}`);
+  }
+  const current = report.results.filter((r) => r.status === "current").length;
+  const refreshed = report.results.filter((r) => r.status === "refreshed").length;
+  const total = report.results.length;
+  lines.push(`${current}/${total} packaged files current${refreshed ? `, ${refreshed} refreshed` : ""}`
+    + " (advisory: never fails the check)");
+  return lines;
+}
+
 /**
  * Imports each deployed file for real and checks that the expected named
  * exports exist. This is what actually caught the neo-arch.js incident:
@@ -724,7 +1164,10 @@ export async function smokeTestExports(expectations) {
     let mod;
     let importError = false;
     try {
-      mod = await import(`${filePath}?smokeTest=${Date.now()}-${Math.random()}`);
+      // A file: URL, not the raw path: a Windows path is no ESM specifier.
+      const url = pathToFileURL(filePath);
+      url.search = `smokeTest=${Date.now()}-${Math.random()}`;
+      mod = await import(url.href);
     } catch {
       importError = true;
     }

@@ -22,8 +22,9 @@ import { makeTempDir } from "./helpers/temp-dir.js";
 
 const VECTOR_DIM = 3;
 
-// Capability-based routing is disabled on platforms without stable directory
-// capabilities (e.g. darwin); tests that exercise it are skipped there.
+// These tests exercise fd-backed DirectoryCapability routing, which exists
+// only with stable descriptor aliases (Linux); they skip elsewhere. Shared
+// memory on darwin/win32 uses VerifiedPathDirectory instead (ADR 0001).
 const DIRECTORY_CAPABILITY_SKIP = stableDirectoryCapabilitiesSupported()
   ? false
   : "stable directory capabilities are unavailable on this platform";

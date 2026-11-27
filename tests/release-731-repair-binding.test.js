@@ -7,7 +7,7 @@
  */
 
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawnSyncBounded } from "./helpers/run-sync.js";
 import {
   existsSync,
   mkdirSync,
@@ -30,7 +30,7 @@ const AGENT_B = "release731-agent-b";
 const MEMORY_ID = "00000000-0000-4000-8000-000000000731";
 
 function runRepair(args) {
-  const result = spawnSync(process.execPath, [REPAIR_SCRIPT, ...args], {
+  const result = spawnSyncBounded(process.execPath, [REPAIR_SCRIPT, ...args], {
     encoding: "utf8",
     env: process.env,
     timeout: 60_000,

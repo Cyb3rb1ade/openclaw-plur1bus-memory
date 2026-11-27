@@ -14,6 +14,7 @@ import { createNeoStore } from "../lib/neo-arch.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 import { CohereRerankerProvider } from "../lib/providers/reranker-cohere.js";
 import { TimeoutError } from "../lib/with-timeout.js";
+import { raceAbort } from "../lib/abort.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
 const VECTOR_DIM = 384;
@@ -499,6 +500,87 @@ describe("multi-namespace registered recall", namespaceRoutingOptions, () => {
     await shutdownPromise;
   });
 
+  it("rejects a multi-namespace read abort and retains leases through both raw settlements (fix round 2)", async (t) => {
+    const baseDbPath = makeTempDir("plur1bus-namespace-abort-");
+    const workspaceDir = makeTempDir("plur1bus-namespace-abort-workspace-");
+    const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
+    const originalInit = MemoryDB.prototype.init;
+    const rawSettlements = [deferred(), deferred()];
+    const sharedController = new AbortController();
+    LocalTransformersEmbeddingProvider.prototype.embedQuery = async () => vector();
+    MemoryDB.prototype.init = async function initAbortFixture() {
+      const legacyIndex = this.dbPath.endsWith(join("legacy-a", AGENT_ID))
+        ? 0
+        : (this.dbPath.endsWith(join("legacy-b", AGENT_ID)) ? 1 : -1);
+      this.table = {
+        vectorSearch() {
+          return {
+            limit() { return this; },
+            async toArray() {
+              if (legacyIndex === -1) {
+                return [{
+                  id: "66666666-6666-4666-8666-666666666666",
+                  text: "Active namespace result must never escape an aborted sibling.",
+                  summary: "active result",
+                  category: "fact",
+                  storedBy: AGENT_ID,
+                  workspaceKey: "namespace-workspace",
+                  _distance: 0,
+                }];
+              }
+              // Mirrors runVectorSearchWithValidTimeFallback wrapping the raw
+              // toArray() promise in raceAbort against one caller signal
+              // shared by every namespace's read (fix round 2: each call now
+              // gets its own fresh error and settlement — lib/abort.js).
+              return raceAbort(
+                rawSettlements[legacyIndex].promise,
+                sharedController.signal,
+                `legacy namespace ${legacyIndex + 1} vector read aborted`,
+              );
+            },
+          };
+        },
+      };
+      return true;
+    };
+    t.after(() => {
+      for (const settlement of rawSettlements) settlement.resolve();
+      LocalTransformersEmbeddingProvider.prototype.embedQuery = originalEmbedQuery;
+      MemoryDB.prototype.init = originalInit;
+      rmSync(baseDbPath, { recursive: true, force: true });
+      rmSync(workspaceDir, { recursive: true, force: true });
+    });
+
+    const api = makeApi(baseDbPath);
+    api.pluginConfig.autoRecall = false;
+    api.pluginConfig.recall.canonicalFirst = false;
+    api.pluginConfig.namespaces.legacyReadOnlyNamespaces = ["legacy-a", "legacy-b"];
+    plugin.register(api, { importRouting: async () => routingCapability });
+    const recall = api.toolFactory({
+      agentId: AGENT_ID,
+      workspaceDir,
+      workspaceKey: "namespace-workspace",
+      userId: "namespace-owner",
+    }).find((tool) => tool.name === "memory_recall");
+
+    sharedController.abort();
+    const result = await recall.execute("namespace-read-abort", { query: "abort isolation" });
+    assert.match(result.content[0].text, /memory recall failed.*legacy namespace 1 vector read aborted/i);
+    assert.doesNotMatch(result.content[0].text, /66666666-6666-4666-8666-666666666666/);
+
+    let shutdownSettled = false;
+    const shutdownPromise = Promise.all(
+      (api.handlers.get("gateway_stop") || []).map((stop) => stop()),
+    ).then(() => { shutdownSettled = true; });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(shutdownSettled, false, "shutdown waits for the aborted raw namespace read");
+    rawSettlements[0].resolve();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(shutdownSettled, false, "shutdown also waits for the second aborted namespace read, not just the first (the fix round 2 bug: a shared error object made the second's settlement invisible)");
+    rawSettlements[1].resolve();
+    await shutdownPromise;
+  });
+
   it("keeps strict read semantics after an absent configured legacy namespace", async (t) => {
     const baseDbPath = makeTempDir("plur1bus-namespace-missing-legacy-timeout-");
     const workspaceDir = makeTempDir("plur1bus-namespace-missing-legacy-workspace-");
@@ -609,22 +691,26 @@ describe("multi-namespace registered recall", namespaceRoutingOptions, () => {
     for (const stop of api.handlers.get("gateway_stop") || []) await stop();
   });
 
-  it("rejects a temporal anchor namespace timeout without partial output", async (t) => {
+  it("7.20.8: an anchor phrase triggers no second (anchor) read in any namespace", async (t) => {
+    // Bis 7.20.7 löste „after the X“ einen zweiten, ACL-losen vectorSearch pro
+    // Namensraum aus; ein Timeout dort ließ den ganzen Recall scheitern. Der
+    // Plugin-Pfad nutzt jetzt den intent-Modus: kein Anker-Lookup mehr.
     const baseDbPath = makeTempDir("plur1bus-namespace-anchor-timeout-");
     const workspaceDir = makeTempDir("plur1bus-namespace-anchor-workspace-");
     const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
     const originalEmbedPassage = LocalTransformersEmbeddingProvider.prototype.embedPassage;
     const originalInit = MemoryDB.prototype.init;
     const rawSettlement = deferred();
+    const vectorSearchCalls = { active: 0, legacy: 0 };
     LocalTransformersEmbeddingProvider.prototype.embedQuery = async () => vector();
     LocalTransformersEmbeddingProvider.prototype.embedPassage = async () => vector();
     MemoryDB.prototype.init = async function initAnchorTimeoutFixture() {
       const legacy = this.dbPath.endsWith(join("legacy", AGENT_ID));
-      let vectorSearchCalls = 0;
+      const key = legacy ? "legacy" : "active";
       this.table = {
         vectorSearch() {
-          vectorSearchCalls++;
-          const call = vectorSearchCalls;
+          vectorSearchCalls[key]++;
+          const call = vectorSearchCalls[key];
           return {
             limit() { return this; },
             async toArray() {
@@ -675,18 +761,13 @@ describe("multi-namespace registered recall", namespaceRoutingOptions, () => {
     const result = await recall.execute("namespace-anchor-timeout", {
       query: "what happened after the Docker setup",
     });
-    assert.match(result.content[0].text, /memory recall failed.*legacy temporal anchor read timed out/i);
-    assert.doesNotMatch(result.content[0].text, /66666666-6666-4666-8666-666666666666/);
-    assert.doesNotMatch(result.content[0].text, /77777777-7777-4777-8777-777777777777/);
-    assert.equal(readRetrievalLedger(baseDbPath).length, 0, "anchor failure emits no partial ledger");
+    assert.doesNotMatch(result.content[0].text, /memory recall failed/i);
+    assert.doesNotMatch(result.content[0].text, /anchor read timed out/i);
+    assert.match(result.content[0].text, /Active temporal candidate|active temporal/);
+    assert.match(result.content[0].text, /Legacy temporal candidate|legacy temporal/);
+    assert.deepEqual(vectorSearchCalls, { active: 1, legacy: 1 }, "only the primary vector read per namespace");
+    assert.equal(readRetrievalLedger(baseDbPath).length, 1, "a successful merged recall writes one ledger entry");
 
-    let shutdownSettled = false;
-    const shutdownPromise = Promise.all(
-      (api.handlers.get("gateway_stop") || []).map((stop) => stop()),
-    ).then(() => { shutdownSettled = true; });
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(shutdownSettled, false, "anchor timeout retains the namespace lease");
-    rawSettlement.resolve();
-    await shutdownPromise;
+    for (const stop of api.handlers.get("gateway_stop") || []) await stop();
   });
 });

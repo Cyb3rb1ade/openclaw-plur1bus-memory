@@ -214,7 +214,8 @@ describe("buildTemporalProvenance", () => {
     assert.strictEqual(tp.createdAt, "2026-06-16T12:00:00.000Z");
     assert.strictEqual(tp.freshness, "stale");
     assert.strictEqual(tp.isOperational, true);
-    assert.strictEqual(tp.operationalRisk, "high");
+    // 7.21.1: "cron" alone is no longer a high-risk keyword (no change verb).
+    assert.strictEqual(tp.operationalRisk, "medium");
     assert.strictEqual(tp.requiresLiveVerification, true);
     assert.ok(tp.reasons.length > 0);
   });

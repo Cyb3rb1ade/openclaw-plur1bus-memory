@@ -1,6 +1,6 @@
 {
   "name": "@cyb3rb1ade/plur1bus-memory",
-  "version": "7.20.2-hermes.2",
+  "version": "7.21.8",
   "description": "Persistent, per-agent memory for OpenClaw. Turns every conversation into lasting knowledge — recalls, learns, and grows with your agent.",
   "type": "module",
   "main": "./index.js",
@@ -19,19 +19,18 @@
     }
   },
   "files": [
-    "plur1bus-hermes/",
-    "hermes-dashboard/",
-    "plur1bus-controls/",
-    "mtplx-embed/",
-    "hermes-model-providers/",
     "index.js",
     "dist/control-ui/jev-key/",
     "lib/",
+    "engine/",
+    "adapter/",
     "scripts/",
+    "types/",
     "docs/audits/",
     "docs/runbooks/",
     "docs/configuration.md",
     "docs/compatibility-openclaw.md",
+    "docs/engine-api.md",
     "docs/recall-architecture.md",
     "docs/migration-v6.md",
     "docs/release-checklist.md",
@@ -42,13 +41,12 @@
     "README.md",
     "LICENSE"
   ],
-  "publishConfig": {
-    "registry": "https://npm.pkg.github.com",
-    "tag": "hermes"
-  },
   "scripts": {
-    "lint": "node --check index.js && find lib tests test -name '*.js' -exec node --check {} + && find scripts -name '*.mjs' -exec node --check {} +",
-    "test": "node --check index.js && node --check lib/memory-dynamics.js && node --check lib/safe-update.js && node --check lib/memory-history.js && node --test --test-concurrency=1 tests/*.test.js test/*.test.js",
+    "lint": "node --check index.js && find lib engine adapter tests test -name '*.js' -exec node --check {} + && find scripts tools engine adapter -name '*.mjs' -exec node --check {} + && node scripts/typecheck.mjs && node scripts/lint-no-api-outside-adapter.mjs && node scripts/lint-engine-imports.mjs",
+    "typecheck": "node scripts/typecheck.mjs",
+    "gen:config-schema": "node scripts/gen-openclaw-config-schema.mjs",
+    "test": "node --check index.js && node --check lib/memory-dynamics.js && node --check lib/safe-update.js && node --check lib/memory-history.js && node --test --test-concurrency=1 --test-timeout=120000 tests/*.test.js test/*.test.js",
+    "test:cross": "node --check index.js && node --check lib/memory-dynamics.js && node --check lib/safe-update.js && node --check lib/memory-history.js && node --test --test-concurrency=1 --test-timeout=600000 tests/*.test.js test/*.test.js",
     "test:coverage": "c8 --include='index.js' --include='lib/**/*.js' --reporter=text --reporter=html --check-coverage=false node --test --test-concurrency=1 tests/*.test.js test/*.test.js",
     "repair": "node scripts/repair-installed-plugin.mjs",
     "repair:dry-run": "node scripts/repair-installed-plugin.mjs --dry-run",
@@ -83,16 +81,21 @@
   },
   "devDependencies": {
     "c8": "^11.0.0",
-    "openclaw": "2026.8.2"
+    "openclaw": "2026.8.33"
   },
   "overrides": {
     "@huggingface/transformers": {
       "sharp": "0.35.5",
       "onnxruntime-node": {
-        "adm-zip": "0.6.1"
+        "adm-zip": "0.6.1",
+        "global-agent": "4.1.3"
       },
       "onnxruntime-web": "1.26.0"
     },
+    "brace-expansion": "5.0.12",
+    "fast-uri": "3.1.8",
+    "hono": "4.13.7",
+    "ip-address": "10.7.1",
     "zod": "4.6.7"
   }
 }

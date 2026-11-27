@@ -18,6 +18,7 @@ import assert from "node:assert";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { STORE_SCAN_LIMIT } from "../lib/store-limits.js";
+import { fileURLToPath } from "node:url";
 
 describe("Ladegrenze der Wartungsskripte", () => {
   it("liegt weit ueber jeder erreichbaren Zeilenzahl", () => {
@@ -27,7 +28,7 @@ describe("Ladegrenze der Wartungsskripte", () => {
   });
 
   it("wird von jedem Skript benutzt, das den ganzen Store laedt", () => {
-    const dir = new URL("../scripts/", import.meta.url).pathname;
+    const dir = fileURLToPath(new URL("../scripts/", import.meta.url));
     const verdaechtig = [];
     for (const datei of readdirSync(dir).filter((f) => f.endsWith(".mjs"))) {
       const text = readFileSync(join(dir, datei), "utf8");

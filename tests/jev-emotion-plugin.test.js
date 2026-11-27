@@ -71,7 +71,9 @@ test('real recall path cannot prevent independent state when DB open fails', asy
   assert.equal(f.requests.length, 1);
   assert.ok(results.some(result => result?.prependContext?.includes('<jev-emotion>')));
   assert.ok(existsSync(join(f.root, '.emotional-state.json')));
-  assert.match(JSON.stringify(f.logs), /recall (?:scheduler )?failed.*(directory|ENOTDIR|EEXIST|Path traversal blocked)/i);
+  // main logs the error class/code only (describeError); the store error differs per platform
+  // (ENOTDIR on Linux, LanceDB GenericFailure on macOS/Windows).
+  assert.match(JSON.stringify(f.logs), /recall (?:scheduler )?failed for agent=main/i);
 });
 
 test('standalone injector suppresses active enabled agent but retains shadow/other agents', async t => {
@@ -94,10 +96,12 @@ test('actual legacy block skips inference, fallback and file writer in active mo
   const { createSharedJevEmotionalPool, createJevEmotionRuntime } = await import('../lib/jevEmotionRuntime.js');
   const { resolveInside } = await import('../lib/sql-safety.js');
   const { throwIfAborted } = await import('../lib/abort.js');
-  const source = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
-  const begin = source.indexOf('          const emoState = emotionalPool.get(agentId);', source.indexOf('api.on("before_prompt_build"'));
-  const end = source.indexOf('          // v5.4.0 — Graph-Edges', begin);
-  const block = compileFunction(`return (async () => { ${source.slice(begin, end)} })();`, ['emotionalPool', 'agentId', 'jevEmotionRuntime', 'ctx', 'event', 'voiceMessages', 'signal', 'inferEmotionalValenceAsync', 'throwIfAborted', 'dbg', 'writeFileSync', 'join', 'formatMoodFile', 'extractMessageText', 'resolveInside']);
+  // main: the block lives in the engine's prompt assembler, with `hookCtx`.
+  const source = readFileSync(new URL('../engine/recall/assemble-prompt-context.js', import.meta.url), 'utf8');
+  const begin = source.indexOf('      const emoState = emotionalPool.get(agentId);');
+  const end = source.indexOf('      // v5.4.0 — Graph-Edges', begin);
+  assert.ok(begin > 0 && end > begin, 'legacy mood block found');
+  const block = compileFunction(`return (async () => { ${source.slice(begin, end)} })();`, ['emotionalPool', 'agentId', 'jevEmotionRuntime', 'hookCtx', 'event', 'voiceMessages', 'signal', 'inferEmotionalValenceAsync', 'throwIfAborted', 'dbg', 'writeFileSync', 'join', 'formatMoodFile', 'extractMessageText', 'resolveInside']);
   const root = makeTempDir('jev-legacy-');
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const config = { baseDbPath: root, emotion: { jev: { enabled: true, mode: 'active', agents: { main: true } } } };

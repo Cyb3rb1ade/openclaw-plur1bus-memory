@@ -2,6 +2,20 @@
 
 This document supplements `README.md` with build steps, conventions, and agent-focused guidance for the PLUR1BUS memory plugin.
 
+## Releases and deploy
+
+- Since 7.21.0 there is one line: `main`. Work happens on branches from
+  `main`; a release is a version bump merged into `main` plus a tag `vX.Y.Z`
+  on that merge commit. Deployments check out that tag; nothing is deployed
+  from a branch or a working tree.
+- The separate release line (`release/*` branches, tags up to `v7.20.10`,
+  old single-file `index.js` layout) is retired. Do not cut releases there and
+  do not write `port(<version>)` commits any more.
+- GitHub Packages is published by the `github-packages` job of `plugin-release.yml` on the tag push (automatic token, the GitHub Release's tarball, integrity read back). The manual `npm publish` to npm.pkg.github.com is only the fallback in `docs/release-checklist.md`. If the job fails, use "Re-run failed jobs", never "Re-run all jobs". Prereleases and versions below the highest x.y.z never become `latest`: the job fails, and they are published by hand under their own dist-tag.
+- New runtime files must be listed in `DEPLOY_FILES`
+  (`scripts/lib/deploy-integrity.mjs`); the deploy verifier copies and checks
+  exactly that list.
+
 ## Architecture Overview
 
 PLUR1BUS is an OpenClaw v6 plugin that provides per-agent long-term memory using:
@@ -45,7 +59,8 @@ These features sit **after** normal recall and only append results. They must ne
 
 - Loads precomputed `.plur1bus/semantic-lens-index.json` from the workspace.
 - Adds community/bridge/faded memories after normal recall; dedupes against base recall IDs.
-- Default `enabled: false`; caps `maxLensMemories: 3`, `maxBridgeMemories: 2`, `maxFadedMemories: 1`, `maxCommunities: 2`.
+- Default `enabled: true`; caps `maxLensMemories: 3`, `maxBridgeMemories: 2`, `maxFadedMemories: 1`, `maxCommunities: 2`.
+- Hydrated raw rows must pass the canonical request ACL before Lens projection or selection quotas; index membership grants no access.
 - Hard timeout 50 ms; fallback returns base recall unchanged.
 - No writes, no live graph recompute, no second recall path.
 
@@ -55,8 +70,68 @@ These features sit **after** normal recall and only append results. They must ne
 - Triggers: idle gap (45 min), continuation signal, first substantive message, post-compaction gap.
 - Default `enabled: false`; `visibleHints: false`.
 - Hard caps: `maxReactivationMemories: 3`, `maxFadedReactivationMemories: 1`, `maxOpenThreads: 3`, `maxCommunities: 2`.
-- Hard timeout 50 ms; silent fallback on error.
+- Hard timeout 250 ms since 7.21.1 (`timeoutMs`, was 50 ms); silent fallback on error.
 - Module-level in-memory state only; no persistence, no writes to cards/tags/graph/records/quarantine.
+
+### Neo origin backfill (7.21.5)
+
+- `scripts/neo-origin-backfill.mjs` adds `origin.sessionKey` and the rules sensitivity to pre-7.20.10 candidates as appended revisions (`store.appendCandidateRevisions`: no content dedupe, journal and index in one lock, byte sizes checked inside it). Sources: run id → host DBs (read-only), and the turn-id hash. A disagreement counts as ambiguous and is never written. Chat keys only. Index-only entries are written only with `--include-index-only`; their index line has no `sessionKeySource`, and `archive/origin-backfill.*.jsonl` is the audit trail.
+- `--id-map <tsv>` (id, sessionKey, optional method) is an extra resolution source for ids the other sources cannot reach (main's index-only entries from Jul–Sep 2026). Rows apply only to ids of the processed workspace whose agent matches the key's agent; non-chat keys are never written; a different key from another source makes the id ambiguous. Index-only rows still need `--include-index-only` (otherwise `--apply` refuses and writes nothing). The audit report records the map's method per id. The verified map for main (1,209 ids: 1,056 direct, 153 group) is `/root/.openclaw/backup/neo-index-only-origin-map-main-20261126.tsv`; apply it in the next deploy window (gateway stopped, snapshot).
+- Never rebuild the candidate index from the journal (`rebuildCandidateIndex`) to undo anything: many index entries no longer have journal lines (main ~2.8k, bernhardine ~6k), and the next vector compaction would delete their vectors.
+- The candidate index projects `sensitivity` and `sensitivitySource` (since 7.21.5); global hits carry them into the context weighting.
+
+### Main-thread work in agent_end (7.21.4)
+
+- **Embedding drain:** in-process checkpoint per queue file (`journalIdentity`: dev, inode, size, first bytes). Unchanged → no work; grown → only the appended range (`readJsonlRange`) plus the open entries. Anything that rewrites `embedding-queue.jsonl` must change inode or size/head (atomic rename does). Target journals are read lazily. Embedder failures (`deferred`) are retried at most every 10 min without new lines.
+- **Graph dedupe:** `lib/graph-edge-index.js` mirrors `readBoundGraph`'s adjacency existence over the last 10,000 lines and reads only appended lines; keep `graphEdgeDedupeKeys` in step with `isBoundGraphEdge`/`readGraph`.
+- The `agent_end` hook counter uses `recordHookAsync`; the post-processing watermark stays synchronous (the next capture reads it).
+
+### Recall budget, fallback and warm start (7.21.1)
+
+- The Neo prelude has a hard budget from the recall's start:
+  `min(neo.recall.global.embedTimeoutMs, recallTimeoutMs / 4)`
+  (`neoPreludeBudgetMs`). Past it, global search and lanes are skipped.
+- The store recall waits for the query vector until a quarter of the budget
+  (at least 1.5 s, at most 3 s) is left (`recallEmbedDeadline`), then runs `lib/recall-keyword-fallback.js`
+  (keywords + last 7 days, same lifecycle/ACL/policy gates). The block is
+  marked `retrieval="keyword-recent-fallback"`, the result reports
+  `embedding-unavailable`. Never let the fallback write or replace a working
+  vector recall. `recall.keywordFallback.enabled=false` restores the old path.
+- A main-thread stall also stops timers; no timeout in JS can cut it.
+- `runtime.recallPrewarm`: one warm-only recall per chat agent after
+  `gateway_start` (`adapter/openclaw/register-recall-prewarm.js`).
+- Light dreams bind to a user only with a proved principal for the same turn
+  (`adapter/openclaw/proved-turn-principals.js` →
+  `engine/capture/light-dream-identity.js`); never derive a user binding from
+  a raw hook `senderId`.
+
+### Origin weighting and confidentiality (7.21.2)
+
+- `lib/recall-context.js`: relation of a hit to the requesting chat (same
+  chat, group in direct, other group, foreign direct, unknown) from the
+  session key; multipliers and a foreign cap (`recall.contextWeighting`).
+  Applied in `runMergedNamespaceRecall` (before the topN cap), to the Neo
+  lanes, CRR, Semantic Lens and `memory_recall`. Never in dreaming, skill
+  mining, consolidation or promotion.
+- 7.21.3: `isOwnerDirectChat` accepts a background turn (`isBackgroundTurn`
+  or `isSubagentCompletionTurn`) without a proved sender, only in the DM whose
+  peer is the configured owner. Never widen this to turns with an inbound
+  message or to `sessions_send`.
+- Foreign + (confidential or unclassified) never passes; in groups foreign
+  needs an LLM verdict (`lib/sensitivity-queue.js`, sidecar only — never
+  write memory rows from the queue).
+- Legacy rows count as the same chat only in a proved direct chat with the
+  agent's owner (`isOwnerDirectChat`).
+- Neo ACL: `requesterWorkspaceKey` from `workspaceKeyFromDirStrict` only; never
+  use the permissive `workspaceKeyFromContext` (defaults, session map) for ACL.
+
+### Cohere reranker default (7.21.1)
+
+`DEFAULT_COHERE_RERANK_MODEL` (`lib/providers/dimensions.js`) is
+`rerank-v5.0-fast`, billed per input token (`meta.billed_units.input_tokens`),
+not per search; `reranker.maxDocChars` bounds the cost directly. Configs that
+set `reranker.model: "rerank-v3.5"` keep v3.5. Bench runs name the model
+explicitly (`--rerank-model`); never measure with gateway keys.
 
 ### Graph-link managed blocks / semanticDiscovery
 
@@ -227,15 +302,32 @@ node --test tests/*.test.js
 
 - Tests are unit-level and DB-free.
 - Every phase must add its own regression tests.
-- Current baseline: 5,603 tests (5,600 passing, 0 failing, 3 skipped).
+- Installers, bootstraps and the install feed live in
+  [PLUR1BUS-Host-Addons](https://github.com/Cyb3rb1ade/PLUR1BUS-Host-Addons). This repo keeps what they depend on: the
+  `openclaw plur1bus selftest` CLI (`docs/selftest.md`), the store snapshot
+  (`lib/snapshot/store-snapshot.js`, `scripts/snapshot-store.mjs`,
+  `snapshotsDir`) and the modules the add-on vendors; keep their tests
+  (`tests/selftest-*`, `tests/snapshot-store.test.js`,
+  `tests/protect-plur1bus-deploy.test.js`) green. Deploy verify/repair has two
+  tiers: `DEPLOY_FILES` (strict code manifest, a mismatch fails) and the
+  advisory packaged-file tier derived from `package.json` `files` (docs,
+  changelog, README, emotional-state-injector; refreshed after archiving,
+  never deleted, never fails — `tests/deploy-packaged-files.test.js`). A new
+  shipped doc needs no manifest entry; new runtime code still does. The full suite on Windows and
+  macOS runs in `ci.yml` (`test-cross`).
+- Current baseline (`npm test`, i.e. `tests/` and `test/`; Linux, Node 24.22.3, 7.20.10 incl. the ports from 7.18.21–7.20.10):
+  7,335 tests in 1,278 suites, 9 skipped (platform-only and opt-in cases). The Local Inference adm-zip check
+  needs this checkout's own `node_modules` (it fails with a symlinked one).
 
 ## Dependency Audit
 
-Last audit run: 2026-11-03
+Last audit run: 2026-10-04 (#208)
 
-- `npm audit --omit=dev`: **0 vulnerabilities**
-- `npm audit` (incl. devDependencies): 7 (4 moderate, 3 high) — all in `c8`/`openclaw` devDependencies, none shipped. The `c8` fix path is a major-version downgrade (9.1.0); the `openclaw` devDependency fix path (`2026.10.9`) regresses the total count on this host. Both left as-is deliberately.
+- `npm audit --omit=dev --audit-level=moderate`: **0 vulnerabilities** (CI blocking)
+- `npm audit`: **0 vulnerabilities** after the 2026.10-04 dev-graph cleanup
 - `npm ci --ignore-scripts`: passes
+
+The published runtime tree is LanceDB, apache-arrow, openai, and optional transformers. Issue #208's six findings lived only under the contract-test host `openclaw@2026.8.2`. The dev pin is now `openclaw@2026.8.33` (lowest later 2026.8.x with `undici@8.10.2`). Remaining MCP-SDK transitives are same-major overrides: `brace-expansion@5.0.12`, `fast-uri@3.1.8`, `hono@4.13.7`, `ip-address@10.7.1`. The declared build baseline stays `openclaw@2026.8.2`.
 
 ### Runtime Dependencies
 
@@ -257,7 +349,7 @@ Last audit run: 2026-11-03
 | `@huggingface/transformers` → `sharp` | `0.35.5` | Closes CVE-2026-96889 (librsvg) |
 | `zod` | `4.6.7` | Closes a high-severity memory-exhaustion advisory (`openai`/`openclaw` dependency chain) |
 
-All versions are effectively pinned at install time by `package-lock.json`. No critical CVEs were reported at the time of the last audit. Major upgrades require a separate plan.
+All versions are effectively pinned at install time by `package-lock.json`. Major upgrades require a separate plan.
 
 ## Backup / Restore
 

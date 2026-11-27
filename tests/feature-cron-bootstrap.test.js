@@ -1094,7 +1094,7 @@ describe("runSetupFeatureCrons --json", () => {
               {
                 agentId: "main",
                 name: "plur1bus-morning-review-main",
-                delivery: { mode: "announce", channel: "telegram", to: "55736530", accountId: "telegram-main" },
+                delivery: { mode: "announce", channel: "telegram", to: "10000002", accountId: "telegram-main" },
               },
             ],
           }),
@@ -1122,7 +1122,7 @@ describe("runSetupFeatureCrons --json", () => {
     assert.ok(afterthoughtAdd, "automatic afterthought cron add call for main must be present");
     assert.ok(afterthoughtAdd.includes("--announce"), "derivable delivery should announce");
     assert.deepStrictEqual(afterthoughtAdd.slice(afterthoughtAdd.indexOf("--channel"), afterthoughtAdd.indexOf("--channel") + 2), ["--channel", "telegram"]);
-    assert.deepStrictEqual(afterthoughtAdd.slice(afterthoughtAdd.indexOf("--to"), afterthoughtAdd.indexOf("--to") + 2), ["--to", "55736530"]);
+    assert.deepStrictEqual(afterthoughtAdd.slice(afterthoughtAdd.indexOf("--to"), afterthoughtAdd.indexOf("--to") + 2), ["--to", "10000002"]);
     assert.deepStrictEqual(afterthoughtAdd.slice(afterthoughtAdd.indexOf("--account"), afterthoughtAdd.indexOf("--account") + 2), ["--account", "telegram-main"]);
     assert.ok(!afterthoughtAdd.includes("--disabled"), "derivable delivery must not be created disabled");
   });
@@ -1174,7 +1174,7 @@ describe("runSetupFeatureCrons --json", () => {
               {
                 agentId: "main",
                 name: "plur1bus-morning-review-main",
-                delivery: { mode: "announce", channel: "telegram", to: "55736530", accountId: "telegram-main" },
+                delivery: { mode: "announce", channel: "telegram", to: "10000002", accountId: "telegram-main" },
               },
             ],
           }),
@@ -1223,7 +1223,7 @@ describe("runSetupFeatureCrons --json", () => {
                 name: "plur1bus afterthought main",
                 agentId: "main",
                 payload: { message: "/plur1bus internal afterthought" },
-                delivery: { mode: "announce", channel: "telegram", to: "55736530" },
+                delivery: { mode: "announce", channel: "telegram", to: "10000002" },
               },
             ],
           }),

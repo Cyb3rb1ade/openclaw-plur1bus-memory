@@ -21,8 +21,7 @@ import { existsSync, mkdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getKnowledgeChunks, mergeNamespaceRecallResults, runRecallPipeline } from "../lib/recall-pipeline.js";
 import { applyRecallBudget } from "../lib/recall-budget.js";
-import * as pluginModule from "../index.js";
-const runMergedNamespaceRecall = pluginModule.runMergedNamespaceRecall;
+import { runMergedNamespaceRecall } from "../engine/recall/namespace-recall.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
 const DIM = 4;

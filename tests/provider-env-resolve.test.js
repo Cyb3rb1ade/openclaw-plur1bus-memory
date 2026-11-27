@@ -1,6 +1,9 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { resolveApiKey } from "../lib/providers/env.js";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { resolveApiKey, resolveEnvVars } from "../lib/providers/env.js";
+import { bindHostPaths, resetHostPaths } from "../lib/host-paths.js";
 
 describe("resolveApiKey", () => {
   before(() => {
@@ -68,5 +71,25 @@ describe("resolveApiKey", () => {
   it("optional=true mit defaultEnv: gibt undefined wenn Env-Var fehlt (kein Wurf)", () => {
     const key = resolveApiKey({}, { defaultEnv: "_NONEXISTENT_VAR_XYZ", optional: true });
     assert.strictEqual(key, undefined);
+  });
+});
+
+describe("${OPENCLAW_HOME} placeholder", () => {
+  after(() => resetHostPaths());
+
+  it("resolves to the host-bound OpenClaw home when one is bound", () => {
+    bindHostPaths({ openclawHome: () => "/srv/openclaw-home" });
+    assert.strictEqual(
+      resolveEnvVars("${OPENCLAW_HOME}/models", { groups: ["localPath"] }),
+      "/srv/openclaw-home/models",
+    );
+  });
+
+  it("falls back to ~/.openclaw via lib/host-paths.js when nothing is bound", () => {
+    resetHostPaths();
+    assert.strictEqual(
+      resolveEnvVars("${OPENCLAW_HOME}/models", { groups: ["localPath"] }),
+      `${join(homedir(), ".openclaw")}/models`,
+    );
   });
 });

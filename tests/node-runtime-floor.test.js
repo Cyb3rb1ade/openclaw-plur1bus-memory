@@ -58,7 +58,9 @@ test("no workflow pins a Node version below the floor", () => {
     for (const line of readRepoFile(`.github/workflows/${name}`).split("\n")) {
       if (!line.includes("node-version:")) continue;
       if (line.includes("matrix.node-version")) continue;
-      for (const version of line.match(/\d+(?:\.\d+)*/g) || []) {
+      // only the value: a matrix row also names its runner (`os: windows-11-arm, node-version: …`)
+      const value = line.slice(line.indexOf("node-version:") + "node-version:".length);
+      for (const version of value.match(/\d+(?:\.\d+)*/g) || []) {
         assert.ok(
           Number(version.split(".")[0]) >= 24,
           `${name}: "${line.trim()}" pinnt Node ${version}`,

@@ -23,12 +23,14 @@ import {
   validateFeatureCronRequest,
 } from "../lib/setup/feature-cron-plugin-runtime.js";
 import {
-  buildWorkspaceReviewCronJobs,
   eveningReviewSummary,
   handleObsidianBridgeCommand,
-  printMorningReviewCronCommand,
   reviewBundleSummary,
 } from "../lib/obsidian-control-room.js";
+import {
+  buildWorkspaceReviewCronJobs,
+  printMorningReviewCronCommand,
+} from "../adapter/openclaw/obsidian-review-cron-commands.js";
 import { runSetupFeatureCrons } from "../scripts/setup-feature-crons.mjs";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
@@ -37,7 +39,7 @@ function responseCapture() {
   return { calls, respond: (...args) => calls.push(args) };
 }
 
-function nativeJob(agentId, feature, delivery = { mode: "announce", channel: "telegram", to: "55736530" }) {
+function nativeJob(agentId, feature, delivery = { mode: "announce", channel: "telegram", to: "10000001" }) {
   return {
     id: `job-${agentId}-${feature}`,
     agentId,
@@ -54,7 +56,7 @@ function agentTurnJob(overrides = {}) {
     agentId: "main",
     enabled: true,
     payload: { kind: "agentTurn", message: "Führe /plur1bus obsidian evening-review aus.\n\nWICHTIG: Formatiere …" },
-    delivery: { mode: "announce", channel: "telegram", to: "55736530" },
+    delivery: { mode: "announce", channel: "telegram", to: "10000001" },
     ...overrides,
   };
 }
@@ -73,8 +75,8 @@ describe("native review feature crons", () => {
 
   it("binds the review to the direct chat of the job's delivery target", () => {
     const config = { bindings: [{ agentId: "bernhardine", match: { channel: "telegram", accountId: "bernhardine" } }] };
-    assert.equal(reviewCronSessionKey("main", { channel: "telegram", to: "55736530" }, config), "agent:main:telegram:default:direct:55736530");
-    assert.equal(reviewCronSessionKey("bernhardine", { channel: "telegram", to: "1211667028" }, config), "agent:bernhardine:telegram:bernhardine:direct:1211667028");
+    assert.equal(reviewCronSessionKey("main", { channel: "telegram", to: "10000001" }, config), "agent:main:telegram:default:direct:10000001");
+    assert.equal(reviewCronSessionKey("bernhardine", { channel: "telegram", to: "10000002" }, config), "agent:bernhardine:telegram:bernhardine:direct:10000002");
     assert.equal(reviewCronSessionKey("main", { channel: "telegram", to: "1", accountId: "ops" }, config), "agent:main:telegram:ops:direct:1");
     assert.equal(reviewCronSessionKey("main", null, config), null);
     assert.equal(reviewCronSessionKey("main", { channel: "telegram", to: "1:topic:2" }, config), null);
@@ -92,7 +94,7 @@ describe("native review feature crons", () => {
     await handler({ params: { agentId: "main", feature: "evening-review" }, respond: capture.respond, context });
     assert.deepStrictEqual(seen, [{
       agentId: "main",
-      sessionKey: "agent:main:telegram:default:direct:55736530",
+      sessionKey: "agent:main:telegram:default:direct:10000001",
       command: "/plur1bus obsidian evening-review",
     }]);
     assert.deepStrictEqual(capture.calls, [[true, { reply: { text: "🌙 Evening review" } }]]);
@@ -170,14 +172,32 @@ describe("agentTurn review migration", () => {
   it("finds the delivery of the migrated job for the runtime", () => {
     const [migration] = planObsidianReviewCronMigrations([agentTurnJob()]);
     const migrated = { ...agentTurnJob(), payload: { kind: "command", argv: migration.commandArgv } };
-    assert.deepStrictEqual(findFeatureCronDelivery([migrated], "main", "evening-review"), { channel: "telegram", to: "55736530" });
+    assert.deepStrictEqual(findFeatureCronDelivery([migrated], "main", "evening-review"), { channel: "telegram", to: "10000001" });
+  });
+
+  it("finds a native review job whose runner path uses Windows separators", () => {
+    const migrated = {
+      ...agentTurnJob(),
+      payload: {
+        kind: "command",
+        argv: [
+          "C:\\Program Files\\nodejs\\node.exe",
+          "C:\\Users\\ops\\.openclaw\\extensions\\memory-lancedb-namespaced\\scripts\\run-feature-cron.mjs",
+          "--agent",
+          "main",
+          "--feature",
+          "evening-review",
+        ],
+      },
+    };
+    assert.deepStrictEqual(findFeatureCronDelivery([migrated], "main", "evening-review"), { channel: "telegram", to: "10000001" });
   });
 
   it("generates native cron commands for new installations", () => {
     const plan = buildWorkspaceReviewCronJobs({}, {
       workspaces: [{ workspaceId: "main", agentId: "main", label: "Main" }],
       channel: "telegram",
-      to: "55736530",
+      to: "10000001",
     });
     assert.equal(plan.jobs.length, 2);
     for (const job of plan.jobs) {

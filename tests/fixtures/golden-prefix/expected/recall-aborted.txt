@@ -1,0 +1,3 @@
+<plur1bus-start-notice>
+PLUR1BUS is set up. This notice is shown once.
+</plur1bus-start-notice>

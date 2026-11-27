@@ -3,13 +3,14 @@ import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
 import { formatRelevantMemoriesContext } from "../lib/relevant-memory-context.js";
+import { readRuntimeSources } from "./helpers/runtime-sources.js";
 
-// Auf main reicht engine/recall/assemble-prompt-context.js den Wert durch; in
-// der 7.16-Linie tut das der Recall-Hook in index.js. Ohne diese Stelle bliebe
+// engine/recall/assemble-prompt-context.js reicht den Wert durch (bis 7.16.9
+// tat das der Recall-Hook in index.js). Ohne diese Stelle bliebe
 // recall.memoriesMaxChars wirkungslos.
 describe("recall.memoriesMaxChars", () => {
-  it("wird im Recall-Hook als maxTotalChars an formatRelevantMemoriesContext gereicht", () => {
-    const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+  it("wird im Recall als maxTotalChars an formatRelevantMemoriesContext gereicht", () => {
+    const source = readRuntimeSources().engine.assemblePromptContext;
     const call = source.slice(source.indexOf("const memoriesContext = formatRelevantMemoriesContext(promptItems, {"));
     assert.match(call.slice(0, 600), /maxTotalChars: recallCfg\.memoriesMaxChars \?\? 12_000/);
   });

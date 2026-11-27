@@ -1,0 +1,1316 @@
+/**
+ * engine/capture/capture-turn.js
+ *
+ * The per-turn auto-capture pipeline (was index.js:10357-11305): fail-closed
+ * incognito classification, workspace-policy gate, NEO turn write, chunking,
+ * embedding, dedupe, durable store, graph/episode/dream post-processing,
+ * meta-reflection and reminder extraction. Host-neutral; everything it needs
+ * arrives in the context object.
+ */
+
+import { randomUUID } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { deriveBudgetedSignal, isAbortError, isBudgetExhaustion, throwIfAborted } from "../../lib/abort.js";
+import { captureSourceFromProvenance, categorizeMemoryWithReason } from "../../lib/categorize.js";
+import { lightDream, writeLightDreamToVault } from "../../lib/dreaming/light-dream.js";
+import { lightDreamIdentity } from "./light-dream-identity.js";
+import { classifySensitivityByRules } from "../../lib/sensitivity.js";
+import { recordLightDreamRun } from "../../lib/dreaming/dreaming-status-provider.js";
+import { serializeEmotionalValence } from "../../lib/emotion.js";
+import { filterAlreadyEpisoded, mergeEpisodedTurnIds, resolveWatermarkAdvance } from "../../lib/episode-watermark.js";
+import { extractEpisodesWithState, writeEpisodeToVault } from "../../lib/episodes.js";
+import { decideEpistemicStatusForCapture } from "../../lib/epistemic-capture.js";
+import { IMPORTANCE_STATUS } from "../../lib/importance-status.js";
+import { runReflectionJob } from "../../lib/jobs/reflection-job.js";
+import { withLlmCallContext } from "../../lib/llm-result-cache.js";
+import { isLlmRouteAvailable } from "../../lib/llm-router.js";
+import { expandForCapture, expandForCaptureDecided } from "../../lib/memory-chunking.js";
+import { createJevChunkDecider, resolveJevApiKey } from "../../lib/jev-chunk-decider.js";
+import { applyDynamicsDefaults } from "../../lib/memory-dynamics.js";
+import { buildEdgesForSession, buildEpisodeAnchorEdges, createGraphMetrics, extractGraphSignals, readBoundGraph, writeGraphConstellationReport } from "../../lib/memory-graph.js";
+import { resolveMemoryRequestContext } from "../../lib/memory-request-context.js";
+import { shouldTriggerReflection } from "../../lib/meta-cognition.js";
+import { createNeoStore, isInjectedContextText, turnEventsFromMessages, turnIdentityParams } from "../../lib/neo-arch.js";
+import { graphEdgeExistenceIndex } from "../../lib/graph-edge-index.js";
+import { planReminderExtraction } from "../../lib/reminder-extraction.js";
+import { saveReminder } from "../../lib/reminder-store.js";
+import { classifyCaptureSource, isBackgroundTurn, shouldSkipAutoCaptureForInternalTurn } from "../../lib/runtime-scheduler.js";
+import { isWorkspaceSubagent } from "../../lib/chat-model.js";
+import { normalizeMemorySessionKey } from "../../lib/query-echo.js";
+import { isContentFreeHostEnvelope } from "../../lib/recall-quality.js";
+import { prepareEmbeddingText } from "../../lib/embedding-text.js";
+import { trySafeWarn } from "../../lib/safe-logging.js";
+import { appendDestructiveOpLog } from "../../lib/sql-safety.js";
+import { extractMediaOutputIds, stripMediaOutputIdToken } from "../../lib/speaker-segment-schema.js";
+import { enqueuePostTurnWork } from "../../lib/post-turn-queue.js";
+import { createPostTurnWorkers, postTurnContext, shouldDeferPostTurnLlm } from "./post-turn-work.js";
+import { describeError } from "../../lib/log-redact.js";
+
+/**
+ * Classifies a light-dream JobRun's effect on capture post-processing
+ * (fix round 1, PR-08 review). `ledger_unwritable` is a ledger-storage
+ * problem, not a dreaming failure or an incomplete dream: it must not hold
+ * the capture watermark or spend the capture postProcessing retry budget
+ * (`MAX_POSTPROCESSING_RETRIES`) — it is treated exactly like a skipped
+ * dream. Any other `failed` run is a real dreaming failure and keeps the
+ * prior behaviour (watermark held, warned every time).
+ * @param {{outcome: string, reason?: string}} dreamRun
+ * @returns {{advance: boolean, warnKind: "ledger_unwritable"|"failed"|null}}
+ */
+export function classifyLightDreamOutcome(dreamRun) {
+  if (dreamRun.outcome === "completed") return { advance: true, warnKind: null };
+  if (dreamRun.outcome === "failed" && dreamRun.reason === "ledger_unwritable") {
+    return { advance: true, warnKind: "ledger_unwritable" };
+  }
+  if (dreamRun.outcome === "failed") return { advance: false, warnKind: "failed" };
+  return { advance: false, warnKind: null };
+}
+
+/**
+ * Builds a per-agent, warn-once-per-agent latch for the `ledger_unwritable`
+ * light-dream case (fix round 1): an unwritable ledger is a standing
+ * condition, not a per-turn event, so every turn re-triggering it must not
+ * re-log — only the first occurrence per agent does, for the lifetime of
+ * this `createTurnCapture` closure.
+ * @param {{warn?: (m: string) => void}} logger
+ * @returns {(agentId: string) => void}
+ */
+// 7.21.1: moved to ./light-dream-identity.js (shared with post-turn-work.js).
+export { lightDreamIdentity } from "./light-dream-identity.js";
+
+export function createLightDreamLedgerWarnOnce(logger) {
+  const warned = new Set();
+  return (agentId) => {
+    if (warned.has(agentId)) return;
+    warned.add(agentId);
+    logger.warn?.(`memory-lancedb-namespaced: light dream ledger unwritable for agent ${agentId}; dreaming is paused for this agent until it recovers`);
+  };
+}
+
+/**
+ * Build the `agent_end` auto-capture handler from an already-resolved engine
+ * context. Every binding the moved body closes over is destructured once,
+ * here, at registration time.
+ *
+ * @param {Record<string, any>} ctx Engine context; see the destructuring below.
+ * @returns {(event: Record<string, any>, hookCtx: Record<string, any>) => Promise<unknown>} The hook handler.
+ */
+export function createTurnCapture(ctx) {
+  const {
+    EPISODED_TURN_ID_MEMORY,
+    MAX_POSTPROCESSING_RETRIES,
+    NEO_HOOK_DRAIN_MARGIN_MS,
+    NEO_HOOK_DRAIN_MIN_MS,
+    baseDbPath,
+    callLlm,
+    captureSummaryLlmCfg,
+    cfg,
+    classifyEmotionForStore,
+    classifyHostIncognitoSession,
+    conversationInsightsLlmCfg,
+    // 7.18.3: identity unless runtime.detachPostTurnWork (lib/post-turn-detach.js).
+    detachPostTurnWork = (task) => task,
+    dreamEchoLlmCfg,
+    dreamNarrativeCfg,
+    dreamNarrativeLlmCfg,
+    duplicateThreshold,
+    embeddingCleanTextCfg,
+    embeddings,
+    emotionIntensityHalfLifeFactor,
+    emotionalPool,
+    episodeExtractionLlmCfg,
+    epistemicCutoffBoot,
+    flashbulbEncodingEnabled,
+    generateSummary,
+    getNeoStore,
+    halfLifeOverrides,
+    host,
+    jobs = null,
+    memoryWorkspaceAliases,
+    mergingEnabled,
+    metaCognitionEnabled,
+    metaCognitionIntervalMs,
+    metaCognitionLlmReport,
+    metaCognitionSessionThreshold,
+    metaReflectionState,
+    neoAgentEndBudgetMs,
+    neoCfg,
+    neoEmbeddingAutoDrainEnabled,
+    neoEmbeddingDrainImpact,
+    neoEmbeddingDrainMaxItems,
+    neoEnabled,
+    neoRoot,
+    neoWorkerRuntime,
+    neoWorkspaceAliases,
+    noteTableWrite = null,
+    personaVoiceLlmCfg,
+    pool,
+    rememberNeoWorkspace,
+    reminderAutoExtract,
+    resolveTemperamentName,
+    runSpeakerProposalPipeline,
+    runtimeScheduler,
+    skillMinerEnabled,
+    snapshotNeoMessages,
+    snapshotNeoString,
+    summarizeForCapture,
+    summaryMaxWords,
+    textSuggestsGroupOrigin,
+    vectorDim,
+    waitForTimeoutSettlement,
+    workspacePolicyGuard,
+  } = ctx;
+
+  jobs?.bind("light-dream", async (_name, jobCtx) => {
+    const work = jobCtx.input?.work;
+    if (typeof work !== "function") return jobCtx.skip("no_turns");
+    return { dreamed: await work() };
+  });
+
+  const configuredDeferPostTurnLlm = shouldDeferPostTurnLlm(cfg, host);
+  // 7.18.18: captureChunkingMode "automatisch" laesst Jev je Nachricht
+  // entscheiden: zusammenhaengend -> ganz, unabhaengig -> nur Teile,
+  // unsicher -> beides. Ohne Schluessel verhaelt es sich wie "beides".
+  const jevChunkCfg = cfg?.captureChunkingJev || {};
+  const jevChunkDecider = cfg?.captureChunkingMode === "automatisch"
+    ? createJevChunkDecider({
+      apiKey: resolveJevApiKey(jevChunkCfg, process.env),
+      model: jevChunkCfg.model,
+      minConfidence: jevChunkCfg.minConfidence,
+      timeoutMs: jevChunkCfg.timeoutMs,
+      logger: host.logger,
+    })
+    : null;
+  if (cfg?.captureChunkingMode === "automatisch" && !jevChunkDecider) {
+    host.logger.warn?.("memory-lancedb-namespaced: captureChunkingMode \"automatisch\" without a Jev API key; storing whole and parts");
+  }
+  const { runLightDreamPostTurn, runEpisodePostTurn } = createPostTurnWorkers({
+    embeddings,
+    conversationInsightsLlmCfg,
+    dreamNarrativeLlmCfg,
+    dreamEchoLlmCfg,
+    personaVoiceLlmCfg,
+    skillMinerEnabled,
+    mergingEnabled,
+    callLlm,
+    logger: host.logger,
+    dreamNarrativeCfg,
+    resolveTemperamentName,
+    cfg,
+    memoryWorkspaceAliases,
+    baseDbPath,
+    emotionalPool,
+    episodeExtractionLlmCfg,
+  });
+
+  // Per-registration one-shot warning latches (were index.js:10357-10358).
+  // They are rebound at turn time, so they stay inside the closure rather
+  // than travelling through the context object by value.
+  let warnedMissingCaptureSessionKey = false;
+  let warnedIncognitoClassifierDegraded = false;
+  const warnLightDreamLedgerUnwritable = createLightDreamLedgerWarnOnce(host.logger);
+
+  return async function captureTurn(event, hookCtx, opts = {}) {
+    const deferPostTurnLlm = typeof opts.deferPostTurnLlm === "boolean"
+      ? shouldDeferPostTurnLlm(cfg, host, opts.deferPostTurnLlm)
+      : configuredDeferPostTurnLlm;
+    const sessionKey = hookCtx?.sessionKey ?? event?.sessionKey;
+    // A turn without a session key cannot be an incognito session: the host
+    // identifies incognito *by* that key. Both the host types and every
+    // other consumer in this file treat sessionKey as optional, so a
+    // missing key must not silently drop the turn — that would disable the
+    // plugin's core function. Classify only when a key is actually present.
+    // An Engine caller (TurnRecord.incognito === false) has already
+    // classified the turn on the host side: the host routing classifier is
+    // skipped, so a host without routing still captures.
+    if (opts.incognitoClassified === true) {
+      // classified by the caller
+    } else if (typeof sessionKey === "string" && sessionKey.trim()) {
+      try {
+        if (await classifyHostIncognitoSession(sessionKey)) {
+          host.logger.info("memory-lancedb-namespaced: skipping durable capture for incognito session");
+          return undefined;
+        }
+      } catch (error) {
+        // Fail closed: a keyed session we cannot classify must not be stored.
+        trySafeWarn(host.logger, "auto-capture.incognito-classifier", error);
+        if (!warnedIncognitoClassifierDegraded) {
+          warnedIncognitoClassifierDegraded = true;
+          trySafeWarn(host.logger, "auto-capture.incognito-classifier-degraded", new Error(
+            "incognito classifier unavailable; durable capture is disabled for keyed sessions until it recovers",
+          ));
+        }
+        return opts.memoryCtx ? { ok: false, reason: "incognito-unclassifiable" } : undefined;
+      }
+    } else if (!warnedMissingCaptureSessionKey) {
+      warnedMissingCaptureSessionKey = true;
+      trySafeWarn(host.logger, "auto-capture.session-key-missing", new Error(
+        "agent_end turn has no session key; capturing without incognito classification",
+      ));
+    }
+    host.logger.info(`memory-lancedb-namespaced: agent_end hook fired`);
+
+    const agentId = hookCtx?.agentId || "default";
+    const background = opts.agentContext ? opts.agentContext.background === true : isBackgroundTurn(event, hookCtx);
+    if (opts.agentContext ? opts.agentContext.origin !== "user" : shouldSkipAutoCaptureForInternalTurn(event, hookCtx)) {
+      host.logger.info(`memory-lancedb-namespaced: skipping durable capture for internal/background turn (agent=${agentId})`);
+      return undefined;
+    }
+    // 7.20.10: Herkunft kennzeichnen (subagent/helper/inter_session), nicht
+    // filtern. Ein Fehler ergibt keine Kennzeichnung (Warnung im Log).
+    const captureSource = classifyCaptureSource(event, hookCtx, {
+      isWorkspaceSubagent: (id) => isWorkspaceSubagent(host.runtime?.config?.current?.() || host.config?.() || {}, id),
+      logger: host.logger,
+    });
+    let memoryCtx = null;
+    if (opts.memoryCtx) {
+      memoryCtx = opts.memoryCtx;
+    } else {
+      try {
+        memoryCtx = resolveMemoryRequestContext({
+          agentId,
+          workspaceDir: hookCtx?.workspaceDir,
+          workspaceKey: hookCtx?.workspaceKey,
+          workspaceId: hookCtx?.workspaceId,
+          userId: hookCtx?.userId ?? hookCtx?.senderId,
+          channel: hookCtx?.channel ?? hookCtx?.messageProvider,
+          accountId: hookCtx?.accountId ?? hookCtx?.channelContext?.accountId,
+          chatId: hookCtx?.chatId,
+          sessionKey: hookCtx?.sessionKey ?? event?.sessionKey,
+          sessionId: hookCtx?.sessionId ?? event?.sessionId,
+        }, { workspaceAliases: memoryWorkspaceAliases });
+      } catch (err) {
+        host.logger.debug(`memory-lancedb-namespaced: capture memory context unavailable: ${describeError(err)}`);
+      }
+    }
+    if (!workspacePolicyGuard.automatic(memoryCtx).allowed) return undefined;
+
+    // Rückgabe des Capture-Promises ermöglicht Tests, auf Abschluss zu warten.
+    return runtimeScheduler.enqueueCapture(agentId, { background, ...(opts.signal ? { signal: opts.signal } : {}) }, detachPostTurnWork(async (signal) => {
+      const captureStartedAt = Date.now();
+      const throwIfCaptureAborted = () => {
+        if (!signal?.aborted) return;
+        if (typeof signal.throwIfAborted === "function") signal.throwIfAborted();
+        const abortError = new Error("auto-capture aborted");
+        abortError.name = "AbortError";
+        throw abortError;
+      };
+      // Der Embedding-Drain ist Wartungsarbeit und lief bisher VOR der
+      // Erfassung im selben 60s-Budget. Bei vollem Rueckstau (250 Items)
+      // verbrauchte er es komplett, die eigentliche Erfassung wurde danach
+      // jedes Mal abgebrochen — beobachtet am 2026-08-20 fuer bernhardine:
+      // "found 276 texts to capture" gefolgt vom Timeout ~30ms spaeter.
+      // Jetzt laeuft er nach der Erfassung mit dem, was uebrig bleibt.
+      let runNeoEmbeddingDrain = null;
+      if (neoEnabled) {
+        try {
+          const neoWorkspaceKey = rememberNeoWorkspace(hookCtx, event);
+          const neoStore = createNeoStore(neoRoot, neoWorkspaceKey);
+          const neoHookMeta = {
+            agentId,
+            sessionId: event?.sessionId || event?.sessionKey || event?.runId ||
+              hookCtx?.sessionId || hookCtx?.sessionKey || hookCtx?.runId || "",
+            runner: event?.runner || event?.provider || "",
+            background,
+          };
+          // 7.21.4: Zaehler ohne synchrone Sperre im Main-Thread (wie
+          // before_prompt_build seit 7.12.30); das Watermark weiter unten
+          // bleibt synchron, der naechste Lauf liest es.
+          if (typeof neoStore.recordHookAsync === "function") {
+            neoStore.recordHookAsync("agent_end", neoHookMeta)
+              .catch((hookErr) => host.logger.debug(`plur1bus-neo: agent_end hook record skipped: ${String(hookErr?.message || hookErr)}`));
+          } else {
+            neoStore.recordHook("agent_end", neoHookMeta);
+          }
+          const neoEvent = {
+            workspaceKey: neoWorkspaceKey,
+            workspaceId: snapshotNeoString(event?.workspaceId),
+            workspaceDir: snapshotNeoString(event?.workspaceDir),
+            workspace: snapshotNeoString(event?.workspace),
+            agentSessionKey: snapshotNeoString(event?.agentSessionKey),
+            sessionKey: snapshotNeoString(event?.sessionKey),
+            sessionId: snapshotNeoString(event?.sessionId),
+            runId: snapshotNeoString(event?.runId),
+            runner: snapshotNeoString(event?.runner),
+            provider: snapshotNeoString(event?.provider),
+            messages: snapshotNeoMessages(event?.messages),
+          };
+          const neoCtx = {
+            agentId,
+            workspaceKey: neoWorkspaceKey,
+            workspaceId: snapshotNeoString(hookCtx?.workspaceId),
+            workspaceDir: snapshotNeoString(hookCtx?.workspaceDir),
+            workspace: snapshotNeoString(hookCtx?.workspace),
+            agentSessionKey: snapshotNeoString(hookCtx?.agentSessionKey),
+            sessionKey: snapshotNeoString(hookCtx?.sessionKey),
+            sessionId: snapshotNeoString(hookCtx?.sessionId),
+            runId: snapshotNeoString(hookCtx?.runId),
+            captureSource: captureSource || "",
+          };
+          const neoResult = await neoWorkerRuntime.runNeoAgentEnd(neoEvent, neoCtx, {
+            rootDir: neoRoot,
+            defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
+            workspaceAliases: neoWorkspaceAliases,
+            // Provider instances and credentials remain on the main thread.
+            embeddingDrainEnabled: false,
+            embeddingDrainImpact: neoEmbeddingDrainImpact,
+            embeddingDrainMaxItems: neoEmbeddingDrainMaxItems,
+            signal: deriveBudgetedSignal(signal, neoAgentEndBudgetMs),
+          });
+          if (neoResult?.capture) {
+            const transcriptTurns = neoResult.capture.transcript?.turns;
+            const neoTimings = neoResult.timings && typeof neoResult.timings === "object"
+              ? ` timings=${JSON.stringify(neoResult.timings)}`
+              : "";
+            host.logger.info(`plur1bus-neo: worker captured new turns=${neoResult.capture.turns}, candidates=${neoResult.capture.candidates}, reactions=${neoResult.capture.reactions}, behaviorCards=${neoResult.capture.behaviorCards}${Number.isFinite(transcriptTurns) ? ` (transcript turns=${transcriptTurns})` : ""}${neoTimings}${background ? " (background)" : ""}`);
+          }
+          const logDrain = (drain) => {
+            if (drain && (drain.processed || drain.skipped || drain.parseErrors)) {
+              host.logger.info(`plur1bus-neo: embedding queue worker-drain processed=${drain.processed} pending=${drain.pending} skipped=${drain.skipped} parseErrors=${drain.parseErrors}${drain.stoppedEarly ? " (fruehzeitig gestoppt)" : ""}`);
+            }
+          };
+          if (neoEmbeddingAutoDrainEnabled) {
+            runNeoEmbeddingDrain = async () => {
+              // Der Drain bekommt nur, was vom Capture-Budget uebrig ist,
+              // abzueglich einer Marge fuer den laufenden Embed-Aufruf.
+              // Ohne Frist lief er bis zum Worker-Abbruch (55 s) und der
+              // Hook kehrte erst nach ~62 s zurueck — jenseits der 60 s
+              // des Hosts; bei Bernhardine an jedem Turn (09.09.2026).
+              const remainingMs = runtimeScheduler.config.captureTimeoutMs
+                - (Date.now() - captureStartedAt) - NEO_HOOK_DRAIN_MARGIN_MS;
+              if (remainingMs < NEO_HOOK_DRAIN_MIN_MS) {
+                host.logger.info(`plur1bus-neo: embedding queue drain skipped — ${Math.max(0, remainingMs)}ms left in the capture budget`);
+                return;
+              }
+              logDrain(await neoStore.drainEmbeddingQueue({
+                impact: neoEmbeddingDrainImpact,
+                maxItems: neoEmbeddingDrainMaxItems,
+                dimensions: vectorDim,
+                embedder: (text) => embeddings.embed(text, { agentId }),
+                signal,
+                deadlineMs: remainingMs,
+              }));
+            };
+          } else {
+            logDrain(neoResult?.drain);
+          }
+        } catch (neoErr) {
+          if (isBudgetExhaustion(neoErr, signal)) {
+            host.logger.warn(`plur1bus-neo: worker capture exceeded its ${neoAgentEndBudgetMs}ms budget (kalter Store?) — die Erfassung laeuft weiter, Neo holt beim naechsten Turn auf`);
+          } else {
+            host.logger.warn(`plur1bus-neo: worker capture failed: ${String(neoErr)}`);
+          }
+        }
+      }
+
+      try {
+      throwIfCaptureAborted();
+
+      if (!event.success || !event.messages || event.messages.length === 0) {
+        host.logger.info(`memory-lancedb-namespaced: skipping capture - success=${event.success}, messages=${event.messages?.length || 0}`);
+        return;
+      }
+
+      // await ist hier zwingend: ohne es liefe das finally unten los,
+      // waehrend die Erfassung noch laeuft — genau die Gleichzeitigkeit,
+      // die dieser Umbau beseitigen soll.
+      return await pool.withDb(agentId, async (db) => {
+      // Engine.capture (opts.report) must know whether the pipeline got as far
+      // as storing: an abort or failure before that point is swallowed below,
+      // and the replay guard must not record such a turn (Q3, E4 Task 5).
+      let rowsSettled = false;
+      try {
+        throwIfCaptureAborted();
+        // E4.3: rows an earlier capture of this same turn wrote and never
+        // settled (the process died between a row's commit and the replay
+        // guard marking the turn done). They go before anything else — the
+        // dedup check below would otherwise find them and skip the texts —
+        // so this capture stores the turn exactly once. A delete that fails
+        // fails the capture: the turn stays pending and its next replay
+        // tries again, rather than storing a second copy now.
+        for (const staleId of Array.isArray(opts.staleRowIds) ? opts.staleRowIds : []) {
+          throwIfCaptureAborted();
+          if (!(await db.getById(staleId))) continue;
+          await db.delete(staleId);
+          appendDestructiveOpLog(hookCtx?.workspaceDir, {
+            event: "memory.deleted",
+            source: "capture_replay_rollback",
+            agentId,
+            memoryId: staleId,
+            runId: event?.runId ?? null,
+            timestamp: new Date().toISOString(),
+          });
+          host.logger.info(`memory-lancedb-namespaced: removed row ${staleId} of an unsettled earlier capture of this turn for agent=${agentId}`);
+        }
+        // Extrahiere Text aus User- und Assistant-Nachrichten + Provenance
+        const maxChars = cfg.captureMaxChars || 15000;
+        const turnId = event.turnId || event.runId || "";
+        const items = [];      // {text, role, isUserUrl, sourceUrl}
+        const mediaOutputIds = new Set();
+        const urlPattern = /https?:\/\/[^\s]{10,}/;
+
+        const extractUrl = (t) => {
+          const m = (t || "").match(urlPattern);
+          return m ? m[0].slice(0, 500) : "";
+        };
+
+        for (const msg of event.messages) {
+          if (!msg || typeof msg !== "object") continue;
+          const isUser = msg.role === "user";
+          const isAssistant = msg.role === "assistant";
+          if (!isUser && !isAssistant) continue;
+          const role = msg.role;
+          const content = msg.content;
+          // 7.20.10: Herkunft je Nachricht (provenance des Hosts), z. B. eine
+          // Eingabe aus einer anderen Sitzung. Nur Kennzeichnung.
+          const messageSource = isUser ? captureSourceFromProvenance(msg.provenance || msg.inputProvenance) : null;
+
+          if (typeof content === "string") {
+            if (content && content.length > 20) {
+              const sourceUrl = isUser ? extractUrl(content) : "";
+              const cleaned = stripMediaOutputIdToken(content);
+              extractMediaOutputIds(content).forEach((id) => mediaOutputIds.add(id));
+              items.push({ text: cleaned, role, isUserUrl: isUser && !!sourceUrl, sourceUrl, messageSource });
+            }
+            continue;
+          }
+
+          if (Array.isArray(content)) {
+            for (const block of content) {
+              if (!block || typeof block !== "object") continue;
+
+              if (block.type === "text" && typeof block.text === "string" && block.text.length > 20) {
+                const sourceUrl = isUser ? extractUrl(block.text) : "";
+                const cleaned = stripMediaOutputIdToken(block.text);
+                extractMediaOutputIds(block.text).forEach((id) => mediaOutputIds.add(id));
+                items.push({ text: cleaned, role, isUserUrl: isUser && !!sourceUrl, sourceUrl, messageSource });
+                continue;
+              }
+
+              if (isUser && block.type && block.type !== "text") {
+                const name = block.name || block.fileName || block.filename || "";
+                const mediaType = block.mediaType || block.mimeType || block.mime_type || "";
+                const stub = [
+                  `[User schickte ${block.type}`,
+                  name ? `: ${name}` : "",
+                  mediaType ? ` (${mediaType})` : "",
+                  "]",
+                ].join("").trim();
+                if (stub.length > 20) {
+                  items.push({ text: stub, role, isUserUrl: true, sourceUrl: "", messageSource }); // Attachments wie URLs priorisieren
+                }
+              }
+            }
+          }
+        }
+
+        // Systemisch injizierten Kontext (Recall-Blöcke, Status-Reminder,
+        // Cron) niemals re-capturen → bricht die Recall/Capture-Rückkopplung.
+        const beforeFilter = items.length;
+        let hostEnvelopes = 0;
+        for (let i = items.length - 1; i >= 0; i--) {
+          if (isInjectedContextText(items[i].text)) items.splice(i, 1);
+          // 7.20.10: reine Host-Hüllen ohne Nutzlast ("Continue the OpenClaw
+          // runtime event.", "Exec failed (…)"). Alles mit Inhalt bleibt.
+          else if (isContentFreeHostEnvelope(items[i].text)) {
+            items.splice(i, 1);
+            hostEnvelopes++;
+          }
+        }
+        if (items.length < beforeFilter) {
+          host.logger.info(`memory-lancedb-namespaced: filtered ${beforeFilter - items.length} injected-context item(s) before capture${hostEnvelopes ? ` (${hostEnvelopes} content-free host envelope(s))` : ""}`);
+        }
+
+        if (items.length === 0) {
+          host.logger.info(`memory-lancedb-namespaced: no texts to capture`);
+          return;
+        }
+
+        host.logger.info(`memory-lancedb-namespaced: found ${items.length} texts to capture for agent=${agentId}${background ? " (background)" : ""}`);
+        const contextOrigin = String(event?.origin || event?.source || hookCtx?.origin || hookCtx?.source || "").toLowerCase();
+        const contextKind = String(event?.kind || event?.type || hookCtx?.kind || hookCtx?.type || "").toLowerCase();
+        // v2.2.0: hookCtx.chatType direkt prüfen (zuverlässiger als Text-Heuristik)
+        const ctxChatType = String(event?.chatType || hookCtx?.chatType || "").toLowerCase();
+        const isGroupSession = ctxChatType === "group" || ctxChatType === "supergroup" || ctxChatType === "channel" ||
+          String(event?.sessionKey || hookCtx?.sessionKey || "").includes(":group:") ||
+          String(event?.sessionKey || hookCtx?.sessionKey || "").includes(":channel:");
+        // 7.20.10: Reihenfolge cron → Gruppensitzung → Herkunft aus
+        // classifyCaptureSource (subagent/helper/inter_session) → Gruppe laut
+        // Text → dm. Die Gruppe geht vor, weil sie den Kontext der Erinnerung
+        // anzeigt; eine Subagent-Sitzung ist nie eine Gruppensitzung.
+        const captureOrigin = contextOrigin === "cron" || contextKind === "cron"
+          ? "cron"
+          : isGroupSession
+            ? "group"
+            : captureSource
+              ? captureSource
+              : items.some((it) => textSuggestsGroupOrigin(it.text))
+                ? "group"
+                : "dm";
+        // Eine Nachricht mit eigener Herkunft (provenance) behält sie, wenn
+        // der Zug sonst als dm gälte.
+        const itemOrigin = (it) => (captureOrigin === "dm" && it?.messageSource ? it.messageSource : captureOrigin);
+
+        // Priorisierung: User-Nachrichten mit URLs zuerst (max 3), dann neueste (max 5)
+        const userUrlItems = items.filter(it => it.isUserUrl);
+        const seenTexts = new Set();
+        const captureList = [];
+        for (const it of [...userUrlItems.slice(-3), ...items.slice(-5)]) {
+          if (!seenTexts.has(it.text)) { seenTexts.add(it.text); captureList.push(it); }
+          if (captureList.length >= 8) break;
+        }
+
+        let stored = 0;
+        let skipped = 0;
+        const captureTimestamp = Date.now();
+        // 7.20.10: Sitzung des Captures. Nur der echte Schlüssel des Hosts,
+        // kein sessionId-/runId-Ersatz: der Auto-Recall vergleicht mit
+        // ctx.sessionKey und lässt Treffer derselben Sitzung aus, die noch
+        // im Kontext stehen.
+        const captureSessionKey = normalizeMemorySessionKey(hookCtx?.sessionKey || event?.sessionKey);
+
+        // Phase 1: Prepare texts (summarize/truncate) — alle parallel
+        const textPrep = await Promise.all(captureList.map(async (it) => {
+          let text = it.text;
+          try {
+            if (text.length > maxChars) {
+              if (mergingEnabled && isLlmRouteAvailable(captureSummaryLlmCfg)) {
+                host.logger.info(`memory-lancedb-namespaced: summarizing oversized text (${text.length} chars) for agent=${agentId}`);
+                text = await summarizeForCapture(
+                  text,
+                  maxChars,
+                  captureSummaryLlmCfg,
+                  host.logger,
+                  agentId,
+                  { agentId, signal },
+                );
+              } else {
+                text = text.slice(0, maxChars);
+              }
+            }
+            return { it, text, ok: true };
+          } catch (err) {
+            host.logger.warn(`memory-lancedb-namespaced: text prep failed for capture item: ${describeError(err)}`);
+            return { it, text, ok: false };
+          }
+        }));
+        throwIfCaptureAborted();
+
+        // Phase 1b: Batch-Embedding, falls der Provider es unterstützt.
+        const batchSize = cfg.embeddingBatchSize || 8;
+        // Aufteilung VOR der Einbettung: nur so bekommt jedes Teilstueck
+        // einen eigenen Vektor. Enthaelt eine Nachricht mehrere
+        // unabhaengige Aussagen, ist ein gemeinsamer Vektor deren
+        // Schwerpunkt und liegt von jeder einzelnen weiter entfernt als
+        // noetig — die Zeile wird dann nicht gefunden, obwohl die
+        // Information darin steht. Abschaltbar ueber captureChunking.
+        const preppedOk = textPrep.filter((p) => p.ok);
+        // Drei Speicherweisen, im configSchema als zwei Schalter:
+        //   captureChunking: false                     -> ganz
+        //   true + captureChunkingMode "beides" (Vorgabe) -> Ganzes und Teile
+        //   true + captureChunkingMode "geteilt"       -> nur die Teile
+        // Gemessen an 100 schweren Faellen: 36 % / 64 % / 49 %.
+        const chunkPlan = jevChunkDecider
+          ? await expandForCaptureDecided(preppedOk, {
+            enabled: cfg.captureChunking !== false,
+            makeGroupId: randomUUID,
+            decide: jevChunkDecider,
+          })
+          : expandForCapture(preppedOk, {
+            enabled: cfg.captureChunking !== false,
+            keepWhole: cfg.captureChunkingMode !== "geteilt",
+            makeGroupId: randomUUID,
+          });
+        throwIfCaptureAborted();
+        const validPreps = chunkPlan.items;
+        if (chunkPlan.split > 0 || chunkPlan.needsLlm > 0 || chunkPlan.decisions) {
+          const decided = chunkPlan.decisions ? `, jev whole=${chunkPlan.decisions.whole} parts=${chunkPlan.decisions.parts} both=${chunkPlan.decisions.both}` : "";
+          if (chunkPlan.split > 0 || chunkPlan.needsLlm > 0 || decided && Object.values(chunkPlan.decisions).some(Boolean)) {
+            host.logger.info(`memory-lancedb-namespaced: chunking split ${chunkPlan.split} of ${preppedOk.length} item(s) into ${chunkPlan.parts} part(s), ${chunkPlan.needsLlm} would need a model${decided} for agent=${agentId}`);
+          }
+        }
+        // 7.20.10: Vektor aus dem bereinigten Text (lib/embedding-text.js),
+        // gespeichert wird weiter p.text. Die Map ist nach Einbettungstext
+        // geschlüsselt; embeddingTextMode wandert in die Zeile.
+        const embedInputs = new Map(validPreps.map((p) => [p, prepareEmbeddingText(p.text, embeddingCleanTextCfg)]));
+        const textToVector = new Map();
+        if (validPreps.length > 0 && typeof embeddings.embedBatch === "function") {
+          const textsToEmbed = [...new Set(validPreps.map((p) => embedInputs.get(p).text))];
+          try {
+            for (let i = 0; i < textsToEmbed.length; i += batchSize) {
+              throwIfCaptureAborted();
+              const batch = textsToEmbed.slice(i, i + batchSize);
+              const batchVectors = await embeddings.embedBatch(batch, 3, { agentId });
+              throwIfCaptureAborted();
+              for (let j = 0; j < batch.length; j++) {
+                textToVector.set(batch[j], batchVectors[j]);
+              }
+            }
+            host.logger.info(`memory-lancedb-namespaced: embedded ${textsToEmbed.length} capture item(s) in batch for agent=${agentId}${background ? " (background)" : ""}`);
+          } catch {
+            // Provider errors may contain capture text or unsafe coercion hooks.
+            host.logger.warn("memory-lancedb-namespaced: batch embed failed, falling back to individual embeddings operation=capture stage=batch-embedding errorCode=batch-embedding-failed");
+            textToVector.clear();
+          }
+        }
+        throwIfCaptureAborted();
+
+        // Phase 1c: Einzel-Embedding-Fallback für nicht gebatchte/fehlgeschlagene Items.
+        // chunkGroupId MUSS hier mitgereicht werden. Bis 7.12.70 baute diese
+        // Phase ein frisches Objekt aus nur { it, text, vector, ok } und warf
+        // das von expandForCapture gesetzte Gruppenkennzeichen weg — der
+        // Zeilenbau weiter unten las `p.chunkGroupId` und bekam immer "".
+        // Folge: Ganzes und Teile fielen beide auf denselben sourceTurnId
+        // zurueck (alle Zeilen eines Capture-Laufs teilen ihn), landeten in
+        // EINER Dedup-Gruppe, und DEFAULT_MAX_PER_GROUP = 2 haette hoechstens
+        // zwei davon durchgelassen statt "Ganzes und bis zu zwei Teile".
+        const prepared = await Promise.all(validPreps.map(async (p) => {
+          const embedInput = embedInputs.get(p);
+          let vector = textToVector.get(embedInput.text);
+          if (!vector) {
+            try {
+              vector = await embeddings.embed(embedInput.text, { agentId });
+            } catch (err) {
+              host.logger.warn(`memory-lancedb-namespaced: embed failed for capture item: ${describeError(err)}`);
+              return { it: p.it, text: p.text, chunkGroupId: p.chunkGroupId || "", vector: null, ok: false };
+            }
+          }
+          return { it: p.it, text: p.text, chunkGroupId: p.chunkGroupId || "", vector, embeddingTextMode: embedInput.mode, ok: true };
+        }));
+        throwIfCaptureAborted();
+
+        // Phase 2: Dedup-Checks parallel (schnell mit ANN-Index)
+        let dedupFailed = 0;
+        const toStore = (await Promise.all(
+          prepared.filter(p => p.ok).map(async (p) => {
+            try {
+              const existing = await db.search(p.vector, 1, duplicateThreshold);
+              if (existing.length > 0) return null;
+              return p;
+            } catch (err) {
+              host.logger.warn(`memory-lancedb-namespaced: dedup-check failed: ${describeError(err)}`);
+              dedupFailed++;
+              return null;
+            }
+          })
+        )).filter(Boolean);
+        throwIfCaptureAborted();
+
+        skipped = prepared.filter(p => p.ok).length - toStore.length;
+
+        // Phase 3: Writes sequentiell (LanceDB-Versioning erfordert serielle Writes)
+        const storedMemoryRows = [];
+        let storeFailed = 0;
+        // E4.3: the row ids are fixed here and announced before the first row
+        // is written, so a process killed anywhere from here on leaves the
+        // turn pending with these ids and its replay removes them first.
+        const plannedIds = toStore.map(() => randomUUID());
+        if (typeof opts.onRowsPlanned === "function" && plannedIds.length > 0) {
+          try {
+            opts.onRowsPlanned(plannedIds);
+          } catch (planErr) {
+            host.logger.warn(`memory-lancedb-namespaced: replay guard plan failed for agent=${agentId}: ${String(planErr)}`);
+          }
+        }
+        for (const [storeIndex, p] of toStore.entries()) {
+          try {
+            throwIfCaptureAborted();
+            const categoryResult = categorizeMemoryWithReason(p.text);
+            const category = categoryResult.category;
+            // Bis der stündliche Cron geurteilt hat, zählt die neutrale
+            // 0.5. Ein geschätzter Zwischenwert wäre wieder die
+            // Heuristik, die hier abgelöst wird. In derselben Session
+            // steht die Erinnerung in dieser Zeit ohnehin noch im
+            // Kontextfenster.
+            const importance = 0.5;
+            const summary = generateSummary(p.text, summaryMaxWords);
+            const evidenceQuote = p.it.text.slice(0, 200);
+            const { emotion: captureEmotion, emotionStatus: captureEmotionStatus } = await classifyEmotionForStore(p.text, { agentId, signal, importance });
+            throwIfCaptureAborted();
+            const captureMoodContext = emotionalPool.snapshot(agentId);
+            const graphSignals = extractGraphSignals(p.text, { category, sourceUrl: p.it.sourceUrl, role: p.it.role });
+            const memoryId = plannedIds[storeIndex];
+
+            const row = applyDynamicsDefaults({
+              id: memoryId,
+              text: p.text,
+              summary,
+              origin: itemOrigin(p.it),
+              vector: p.vector,
+              importance,
+              importanceStatus: IMPORTANCE_STATUS.PENDING,
+              category,
+              createdAt: captureTimestamp,
+              mergedFrom: "[]",
+              expiresAt: 0,
+              storedBy: agentId,
+              sourceTurnId: turnId || "",
+              // Leer, wenn nicht aufgeteilt — die Recall-Seite faellt dann
+              // auf sourceTurnId zurueck (lib/recall-pipeline.js).
+              chunkGroupId: p.chunkGroupId || "",
+              sourceMessageRole: p.it.role || "",
+              sessionKey: captureSessionKey,
+              embeddingTextMode: p.embeddingTextMode || "raw",
+              // 7.21.2: Vertraulichkeit nach Regeln (lib/sensitivity.js), kein LLM-Aufruf.
+              sensitivity: classifySensitivityByRules(p.text).sensitivity,
+              sensitivitySource: "rules",
+              epistemicStatus: decideEpistemicStatusForCapture({
+                text: p.text,
+                sourceMessageRole: p.it.role || "",
+                origin: itemOrigin(p.it),
+                cutoffFailed: !epistemicCutoffBoot.ok,
+              }),
+              sourceTimestamp: captureTimestamp,
+              sourceUrl: p.it.sourceUrl || "",
+              evidenceQuote,
+              scope: "agent-private",
+              emotionalValence: serializeEmotionalValence(captureEmotion),
+              emotionalIntensity: captureEmotion.emotionalIntensity,
+              emotionalDominant: captureEmotion.emotionalDominant,
+              moodContextAtCapture: serializeEmotionalValence(captureMoodContext),
+              emotionStatus: captureEmotionStatus,
+              topics: graphSignals.topics,
+              entities: graphSignals.entities,
+              people: graphSignals.people,
+              projects: graphSignals.projects,
+            }, captureTimestamp, halfLifeOverrides, { intensityHalfLifeFactor: emotionIntensityHalfLifeFactor, flashbulbEncodingEnabled });
+            await db.store(row);
+            storedMemoryRows.push(row);
+            stored++;
+            if (opts.report) opts.report.stored = stored;
+            host.logger.info(`memory-lancedb-namespaced: stored memory [${category}|${itemOrigin(p.it)}] for agent=${agentId}`);
+          } catch (err) {
+            const settlement = await waitForTimeoutSettlement(err);
+            if (settlement.status === "rejected") {
+              host.logger.warn(`memory-lancedb-namespaced: late capture store settlement failed: ${String(settlement.error)}`);
+            }
+            // Ist das Budget alle, scheitert jeder weitere Eintrag am selben
+            // Abbruch. Frueher stand deshalb je Restposten eine eigene
+            // Fehlerzeile im Log (09.09.2026: vier Stueck fuer bernhardine),
+            // was nach Datenverlust aussah, obwohl das Bereits-Gespeicherte
+            // steht und der Rest beim naechsten Turn drankommt. Einmal
+            // abbrechen, der aeussere Block meldet den Zaehlstand.
+            if (isAbortError(err)) throw err;
+            storeFailed++;
+            host.logger.warn(`memory-lancedb-namespaced: failed to store capture: ${describeError(err)}`);
+          }
+        }
+        throwIfCaptureAborted();
+
+        host.logger.info(`memory-lancedb-namespaced: capture complete - stored=${stored}, skipped=${skipped}${background ? " (background)" : ""}`);
+        rowsSettled = true;
+        // E5 Task 6: every stored row is a new LanceDB fragment; the fragment
+        // compactor counts them and checks the table every few writes.
+        if (stored > 0 && typeof noteTableWrite === "function") {
+          for (let i = 0; i < stored; i++) {
+            try { noteTableWrite(agentId); } catch { /* best-effort */ }
+          }
+        }
+        // An item whose preparation, embedding, dedup check or write failed
+        // was not stored: the turn is incomplete, so a replay may retry it.
+        const failedItems = textPrep.filter((p) => !p.ok).length + prepared.filter((p) => !p.ok).length
+          + dedupFailed + storeFailed;
+        if (opts.report) {
+          Object.assign(opts.report, { stored, skipped });
+          if (failedItems > 0) opts.report.incomplete = "capture-incomplete";
+        }
+        // E4.1: the rows are in; tell Engine.capture's replay guard now,
+        // before the post-store steps below (speaker pipeline, meta-cognition,
+        // graph, the neo drain in `finally`), so a process killed in that
+        // window does not store the turn again on journal replay. Those
+        // steps are best-effort: their failure leaves the turn recorded.
+        // Only a clean store (something stored, nothing failed) qualifies;
+        // the OpenClaw adapter passes no callback.
+        if (typeof opts.onRowsSettled === "function" && stored > 0 && failedItems === 0) {
+          try {
+            opts.onRowsSettled();
+          } catch (settleErr) {
+            host.logger.warn(`memory-lancedb-namespaced: replay guard record failed for agent=${agentId}: ${String(settleErr)}`);
+          }
+        } else if (typeof opts.onRowsKept === "function") {
+          // E4.3: not a clean store, but the rows that did land stay and go
+          // through the post-store steps below (graph edges will reference
+          // them), so the turn is no longer pending: a replay retries the
+          // turn as before instead of removing these rows.
+          try {
+            opts.onRowsKept();
+          } catch (keptErr) {
+            host.logger.warn(`memory-lancedb-namespaced: replay guard update failed for agent=${agentId}: ${String(keptErr)}`);
+          }
+        }
+
+        // Speaker naming pipeline: propose display names from merged diarization segments.
+        await runSpeakerProposalPipeline(agentId, [...mediaOutputIds]);
+        throwIfCaptureAborted();
+
+        // Meta-Cognition: Session-Counter erhöhen, ggf. Reflection triggern
+        if (metaCognitionEnabled && stored > 0) {
+          metaReflectionState.sessionCount++;
+          const shouldReflect = shouldTriggerReflection(
+            metaReflectionState.sessionCount,
+            metaCognitionSessionThreshold,
+            metaReflectionState.lastAt,
+            { intervalMs: metaCognitionIntervalMs },
+          );
+          if (shouldReflect) {
+            try {
+              const neoStore = createNeoStore(neoRoot, rememberNeoWorkspace(hookCtx, event));
+              const reflectionWorkspaceDir = memoryCtx?.workspaceDir || snapshotNeoString(hookCtx?.workspaceDir) || snapshotNeoString(event?.workspaceDir);
+              const reflectResult = await runReflectionJob({
+                store: neoStore,
+                workspaceDir: reflectionWorkspaceDir,
+                logger: host.logger,
+                llmReport: metaCognitionLlmReport,
+              });
+              if (reflectResult.ok) {
+                metaReflectionState.sessionCount = 0;
+                metaReflectionState.lastAt = Date.now();
+                const metaStatePath = join(baseDbPath, "_meta-cognition-state.json");
+                writeFileSync(metaStatePath, JSON.stringify({ sessionCountSinceReflection: metaReflectionState.sessionCount, lastReflectionAt: metaReflectionState.lastAt }, null, 2));
+                host.logger.info(`memory-lancedb-namespaced: meta-reflection triggered after ${metaCognitionSessionThreshold} sessions`);
+              }
+            } catch (err) {
+              host.logger.warn(`memory-lancedb-namespaced: meta-reflection failed: ${describeError(err)}`);
+            }
+          }
+        }
+
+        // --- Reminder Extraction ---
+        for (const it of items) {
+          try {
+            throwIfCaptureAborted();
+            const plan = planReminderExtraction(it, {
+              enabled: reminderAutoExtract,
+              now: Date.now(),
+            });
+            if (!plan.skip) {
+              const parsed = plan.parsed;
+              const wsKey = hookCtx?.workspaceDir || "default";
+              const source = "user";
+              // Ursprungssatz statt blosser Zeitfloskel — sonst hat der
+              // Reminder kein Thema (siehe buildReminderText).
+              const reminderText = plan.reminderText;
+              if (parsed.requiresConfirmation) {
+                await saveReminder(db, {
+                  text: reminderText,
+                  remindAt: parsed.remindAt,
+                  agentId,
+                  workspaceKey: wsKey,
+                  source,
+                  embeddings,
+                  initialStatus: "pending_confirmation",
+                });
+                host.logger.info(`plur1bus-reminder: stored pending-confirmation reminder for ${agentId}`);
+              } else {
+                await saveReminder(db, {
+                  text: reminderText,
+                  remindAt: parsed.remindAt,
+                  agentId,
+                  workspaceKey: wsKey,
+                  source,
+                  embeddings,
+                });
+                host.logger.info(`plur1bus-reminder: stored reminder for ${agentId} at ${new Date(parsed.remindAt).toISOString()} (${parsed.timePrecision})`);
+              }
+            }
+          } catch (reminderStoreErr) {
+            const settlement = await waitForTimeoutSettlement(reminderStoreErr);
+            if (settlement.status === "rejected") {
+              host.logger.warn(`plur1bus-reminder: late store settlement failed: ${String(settlement.error)}`);
+            }
+            host.logger.warn(`plur1bus-reminder: store failed: ${String(reminderStoreErr)}`);
+          }
+        }
+
+        throwIfCaptureAborted();
+
+        // High-Watermark: Nur neue Messages seit letztem Durchlauf verarbeiten
+        const neoStore = getNeoStore(hookCtx, event);
+        const hooks = neoStore.readHooks();
+        const recordedCount = hooks?.agent_end?.lastProcessedMessageCount || 0;
+        const currentCount = event.messages?.length || 0;
+        // 7.12.24: Nach einer Kompaktierung ist der Verlauf kuerzer als die
+        // Marke (z. B. 274 → 221); ohne Reset blieb dieser Block stumm, bis
+        // der Verlauf die alte Laenge wieder ueberschritt.
+        let lastCount = recordedCount;
+        if (currentCount < recordedCount) {
+          host.logger.info(`memory-lancedb-namespaced: message count dropped (${recordedCount} → ${currentCount}), resetting the agent_end watermark`);
+          lastCount = 0;
+        }
+
+        if (currentCount <= lastCount) {
+          host.logger.info(`memory-lancedb-namespaced: no new messages since last processing (${lastCount} → ${currentCount})`);
+        } else {
+          // Nur die neuen Messages normalisieren
+          const newMessages = event.messages.slice(lastCount);
+          // 7.12.44: gleiche Turn-Identitaet wie das Journal des Workers
+          // (normierter Workspace-Schluessel + stabiler Sitzungsschluessel),
+          // sonst zeigen Episoden auf Turn-IDs, die es nirgends gibt.
+          const normalizedTurns = turnEventsFromMessages(newMessages, {
+            ...turnIdentityParams(event, hookCtx, rememberNeoWorkspace(hookCtx, event)),
+            createdAt: new Date().toISOString(),
+          });
+
+          // Idempotenz: Session-Digest für Dreams/Episoden (nur neue Turns)
+          const sessionDigest = normalizedTurns.map(t => `${t.role}:${t.content}`).join("\n");
+          const { createHash } = await import("node:crypto");
+          const digestHash = createHash("sha256").update(sessionDigest).digest("hex").slice(0, 16);
+
+          // Die beiden folgenden Pfade (Light-Dream, Episoden) laufen
+          // fire-and-forget. Das High-Watermark darf erst hochgezaehlt
+          // werden, wenn sie durch sind — sonst liegen die Turns eines
+          // fehlgeschlagenen Laufs darunter und werden NIE wieder
+          // betrachtet (dauerhafter Episodenverlust, im Feld beobachtet).
+          // Jeder Eintrag ist ein Promise<boolean>: true = erledigt.
+          const postProcessing = [];
+          // 7.18.14: Light-Traum und Episoden nur einreihen, wenn der Host
+          // post-turn-refine wirklich plant. Hosts, die die Caller-Identität
+          // nach dem Turn widerrufen, setzen deferPostTurnLlm und
+          // capabilities.postTurnRefineScheduled. Sonst bleibt der Inline-Pfad,
+          // inklusive jobs.run("light-dream").
+          const deferredWork = { lightDream: false, episodes: false };
+
+          // v5.3.0 — Light Dreaming: Nach-Session-Reflexion (fire-and-forget)
+          if (!background && mergingEnabled && isLlmRouteAvailable(conversationInsightsLlmCfg) && neoEnabled) {
+            const processedDreams = hooks?.agent_end?.processedDreams || [];
+            if (processedDreams.includes(digestHash)) {
+              host.logger.info(`memory-lancedb-namespaced: light dream already processed for this session (digest=${digestHash})`);
+            } else if (normalizedTurns.length < 3) {
+              host.logger.info(`memory-lancedb-namespaced: skipping light dream - too few turns (${normalizedTurns.length})`);
+            } else if (normalizedTurns.length > 50) {
+              host.logger.info(`memory-lancedb-namespaced: skipping light dream - too many turns (${normalizedTurns.length})`);
+            } else if (deferPostTurnLlm) {
+              deferredWork.lightDream = true;
+            } else {
+              // Fire-and-forget: nicht awaiten, damit der Hook nicht blockiert
+              let personaIdentityText = "";
+              if (hookCtx?.workspaceDir) {
+                for (const identityFile of ["SOUL.md", "IDENTITY.md", "AGENT.md"]) {
+                  try {
+                    personaIdentityText = readFileSync(join(hookCtx.workspaceDir, identityFile), "utf8").slice(0, 2000);
+                    break;
+                  } catch (_) { /* try next */ }
+                }
+              }
+              const { requestContext: lightRequestContext, aclBindings: lightAclBindings } = lightDreamIdentity(opts.memoryCtx, () => resolveMemoryRequestContext({
+                agentId,
+                workspaceDir: hookCtx?.workspaceDir,
+                workspaceKey: hookCtx?.workspaceKey,
+                userId: hookCtx?.userId ?? hookCtx?.senderId,
+                channel: hookCtx?.channel ?? hookCtx?.messageProvider,
+                accountId: hookCtx?.accountId ?? hookCtx?.channelContext?.accountId,
+                chatId: hookCtx?.chatId,
+              }, { workspaceAliases: memoryWorkspaceAliases }), { provedUserPrincipal: opts.provedUserPrincipal });
+              const lightDreamWork = () => lightDream({
+                turns: normalizedTurns,
+                neoStore,
+                db,
+                embeddings,
+                insightLlmCfg: withLlmCallContext(
+                  conversationInsightsLlmCfg,
+                  agentId,
+                  "conversation-insights",
+                  { signal },
+                ),
+                narrativeLlmCfg: withLlmCallContext(
+                  dreamNarrativeLlmCfg,
+                  agentId,
+                  "dream-narrative",
+                  { signal },
+                ),
+                echoLlmCfg: withLlmCallContext(
+                  dreamEchoLlmCfg,
+                  agentId,
+                  "dream-echo",
+                  { signal },
+                ),
+                personaLlmCfg: (skillMinerEnabled || mergingEnabled) ? withLlmCallContext(
+                  personaVoiceLlmCfg,
+                  agentId,
+                  "persona-voice",
+                  { signal },
+                ) : null,
+                callLlm,
+                logger: host.logger,
+                narrativeCfg: dreamNarrativeCfg,
+                workspaceDir: hookCtx?.workspaceDir || null,
+                temperamentName: resolveTemperamentName(agentId),
+                personaSeedCfg: (cfg.personaVoice?.enabled ?? true) !== false
+                  ? { agentId, lang: cfg.language || "de", identityText: personaIdentityText }
+                  : null,
+                requestContext: lightRequestContext,
+                aclBindings: lightAclBindings,
+                signal,
+              }).then((dreamResult) => {
+                throwIfAborted(signal, "light dream commit aborted");
+                if (hookCtx?.workspaceDir) {
+                  throwIfAborted(signal, "light dream commit aborted");
+                  writeLightDreamToVault(dreamResult, hookCtx.workspaceDir, normalizedTurns);
+                }
+                // Markiere als verarbeitet
+                const mergedDreams = [...processedDreams.slice(-100), digestHash];
+                throwIfAborted(signal, "light dream commit aborted");
+                neoStore.recordHook("agent_end", { processedDreams: mergedDreams });
+                // Light sleep has no schedule; its last run is the only
+                // time the Memory page can show for it.
+                recordLightDreamRun({ baseDbPath, agentId }).catch((runErr) => {
+                  host.logger.debug?.(`memory-lancedb-namespaced: light dream run not recorded: ${String(runErr)}`);
+                });
+                return true;
+              });
+              postProcessing.push(jobs
+                ? jobs.run("light-dream", agentId, { trigger: "capture", signal, input: { work: lightDreamWork } })
+                  .then((dreamRun) => {
+                    const { advance, warnKind } = classifyLightDreamOutcome(dreamRun);
+                    if (warnKind === "ledger_unwritable") {
+                      warnLightDreamLedgerUnwritable(agentId);
+                    } else if (warnKind === "failed") {
+                      host.logger.warn?.(`memory-lancedb-namespaced: light dream failed: ${String(dreamRun.error)}`);
+                    }
+                    return advance;
+                  })
+                : lightDreamWork().catch((dreamErr) => {
+                  host.logger.warn?.(`memory-lancedb-namespaced: light dream failed: ${String(dreamErr)}`);
+                  return false;
+                }));
+            }
+          }
+
+          // v5.3.0 — Episoden-Extraktion: Turns zu Geschichten gruppieren (fire-and-forget)
+          if (!background && neoEnabled) {
+            const processedEpisodes = hooks?.agent_end?.processedEpisodes || [];
+            if (processedEpisodes.includes(digestHash)) {
+              host.logger.info(`memory-lancedb-namespaced: episodes already processed for this session (digest=${digestHash})`);
+            } else if (deferPostTurnLlm) {
+              deferredWork.episodes = true;
+            } else {
+              postProcessing.push(runEpisodePostTurn({
+                agentId,
+                ctx: hookCtx,
+                sessionKey: event?.sessionKey || hookCtx?.sessionKey || "",
+                neoStore,
+                normalizedTurns,
+                digestHash,
+                hooks,
+                signal,
+              }));
+            }
+          }
+
+          if (deferredWork.lightDream || deferredWork.episodes) {
+            try {
+              const queued = enqueuePostTurnWork(baseDbPath, agentId, {
+                neoWorkspaceKey: rememberNeoWorkspace(hookCtx, event),
+                ctx: postTurnContext({ ...hookCtx, provedUserPrincipal: opts.provedUserPrincipal }),
+                sessionKey: event?.sessionKey || hookCtx?.sessionKey || "",
+                digestHash,
+                turns: normalizedTurns,
+                lightDream: deferredWork.lightDream,
+                episodes: deferredWork.episodes,
+              }, { logger: host.logger });
+              host.logger.info(`memory-lancedb-namespaced: post-turn work queued for agent=${agentId} (light=${deferredWork.lightDream}, episodes=${deferredWork.episodes}, turns=${normalizedTurns.length}${queued.dropped ? `, dropped=${queued.dropped}` : ""})`);
+              postProcessing.push(Promise.resolve(true));
+            } catch (queueErr) {
+              host.logger.warn?.(`memory-lancedb-namespaced: post-turn queue unavailable, running inline: ${String(queueErr)}`);
+              if (deferredWork.lightDream) {
+                postProcessing.push(runLightDreamPostTurn({
+                  agentId,
+                  ctx: { ...hookCtx, provedUserPrincipal: opts.provedUserPrincipal },
+                  neoStore,
+                  db,
+                  normalizedTurns,
+                  digestHash,
+                  processedDreams: hooks?.agent_end?.processedDreams || [],
+                  signal,
+                }));
+              }
+              if (deferredWork.episodes) {
+                postProcessing.push(runEpisodePostTurn({
+                  agentId,
+                  ctx: hookCtx,
+                  sessionKey: event?.sessionKey || hookCtx?.sessionKey || "",
+                  neoStore,
+                  normalizedTurns,
+                  digestHash,
+                  hooks,
+                  signal,
+                }));
+              }
+            }
+          }
+
+          // High-Watermark aktualisieren — aber erst, wenn die
+          // fire-and-forget-Nachverarbeitung durch ist. Wird es wie
+          // frueher synchron hochgezaehlt, sind die Turns eines
+          // fehlgeschlagenen Laufs dauerhaft verloren.
+          const advanceWatermark = () => {
+            neoStore.recordHook("agent_end", {
+              lastProcessedMessageCount: currentCount,
+              postProcessingFailures: 0,
+            });
+          };
+          if (postProcessing.length === 0) {
+            advanceWatermark();
+          } else {
+            const failures = Number(hooks?.agent_end?.postProcessingFailures) || 0;
+            Promise.all(postProcessing).then((results) => {
+              const decision = resolveWatermarkAdvance({
+                results,
+                failures,
+                maxRetries: MAX_POSTPROCESSING_RETRIES,
+              });
+              if (decision.gaveUp) {
+                host.logger.warn?.(`memory-lancedb-namespaced: Nachverarbeitung ${MAX_POSTPROCESSING_RETRIES}x gescheitert — Watermark wird nachgezogen, Turns ${lastCount}..${currentCount} bleiben unverarbeitet (agent=${agentId})`);
+              }
+              if (decision.advance) {
+                advanceWatermark();
+                return;
+              }
+              host.logger.warn?.(`memory-lancedb-namespaced: Nachverarbeitung unvollstaendig — Watermark bleibt bei ${lastCount}, Bereich wird erneut versucht (${decision.nextFailures}/${MAX_POSTPROCESSING_RETRIES}, agent=${agentId})`);
+              neoStore.recordHook("agent_end", { postProcessingFailures: decision.nextFailures });
+            }).catch((aggErr) => {
+              host.logger.warn?.(`memory-lancedb-namespaced: Watermark-Nachlauf fehlgeschlagen: ${String(aggErr)}`);
+            });
+          }
+        }
+
+        // v5.4.0 — Memory-Graph: Assoziative Verknüpfung
+        if (!background && neoEnabled && storedMemoryRows.length > 0) {
+          try {
+            throwIfCaptureAborted();
+            const neoStore = getNeoStore(hookCtx, event);
+            const graphMetrics = createGraphMetrics();
+
+            // Baue newMemories aus stored captures
+            const newMemories = storedMemoryRows.map(row => ({
+              id: row.id,
+              createdAt: new Date(captureTimestamp).toISOString(),
+              sessionId: event?.sessionId || event?.sessionKey || event?.runId || "",
+              vector: row.vector,
+              topics: row.topics || [],
+              entities: row.entities || [],
+              emotionalDominant: row.emotionalDominant,
+              emotionalIntensity: row.emotionalIntensity,
+              status: row.status || "active",
+              epistemicStatus: row.epistemicStatus || "",
+              expiresAt: row.expiresAt ?? 0,
+              scope: row.scope,
+              agentId: row.agentId,
+              storedBy: row.storedBy,
+              workspaceId: row.workspaceId || "",
+              workspaceKey: row.workspaceKey || "",
+              ownerUserId: row.ownerUserId || "",
+            }));
+
+            // Lade existierende Edges für Deduplizierung. 7.21.4: Index über
+            // dieselben letzten 10 000 Zeilen, liest nur Angehängtes nach
+            // (vorher 0,3-0,5 s synchron je Capture); mit Legacy-Graph wie bisher.
+            const edgeIndex = graphEdgeExistenceIndex(neoStore, 10_000);
+            let edgeExists;
+            if (edgeIndex) {
+              edgeExists = (edge) => edgeIndex.has(edge.source, edge.target, edge.type);
+            } else {
+              const { adjacency: existingAdj } = readBoundGraph(neoStore.readGraphEdges(10_000));
+              edgeExists = (edge) => Boolean(existingAdj.get(edge.source)?.find(e => e.target === edge.target && e.type === edge.type));
+            }
+
+            // Lade recent existing memories für vollständigen Edge-Aufbau
+            let recentExisting = [];
+            try {
+              recentExisting = await db.getRecentForGraph({
+                limit: 100,
+                sessionId: event?.sessionId || event?.sessionKey || event?.runId || "",
+                includeGlobalRecent: true,
+                // text: daraus leitet buildEdgesForSession die Themen ab,
+                // die in der Tabelle nicht gespeichert sind.
+                fields: [
+                  "id", "createdAt", "text", "sessionId", "topics", "entities", "emotionalDominant", "emotionalIntensity",
+                  "status", "epistemicStatus", "expiresAt", "scope", "agentId", "storedBy", "workspaceId", "workspaceKey", "ownerUserId",
+                ],
+              });
+            } catch (err) {
+              host.logger.debug(`memory-graph: recent ownership projection failed: ${describeError(err)}`);
+            }
+
+            // Baue neue Edges. getRecentForGraph liefert die eben
+            // gespeicherten Zeilen dieses Laufs mit; ohne diesen Filter
+            // stuenden sie doppelt im Bestand (7.20.6-Review).
+            const neueIds = new Set(newMemories.map((m) => String(m.id)));
+            const allEdges = memoryCtx ? await buildEdgesForSession(
+              newMemories.filter(m => m.vector),
+              [...recentExisting.filter((r) => !neueIds.has(String(r.id))), ...newMemories],
+              db.table,
+              host.logger,
+              { requestContext: memoryCtx },
+            ) : [];
+
+            // Episode-Anchor-Edges — nur für Episoden im aktuellen Zeitfenster
+            const allEpisodes = neoStore.readEpisodes(100);
+            const twoHoursAgo = captureTimestamp - 2 * 60 * 60 * 1000;
+            const recentEpisodes = allEpisodes.filter(ep => {
+              const epStart = new Date(ep.startTime).getTime();
+              return epStart >= twoHoursAgo;
+            });
+            const episodeEdges = buildEpisodeAnchorEdges(
+              recentEpisodes,
+              newMemories,
+              { requestContext: memoryCtx },
+            );
+
+            const combinedEdges = [...allEdges, ...episodeEdges];
+
+            // Dedupliziere gegen existierende Edges
+            const newUniqueEdges = combinedEdges.filter(edge => !edgeExists(edge));
+
+            if (newUniqueEdges.length > 0) {
+              neoStore.appendGraphEdges(newUniqueEdges);
+              for (const edge of newUniqueEdges) {
+                graphMetrics.record(edge.type);
+              }
+              host.logger.info(`memory-graph: ${newUniqueEdges.length} edges added for agent=${agentId}`);
+            }
+
+            // Vault-Ausgabe: Memory Constellation Report
+            if (hookCtx?.workspaceDir && Math.random() < 0.1) {
+              try {
+                const allEdges = neoStore.readGraphEdges(5_000);
+                const reportPath = writeGraphConstellationReport(allEdges, hookCtx.workspaceDir);
+                if (reportPath) {
+                  host.logger.info(`memory-graph: constellation report written to ${reportPath}`);
+                }
+              } catch (vaultErr) {
+                host.logger.warn?.(`memory-graph: vault report failed: ${String(vaultErr)}`);
+              }
+            }
+          } catch (graphErr) {
+            host.logger.warn?.(`memory-lancedb-namespaced: graph build failed: ${String(graphErr)}`);
+          }
+        }
+      } catch (err) {
+        if (opts.report && !rowsSettled) opts.report.incomplete = isAbortError(err) || signal?.aborted ? "aborted" : "capture-failed";
+        if (isAbortError(err)) {
+          // Ohne Zaehler: `stored`/`skipped` leben im try-Block und sind
+          // hier nicht sichtbar. Was gespeichert wurde, steht ohnehin je
+          // Eintrag im Log ("stored memory ...").
+          host.logger.info(`memory-lancedb-namespaced: capture budget exhausted for agent=${agentId} — das bereits Gespeicherte steht, der Rest folgt beim naechsten Turn`);
+        } else {
+          host.logger.warn(`memory-lancedb-namespaced: capture failed for agent=${agentId}: ${describeError(err)}`);
+        }
+      }
+      });
+      } finally {
+        // Rest des Budgets fuer die Wartung. Ist es schon aufgebraucht,
+        // bleibt der Rueckstau stehen und der naechste Lauf macht weiter —
+        // besser als die Erfassung ein weiteres Mal auszuhungern.
+        if (runNeoEmbeddingDrain && !signal?.aborted) {
+          try {
+            await runNeoEmbeddingDrain();
+          } catch (drainErr) {
+            host.logger.warn(`plur1bus-neo: embedding queue drain failed: ${String(drainErr)}`);
+          }
+        }
+      }
+    })); // runtimeScheduler.enqueueCapture (detachPostTurnWork)
+  };
+}

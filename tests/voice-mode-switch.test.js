@@ -12,10 +12,10 @@ import {
 import { readVoiceMode } from "../lib/voice-mode.js";
 
 const config = {
-  commands: { ownerAllowFrom: ["discord:1323072788939935867"] },
+  commands: { ownerAllowFrom: ["discord:1000000000000000001"] },
   channels: { discord: { voice: { allowedChannels: [
-    { guildId: "1486678369901744240", channelId: "1486678370434551811" },
-    { guildId: "1486678369901744240", channelId: "1518159522076823592" },
+    { guildId: "1000000000000000002", channelId: "1000000000000000003" },
+    { guildId: "1000000000000000002", channelId: "1000000000000000004" },
   ] } } },
 };
 
@@ -48,10 +48,10 @@ test("the mode message marks the active mode and offers both buttons", () => {
 });
 
 test("only the configured Discord owner may switch", () => {
-  assert.equal(isOwnerSender("1323072788939935867", config), true);
-  assert.equal(isOwnerSender("discord:1323072788939935867", config), true);
+  assert.equal(isOwnerSender("1000000000000000001", config), true);
+  assert.equal(isOwnerSender("discord:1000000000000000001", config), true);
   assert.equal(isOwnerSender("999", config), false);
-  assert.equal(isOwnerSender("1323072788939935867", {}), false, "no owner configured → nobody");
+  assert.equal(isOwnerSender("1000000000000000001", {}), false, "no owner configured → nobody");
 });
 
 test("applying light stores the mode and sets thinking off in every voice session, never the model", async (t) => {
@@ -63,12 +63,12 @@ test("applying light stores the mode and sets thinking off in every voice sessio
     patches.push({ agentId, sessionKey, next });
     return next;
   };
-  const out = await applyVoiceMode({ baseDbPath: base, agentId: "main", mode: "light", config, patchSessionEntry, by: "discord:1323072788939935867" });
+  const out = await applyVoiceMode({ baseDbPath: base, agentId: "main", mode: "light", config, patchSessionEntry, by: "discord:1000000000000000001" });
   assert.deepEqual(out, { mode: "light", patched: 2, failed: 0 });
   assert.equal(readVoiceMode(base, "main"), "light");
   assert.deepEqual(patches.map((p) => p.sessionKey), [
-    "agent:main:discord:channel:1486678370434551811",
-    "agent:main:discord:channel:1518159522076823592",
+    "agent:main:discord:channel:1000000000000000003",
+    "agent:main:discord:channel:1000000000000000004",
   ]);
   for (const p of patches) {
     assert.equal(p.next.thinkingLevel, "off");
@@ -133,14 +133,14 @@ test("the /modus hook and the plurv button switch the mode for the owner only", 
     }
     return undefined;
   };
-  const context = { channelId: "discord", accountId: "default", senderId: "1323072788939935867", conversationId: "channel:1518159522076823592", sessionKey: "agent:main:discord:channel:1518159522076823592" };
+  const context = { channelId: "discord", accountId: "default", senderId: "1000000000000000001", conversationId: "channel:1000000000000000004", sessionKey: "agent:main:discord:channel:1000000000000000004" };
 
   const light = await run({ body: "/modus light", isGroup: true }, context);
   assert.equal(light?.handled, true);
   assert.equal(readVoiceMode(baseDbPath, "main"), "light");
   assert.equal(patched.length, 2);
   assert.equal(sent.length, 1, "the mode message with buttons is sent to the channel");
-  assert.equal(sent[0].to, "channel:1518159522076823592");
+  assert.equal(sent[0].to, "channel:1000000000000000004");
   assert.equal(sent[0].accountId, "default");
   assert.match(sent[0].payload.text, /Light/);
   assert.equal(sent[0].payload.interactive.blocks[0].type, "buttons");
@@ -160,7 +160,7 @@ test("the /modus hook and the plurv button switch the mode for the owner only", 
   const tap = (senderId, authorized = true) => button.handler({
     channel: "discord",
     accountId: "default",
-    conversationId: "channel:1518159522076823592",
+    conversationId: "channel:1000000000000000004",
     senderId,
     auth: { isAuthorizedSender: authorized },
     interaction: { kind: "button", payload: "persona:main" },
@@ -169,7 +169,7 @@ test("the /modus hook and the plurv button switch the mode for the owner only", 
   await tap("42");
   assert.equal(readVoiceMode(baseDbPath, "main"), "light", "stranger tap changes nothing");
   assert.equal(cleared.length, 0);
-  await tap("1323072788939935867");
+  await tap("1000000000000000001");
   assert.equal(readVoiceMode(baseDbPath, "main"), "persona");
   assert.match(cleared.at(-1).text, /Persona/);
   assert.equal(sent.length, 2, "fresh buttons follow the click");

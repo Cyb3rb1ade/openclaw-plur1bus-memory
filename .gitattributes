@@ -1,3 +1,7 @@
+# Check out text files with LF on every OS (Windows runners default to core.autocrlf=true): the rendered
+# install-plugin.sh must be POSIX sh, golden fixtures are compared byte for byte, and tests split sources on "\n".
+* text=auto eol=lf
+
 # Unified patches encode an empty context line as a single space. Keep that
 # required patch syntax rather than treating it as source trailing whitespace.
 hermes-dashboard/patches/*.patch whitespace=-blank-at-eol

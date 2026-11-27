@@ -270,7 +270,9 @@ test("Jev credential UI remains behind the dashboard operator.write registration
 
 test("Jev apiKey is accepted by the plugin contract and classified sensitive", () => {
   const manifest = JSON.parse(readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"));
-  assert.equal(manifest.configSchema.properties.captureChunkingJev.properties.apiKey.type, "string");
+  // main: the key is a SecretInput node, like every other credential (engine-config.schema.json).
+  assert.equal(manifest.configSchema.properties.captureChunkingJev.properties.apiKey.$ref, "#/$defs/secretInput");
+  assert.ok(manifest.configContracts.secretInputs.paths.some((entry) => entry.path === "captureChunkingJev.apiKey"));
   assert.equal(manifest.uiHints["captureChunkingJev.apiKey"].sensitive, true);
 });
 

@@ -78,8 +78,20 @@ contract remain B12-P work; B12-Core does not alter initial vector recall.
 
 ### 4. Temporal filter
 
-Recognized time expressions constrain candidates to the relevant interval.
-Queries without a usable temporal expression continue unchanged.
+`createdAt` is when a memory was said, so a time expression constrains the
+candidates only when the query asks about the conversation time: a relative
+phrase (today, yesterday, N days/hours ago, last week/month, weekday) with a
+conversation cue in the same clause ("what did I tell you last week", "was
+haben wir gestern besprochen"), no future signal there and a message of at
+most 1,500 characters (`classifyTemporalQuery`, 7.20.8). Clauses also end
+without punctuation before object and wh-clauses ("Ich hab dir gesagt | dass
+er am Donnerstag kommt"); the phrase must be within 60 characters of the cue,
+and two different phrases there are ambiguous. The window is widened by 2 h on
+both sides and never removes every candidate; with several namespaces that
+safety net decides over their union in `mergeNamespaceRecallResults`. Event
+time, casual mentions, calendar dates and "after the X" anchors leave the
+candidates unchanged and are only logged. An explicit `validAt` disables this
+filter.
 
 ### 5. Canonical knowledge search
 
@@ -131,11 +143,14 @@ prompt-compressor stage in this path; that runtime feature remains B12-P.
 
 After primary recall finalizes, the caller may append:
 
-- **Semantic Lens** results from the precomputed workspace lens index.
+- **Semantic Lens** results from the precomputed workspace lens index. Each
+  hydrated raw row must pass the canonical request ACL before projection or
+  selection quotas; denied rows consume no Lens slot. Workspace index membership
+  grants no access to user, agent-private, or workspace memories.
 - **Conversation Reactivation Recall (CRR)** results for bounded reactivation
   triggers.
 
-Both stages are disabled by default, deduplicate against primary result IDs,
-have strict caps/timeouts, and fall back to the unchanged primary recall on an
-error. Neither stage replaces primary recall, performs a second authoritative
-write path, or mutates memory records.
+Semantic Lens is enabled by default; CRR requires explicit opt-in. Both stages
+deduplicate against primary result IDs, have strict caps/timeouts, and fall back
+to the unchanged primary recall on an error. Neither stage replaces primary
+recall, performs a second authoritative write path, or mutates memory records.

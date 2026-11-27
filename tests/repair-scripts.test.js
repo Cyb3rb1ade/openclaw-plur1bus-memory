@@ -21,11 +21,12 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSyncBounded, spawnSyncBounded } from "./helpers/run-sync.js";
 
 import { validateDeployment, DEPLOY_FILES } from "../scripts/lib/deploy-integrity.mjs";
 import { run as runWorkspaceWriter } from "../scripts/verify-workspace-writer.mjs";
 import { makeTempDir } from "./helpers/temp-dir.js";
+import { fileURLToPath } from "node:url";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -49,14 +50,28 @@ function writeStub(dir, relPath) {
 }
 
 // Run a script and return { status, stdout, stderr }
-function runScript(scriptPath, args = [], env = {}) {
-  const r = spawnSync(process.execPath, [scriptPath, ...args], {
+function runScript(scriptPath, args = [], env = {}, { timeoutMs = 30_000 } = {}) {
+  // os.homedir() reads USERPROFILE on win32: mirror a HOME override there.
+  const home = env.HOME !== undefined && env.USERPROFILE === undefined ? { USERPROFILE: env.HOME } : {};
+  const r = spawnSyncBounded(process.execPath, [scriptPath, ...args], {
     encoding: "utf8",
-    env: { ...process.env, ...env },
-    timeout: 30000,
+    env: { ...process.env, ...env, ...home },
+    timeout: timeoutMs,
   });
-  return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+  const killed = r.error?.code === "ETIMEDOUT"
+    ? `\n[spawn ETIMEDOUT after the ${timeoutMs} ms limit; signal ${r.signal}]`
+    : "";
+  return { status: r.status, stdout: r.stdout ?? "", stderr: `${r.stderr ?? ""}${killed}` };
 }
+
+// Repairing every DEPLOY_FILES stub is slow, not hung: validateDeployment
+// re-hashes the whole source snapshot before and after each file it copies
+// (sourceSnapshotMatches, a TOCTOU guard), i.e. about 2 x 400 x 400 sha256
+// reads for the ~400 stubs below. Measured: ~17 s on Linux, 13-28.5 s on
+// windows-2025 and past the old 30 s spawn limit on windows-11-arm (tc6: the
+// child was killed, status null, after 30.8 s). 180 s leaves room for the
+// slowest runner; a real hang still fails, with the timeout named.
+const FULL_REPAIR_TIMEOUT_MS = 180_000;
 
 async function captureConsoleLog(fn) {
   const originalLog = console.log;
@@ -70,7 +85,7 @@ async function captureConsoleLog(fn) {
   }
 }
 
-const REPO_ROOT = new URL("../", import.meta.url).pathname;
+const REPO_ROOT = fileURLToPath(new URL("../", import.meta.url));
 const REPAIR_SCRIPT = join(REPO_ROOT, "scripts", "repair-installed-plugin.mjs");
 const MAINTAIN_SCRIPT = join(REPO_ROOT, "scripts", "maintain-lancedb.mjs");
 const WORKSPACE_SCRIPT = join(REPO_ROOT, "scripts", "verify-workspace-writer.mjs");
@@ -193,7 +208,7 @@ describe("repair-installed-plugin — backup before repair", () => {
     const result = runScript(REPAIR_SCRIPT, ["--deploy-dir", deployDir, "--no-smoke"], {
       // Override home so backups land in our temp dir
       HOME: dir,
-    });
+    }, { timeoutMs: FULL_REPAIR_TIMEOUT_MS });
 
     // Script should succeed (repaired = exit 0) or warn (exit 3)
     assert.ok(result.status === 0 || result.status === 3, `unexpected exit ${result.status}\n${result.stderr}`);
@@ -441,7 +456,7 @@ describe("verify-workspace-writer", () => {
     }
   });
 
-  it("exits 1 when memory/.healthcheck/ directory is not writable", { skip: process.getuid?.() === 0 }, async () => {
+  it("exits 1 when memory/.healthcheck/ directory is not writable", { skip: process.getuid?.() === 0 || (process.platform === "win32" && "chmod 0444 directory semantics differ on win32") }, async () => {
     // Root can always write everywhere, so skip if running as root.
     mkdirSync(join(dir, "workspace", "memory"), { recursive: true });
     const hcDir = join(dir, "workspace", "memory", ".healthcheck");

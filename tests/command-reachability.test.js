@@ -8,8 +8,9 @@ import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capabilit
 import { tombstoneRegistryDir } from "../lib/tombstone.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
-// Explicit shared memory requires verified fd-backed directory aliases, which
-// are unavailable on darwin; the share write path fails closed there.
+// These cases exercise the fd-capability share path (Linux). darwin and win32
+// share through verified-path mode since E4.2 (ADR 0001); running these
+// cases there too is a follow-up, so they still skip without fd aliases.
 const directoryCapabilitiesUnavailable = stableDirectoryCapabilitiesSupported()
   ? false
   : "stable directory capabilities are unavailable on this platform";

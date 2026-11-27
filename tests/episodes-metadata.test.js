@@ -46,14 +46,14 @@ describe("episodes (7.12.40): Metadaten", () => {
 
   it("Themen ohne Modell: Nomen statt Satzanfaenge, keine Platzhalter, Markup, Zahlen oder Rauschwoerter", () => {
     const ep = createEpisode([
-      turn("user", "[Audio transcript (machine-generated, untrusted)]: \"Meine Schulter tut seit zwei Wochen weh, ich kann nicht auf der Seite pennen.\" https://example.org/x 2097700367546933386", 0),
+      turn("user", "[Audio transcript (machine-generated, untrusted)]: \"Meine Schulter tut seit zwei Wochen weh, ich kann nicht auf der Seite pennen.\" https://example.org/x 1000000000000000005", 0),
       turn("assistant", "<visible>Schulter und Kissen sind ein Thema. Die Schulter braucht Ruhe, das Kissen eine andere Position.</visible> thinking visible", 1),
       turn("user", "Und morgen reden wir wieder über die Milchsuppe, die Milchsuppe war gut.", 2),
     ], { agentId: "main" });
     assert.ok(ep.topics.includes("schulter"), `schulter fehlt: ${ep.topics}`);
     assert.ok(ep.topics.includes("kissen"), `kissen fehlt: ${ep.topics}`);
     assert.ok(ep.topics.includes("milchsuppe"), `milchsuppe fehlt: ${ep.topics}`);
-    for (const bad of ["visible", "thinking", "transcript", "nicht", "morgen", "reden", "wieder", "2097700367546933386", "audio"]) {
+    for (const bad of ["visible", "thinking", "transcript", "nicht", "morgen", "reden", "wieder", "1000000000000000005", "audio"]) {
       assert.ok(!ep.topics.includes(bad), `Rauschwort im Thema: ${bad} (${ep.topics})`);
     }
     assert.ok(ep.topics.length <= 5);
@@ -74,7 +74,7 @@ describe("episodes (7.12.40): Metadaten", () => {
   });
 
   it("location folgt dem Session-Key statt dem ACL-Scope", () => {
-    assert.equal(locationFromSessionKey("agent:main:telegram:default:direct:55736530"), "dm");
+    assert.equal(locationFromSessionKey("agent:main:telegram:default:direct:10000002"), "dm");
     assert.equal(locationFromSessionKey("agent:main:telegram:group:-100:topic:5"), "group");
     assert.equal(locationFromSessionKey("agent:main:main:heartbeat"), "heartbeat");
     assert.equal(createEpisode([turn("user", "x")], { sessionKey: "agent:main:telegram:default:direct:1" }).location, "dm");

@@ -25,9 +25,10 @@ function configFile(contents, { name = "openclaw.json" } = {}) {
 
 test("der Pfad der Konfigurationsdatei folgt derselben Rangfolge wie beim Host", () => {
   assert.equal(resolveHostConfigPath({ OPENCLAW_CONFIG_PATH: "/x/y.json" }, "/home/u"), "/x/y.json");
-  assert.equal(resolveHostConfigPath({ OPENCLAW_STATE_DIR: "/state" }, "/home/u"), "/state/openclaw.json");
-  assert.equal(resolveHostConfigPath({ OPENCLAW_HOME: "/oc" }, "/home/u"), "/oc/openclaw.json");
-  assert.equal(resolveHostConfigPath({}, "/home/u"), "/home/u/.openclaw/openclaw.json");
+  // join(): the host joins with the platform separator ("\\" on win32).
+  assert.equal(resolveHostConfigPath({ OPENCLAW_STATE_DIR: "/state" }, "/home/u"), join("/state", "openclaw.json"));
+  assert.equal(resolveHostConfigPath({ OPENCLAW_HOME: "/oc" }, "/home/u"), join("/oc", "openclaw.json"));
+  assert.equal(resolveHostConfigPath({}, "/home/u"), join("/home/u", ".openclaw", "openclaw.json"));
 });
 
 test("liest genau den Plugin-Teilbaum und meldet Fehler als Zustand, nicht als Ausnahme", () => {
@@ -64,6 +65,19 @@ test("vergleicht nur die Werte, die das Dashboard schreiben darf", () => {
   assert.deepEqual([...pendingChanges(running, { ...running, llmRouter: { agentModels: { "böse id": { merging: "c/d" } } } })], [], "unsichere Agentenkennung fällt raus");
   // Ein Schlüssel, den die Tabelle nicht kennt, erzeugt nie eine Markierung.
   assert.equal(pendingChanges(running, eff({ ...base, recall: { dedupJaccard: 0.1 } })).size, 0);
+});
+
+test("markiert Temperamente je Agent, auch die Zeile für alle anderen", () => {
+  const eff = (raw) => resolveEffectiveConfig(raw);
+  const warm = { preset: "warm", baseline: { joy: 0.35, trust: 0.5 }, sensitivity: 1.5, decayMultiplier: 1.3 };
+  const running = eff({ emotion: { temperaments: { bernhardine: warm, default: { preset: "feurig", sensitivity: 1.8, decayMultiplier: 1.5 } } } });
+  // Gleicher Inhalt in anderer Schlüsselreihenfolge ist keine Änderung.
+  const reordered = eff({ emotion: { temperaments: { default: { decayMultiplier: 1.5, sensitivity: 1.8, preset: "feurig" }, bernhardine: { ...warm } } } });
+  assert.equal(pendingChanges(running, reordered).size, 0);
+  const saved = eff({ emotion: { temperaments: { bernhardine: warm, main: { preset: "stoisch", sensitivity: 0.5, decayMultiplier: 0.6 } } } });
+  const projected = projectPendingChanges(running, { status: "ok", config: saved, mtimeMs: 7 });
+  assert.deepEqual(projected.ids, ["temperament:default", "temperament:main"]);
+  assert.doesNotMatch(JSON.stringify(projected), /stoisch|feurig/, "nur Kennungen, keine Werte");
 });
 
 test("die Projektion liefert Kennungen und Zeitpunkt, nie Werte aus der Datei", () => {

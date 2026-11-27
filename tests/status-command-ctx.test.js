@@ -1,9 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { readFileSync } from "node:fs";
 
 import { collectStatusData } from "../lib/telegram-commands/status-data.js";
 import { renderStatus } from "../lib/telegram-commands/status.js";
+import { readRuntimeSources } from "./helpers/runtime-sources.js";
 
 const openclawConfig = {
   plugins: {
@@ -17,7 +17,11 @@ const openclawConfig = {
 
 describe("/state command", () => {
   it("uses commandCtx.agentId for distinctive per-agent cache metrics", () => {
-    const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+    // PR-03g (engine-extraction M1a) moved runStatusCommand and the chat-command
+    // registration out of index.js into adapter/openclaw/register-commands.js;
+    // both slice anchors left index.js (1 -> 0 each). The assertions are
+    // unchanged.
+    const source = readRuntimeSources().adapter.commands;
     const handlerStart = source.indexOf("const runStatusCommand = async (commandCtx, suppliedMemoryCtx = null) => {");
     const handlerEnd = source.indexOf("const parseFeatureArg", handlerStart);
     const handlerSource = source.slice(handlerStart, handlerEnd);

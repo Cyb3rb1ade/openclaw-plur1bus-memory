@@ -12,11 +12,12 @@ import { planTelegramSpeech } from '../lib/telegramSpeech.js';
 import { patchExecContextSource } from '../scripts/telegramTts/patch-exec-speech-context.mjs';
 import { prepareSpeechText } from '../lib/speechText.js';
 
-const source = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
-const begin = source.indexOf('          const emoState = emotionalPool.get(agentId);', source.indexOf('api.on("before_prompt_build"'));
-const end = source.indexOf('          // v5.4.0 — Graph-Edges', begin);
+// main: the block lives in the engine's prompt assembler, with `hookCtx`.
+const source = readFileSync(new URL('../engine/recall/assemble-prompt-context.js', import.meta.url), 'utf8');
+const begin = source.indexOf('      const emoState = emotionalPool.get(agentId);');
+const end = source.indexOf('      // v5.4.0 — Graph-Edges', begin);
 assert.ok(begin >= 0 && end > begin);
-const legacy = compileFunction(`return (async () => { ${source.slice(begin, end)} })();`, ['emotionalPool', 'agentId', 'jevEmotionRuntime', 'ctx', 'event', 'voiceMessages', 'signal', 'inferEmotionalValenceAsync', 'throwIfAborted', 'dbg', 'writeFileSync', 'join', 'formatMoodFile', 'extractMessageText', 'resolveInside']);
+const legacy = compileFunction(`return (async () => { ${source.slice(begin, end)} })();`, ['emotionalPool', 'agentId', 'jevEmotionRuntime', 'hookCtx', 'event', 'voiceMessages', 'signal', 'inferEmotionalValenceAsync', 'throwIfAborted', 'dbg', 'writeFileSync', 'join', 'formatMoodFile', 'extractMessageText', 'resolveInside']);
 const reaction = joy => ({ ok: true, reaction: { joy, sadness: 0, anger: 0, fear: 0, disgust: 0, surprise: 0, trust: 0, anticipation: 0 }, reactionDimensions: ['joy'], elapsedMs: 12, confidence: 1, sections: [] });
 function fixture(t, mode = 'shadow', options = {}) {
   const root = makeTempDir('jev-final-');
@@ -76,7 +77,7 @@ for (const transition of ['active', 'active-then-shadow']) for (const outcome of
   });
 }
 
-test('shadow runtime through trusted host and real adapter carries authored persona/context/current mood, closes terminal and revoked runs', async t => {
+test('shadow runtime through trusted host and real adapter carries authored persona/context/current mood, closes terminal and revoked runs', { skip: process.platform === 'win32' && 'the speech context reader uses POSIX owner/mode checks and fails closed on win32 (asserted in telegram-speech-adapter.test.js)' }, async t => {
   t.mock.timers.enable({ apis: ['Date'], now: 1800000000000 });
   let allowed = true;
   const inputs = [];
@@ -167,7 +168,7 @@ test('stale shadow exec handler cannot delete the replacement generation context
   assert.deepEqual(await active.resolveExecEnv({}, ctx), currentEnv);
 });
 
-for (const mode of ['shadow', 'active']) test(`${mode} exposes matching authored contextual inputs to outgoing comparison`, async t => {
+for (const mode of ['shadow', 'active']) test(`${mode} exposes matching authored contextual inputs to outgoing comparison`, { skip: process.platform === 'win32' && 'the speech context reader uses POSIX owner/mode checks and fails closed on win32 (asserted in telegram-speech-adapter.test.js)' }, async t => {
   t.mock.timers.enable({ apis: ['Date'], now: 1800000000000 });
   const f = fixture(t, mode, { assessor: async () => ({ ok: false, reason: 'invalid_or_uncertain_answer' }) });
   writeFileSync(join(f.root, 'persona-voice.md'), '<!-- persona:begin -->\n- Private gentle persona\n<!-- persona:end -->');

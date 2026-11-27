@@ -142,7 +142,7 @@ export function planMigration(workspacesDir) {
   for (const dirName of canonical) {
     const workspaceKey = dirName.match(CANONICAL_DIR_RE)[1];
     // Rückrechnung: ergibt der abgeleitete Key wirklich dieses Verzeichnis?
-    const store = createNeoStore(workspacesDir.replace(/\/workspaces$/, ""), workspaceKey);
+    const store = createNeoStore(neoRootOf(workspacesDir), workspaceKey);
     if (basename(store.paths.workspaceDir) !== dirName) {
       skipped.push({ dir: dirName, reason: "workspaceKey nicht eindeutig rückrechenbar" });
       continue;
@@ -189,6 +189,17 @@ export function planMigration(workspacesDir) {
   return { plans, skipped, empty };
 }
 
+/**
+ * The `_neo` root above a `…/workspaces` directory. win32 paths end in
+ * "\\workspaces"; on POSIX "\\" is an ordinary name character, so only "/" counts.
+ * @param {string} workspacesDir
+ * @param {{platform?: string}} [options] `platform` defaults to `process.platform` (tests inject "win32").
+ * @returns {string}
+ */
+export function neoRootOf(workspacesDir, { platform = process.platform } = {}) {
+  return workspacesDir.replace(platform === "win32" ? /[\\/]workspaces$/ : /\/workspaces$/, "");
+}
+
 function backupFile(path, stamp) {
   if (!existsSync(path)) return;
   const dir = join(path, "..", `.migration-backup-${stamp}`);
@@ -197,7 +208,7 @@ function backupFile(path, stamp) {
 }
 
 export function migrateWorkspace(workspacesDir, plan, { apply = false, stamp = "" } = {}) {
-  const rootDir = workspacesDir.replace(/\/workspaces$/, "");
+  const rootDir = neoRootOf(workspacesDir);
   const store = createNeoStore(rootDir, plan.workspaceKey);
   const report = {};
 

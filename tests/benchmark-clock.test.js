@@ -3,7 +3,7 @@ import { once } from "node:events";
 import { test } from "node:test";
 import { Worker } from "node:worker_threads";
 
-import { measureCpuMilliseconds } from "./helpers/benchmark-clock.js";
+import { measureAverageCpuMilliseconds, measureCpuMilliseconds } from "./helpers/benchmark-clock.js";
 
 test("CPU benchmark time excludes a scheduler-equivalent blocking pause", () => {
   const waitArray = new Int32Array(new SharedArrayBuffer(4));
@@ -51,4 +51,15 @@ test("CPU benchmark time excludes concurrent worker and GC-style helper work", {
   } finally {
     await worker.terminate();
   }
+});
+
+test("average CPU time runs the operation the requested number of times in one interval", () => {
+  let calls = 0;
+  const averageMs = measureAverageCpuMilliseconds(() => {
+    calls++;
+  }, 7);
+  assert.equal(calls, 7);
+  assert.ok(Number.isFinite(averageMs) && averageMs >= 0, `invalid average: ${averageMs}`);
+  assert.throws(() => measureAverageCpuMilliseconds(() => {}, 0), RangeError);
+  assert.throws(() => measureAverageCpuMilliseconds(() => {}, 1.5), RangeError);
 });

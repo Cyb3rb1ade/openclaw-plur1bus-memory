@@ -1,0 +1,3 @@
+<time-context>
+First activity. Current time: 2026-01-15 13:00 Europe/Zurich (UTC 2026-01-15 12:00).
+</time-context>

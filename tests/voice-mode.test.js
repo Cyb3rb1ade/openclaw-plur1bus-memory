@@ -32,7 +32,7 @@ test("defaults to persona without a file and with a broken file", (t) => {
 
 test("writes and reads light and persona per agent", (t) => {
   const base = tempBase(t);
-  const written = writeVoiceMode(base, "main", "light", { by: "discord:1323072788939935867" });
+  const written = writeVoiceMode(base, "main", "light", { by: "discord:1000000000000000001" });
   assert.equal(written.mode, "light");
   assert.equal(readVoiceMode(base, "main"), "light");
   assert.equal(readVoiceMode(base, "bernhardine"), "persona", "modes are per agent");
@@ -61,12 +61,12 @@ test("light applies only to a voice turn while the agent's mode is light", (t) =
 
 test("derives the voice session keys from the allowed voice channels", () => {
   const config = { channels: { discord: { voice: { allowedChannels: [
-    { guildId: "1486678369901744240", channelId: "1486678370434551811" },
-    { guildId: "1486678369901744240", channelId: "1518159522076823592" },
+    { guildId: "1000000000000000002", channelId: "1000000000000000003" },
+    { guildId: "1000000000000000002", channelId: "1000000000000000004" },
   ] } } } };
   assert.deepEqual(voiceSessionKeys("main", config), [
-    "agent:main:discord:channel:1486678370434551811",
-    "agent:main:discord:channel:1518159522076823592",
+    "agent:main:discord:channel:1000000000000000003",
+    "agent:main:discord:channel:1000000000000000004",
   ]);
   assert.deepEqual(voiceSessionKeys("main", {}), []);
 });

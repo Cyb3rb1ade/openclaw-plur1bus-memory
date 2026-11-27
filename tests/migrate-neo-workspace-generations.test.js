@@ -12,7 +12,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { planMigration, migrateWorkspace } from "../scripts/migrate-neo-workspace-generations.mjs";
+import { neoRootOf, planMigration, migrateWorkspace } from "../scripts/migrate-neo-workspace-generations.mjs";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
 const CANONICAL = "workspace-bernhardine--7722278e420517df6437";
@@ -43,6 +43,17 @@ function readEpisodeIds(workspaces) {
   if (!existsSync(path)) return [];
   return readFileSync(path, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l).id);
 }
+
+describe("neoRootOf", () => {
+  it("strips a trailing workspaces segment with the platform's separators", () => {
+    assert.equal(neoRootOf("C:\\Users\\a\\_neo\\workspaces", { platform: "win32" }), "C:\\Users\\a\\_neo");
+    assert.equal(neoRootOf("C:/Users/a/_neo/workspaces", { platform: "win32" }), "C:/Users/a/_neo");
+    assert.equal(neoRootOf("/home/a/_neo/workspaces", { platform: "linux" }), "/home/a/_neo");
+    // On POSIX a backslash is a name character: nothing to strip.
+    assert.equal(neoRootOf("/home/a/odd\\workspaces", { platform: "linux" }), "/home/a/odd\\workspaces");
+    assert.equal(neoRootOf("/home/a/_neo/workspaces-old", { platform: "linux" }), "/home/a/_neo/workspaces-old");
+  });
+});
 
 describe("planMigration", () => {
   it("ordnet Gen1 und Gen2 dem kanonischen Verzeichnis zu", () => {

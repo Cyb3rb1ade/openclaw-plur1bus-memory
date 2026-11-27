@@ -191,8 +191,9 @@ describe("Kompaktierungsmodell: Anzeige nach dem Speichern", async () => {
 
   it("reicht die laufende Config samt noch nicht übernommener Wahl an die Projektion durch", async () => {
     const { readFile } = await import("node:fs/promises");
-    const source = await readFile(new URL("../index.js", import.meta.url), "utf8");
-    assert.match(source, /hostConfig: api\.config,\s+liveHostConfig: pendingCompactionModels\.overlay\(runtimeIfUsable\(api\)\?\.config\?\.current\?\.\(\) \?\? null\),/);
+    // main: the projection is built in the OpenClaw adapter (host.runtime = runtimeIfUsable(api)).
+    const source = await readFile(new URL("../adapter/openclaw/register-commands.js", import.meta.url), "utf8");
+    assert.match(source, /hostConfig: api\.config,\s+liveHostConfig: pendingCompactionModels\.overlay\(host\.runtime\?\.config\?\.current\?\.\(\) \?\? null\),/);
     assert.match(source, /createCompactionModelMutator\(\{ api, pending: pendingCompactionModels \}\)/);
   });
 });

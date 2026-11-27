@@ -1,0 +1,420 @@
+name: plugin-release
+
+# Release of the PLUR1BUS OpenClaw plugin itself (`openclaw-plur1bus-memory`): tarball, SHA256SUMS of the tarball,
+# GitHub Release, GitHub Packages, npm publish and the tarball's build attestation. Installers, bootstraps and the
+# install feed are released from Cyb3rb1ade/PLUR1BUS-Host-Addons, which consumes this release's tarball and SHA256SUMS.
+#
+#   check           tag == v<package.json version> == manifest version == lockfile version
+#   pack            npm ci, the full suite, npm pack, SHA256SUMS (tarball only), workflow artefact
+#   attest          build provenance of the tarball (skipped in a dry run)
+#   github-release  GitHub Release with the tarball and SHA256SUMS (skipped in a dry run)
+#   github-packages npm.pkg.github.com with the automatic token, same tarball (skipped in a dry run)
+#   npm-publish     npmjs.org with provenance (skipped in a dry run and unless the owner enabled it)
+#
+# The file name stays plugin-release.yml: the npm trusted publisher is bound to repository, this workflow file and
+# the environment npm-publish.
+#
+# Owner setup (names only; no value lives in this repository):
+#   Repository variable PLUR1BUS_NPM_PUBLISH = yes to publish to npmjs.org. It needs the GitHub Environment
+#   `npm-publish` and a trusted publisher configured on npmjs.org for this repository, workflow plugin-release.yml,
+#   environment npm-publish.
+#   GitHub Packages needs no setup: the package is linked to this repository and inherits its Actions access. If
+#   github-packages cannot read the package or the publish fails with E403, give this repository role Write under the
+#   package's "Manage Actions access", then use "Re-run failed jobs".
+#
+# Secrets used: none. The GitHub token is the automatic one (github-release and github-packages); npm authenticates
+# by OIDC.
+#
+# Dry run (workflow_dispatch, dry-run true, the default): everything up to and including the uploaded workflow
+# artefact, no release, no npm, no GitHub Packages, no attestation. A tag push (v*) is always a real run, on the
+# stable channel; a beta release is dispatched on the tag with channel beta and dry-run false.
+#
+# github-packages moves `latest` only up to a plain x.y.z: a prerelease on the stable channel (a tag push of
+# v1.2.3-beta.1 runs as stable) or a version below the highest published x.y.z fails the job instead; publish those
+# by hand under their own dist-tag (docs/release-checklist.md).
+
+permissions:
+  contents: read
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Build and check everything; publish nothing (no release, no npm, no GitHub Packages, no attestations).
+        type: boolean
+        default: true
+      channel:
+        description: Feed channel (stable or beta).
+        type: choice
+        options: [stable, beta]
+        default: stable
+
+concurrency:
+  group: plugin-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      channel: ${{ steps.check.outputs.channel }}
+      dry-run: ${{ steps.check.outputs.dry-run }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Use Node.js 24.21.0
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.21.0'
+      - id: check
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_DRY_RUN: ${{ inputs.dry-run }}
+          INPUT_CHANNEL: ${{ inputs.channel }}
+        run: |
+          set -euo pipefail
+          field() { node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); const p=process.argv[2]; process.stdout.write(String(p==="lock.packages"?j.packages[""].version:j.version))' "$1" "$2"; }
+          pkg=$(field package.json version)
+          manifest=$(field openclaw.plugin.json version)
+          lock=$(field package-lock.json version)
+          lock_root=$(field package-lock.json lock.packages)
+          for v in "$manifest" "$lock" "$lock_root"; do
+            if [ "$v" != "$pkg" ]; then
+              echo "::error::version mismatch: package.json $pkg, manifest $manifest, lockfile $lock / $lock_root"
+              exit 1
+            fi
+          done
+          case "$pkg" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::version $pkg is not x.y.z"; exit 1 ;;
+          esac
+
+          dry=false
+          channel=stable
+          if [ "$EVENT" = workflow_dispatch ]; then
+            dry="$INPUT_DRY_RUN"
+            channel="$INPUT_CHANNEL"
+          fi
+          case "$channel" in stable | beta) ;; *) echo "::error::unknown channel $channel"; exit 1 ;; esac
+
+          if [ "$REF_TYPE" = tag ]; then
+            if [ "$REF_NAME" != "v$pkg" ]; then
+              echo "::error::tag $REF_NAME is not v$pkg (package.json version)"
+              exit 1
+            fi
+          elif [ "$dry" != true ]; then
+            echo "::error::a real release runs on the tag v$pkg, not on the branch $REF_NAME"
+            exit 1
+          fi
+          {
+            echo "version=$pkg"
+            echo "channel=$channel"
+            echo "dry-run=$dry"
+          } >> "$GITHUB_OUTPUT"
+          echo "release $pkg ($channel), dry-run $dry, ref $REF_TYPE $REF_NAME"
+
+  # Pack once after the full suite. Everything below downloads this artefact and never packs again.
+  pack:
+    name: pack
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ needs.check.outputs.version }}
+      artifact: ${{ steps.pack.outputs.artifact }}
+      tgz: ${{ steps.pack.outputs.tgz }}
+      # Decided once here; npm-publish follows it.
+      npm: ${{ steps.npm.outputs.npm }}
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Use Node.js 24.21.0
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.21.0'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Run tests
+        # The suite runs the Telegram speech scripts with python3; without
+        # this, scripts/telegramTts/__pycache__ ends up in the tarball (7.21.0).
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: npm test
+      - name: Pack the plugin and write SHA256SUMS
+        id: pack
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/release"
+          mkdir -p "$out"
+          # Test artefacts never ship: remove Python bytecode the suite may
+          # still have left behind, and refuse a tarball that contains any.
+          find . -path ./node_modules -prune -o -type d -name __pycache__ -prune -exec rm -rf {} +
+          npm pack --json --pack-destination "$out" > "$RUNNER_TEMP/npm-pack.json"
+          node -e 'const f=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))[0].files.map(x=>x.path).filter(p=>/(^|\/)__pycache__\/|\.pyc$/.test(p)); if(f.length){console.error("::error::tarball contains Python bytecode: "+f.join(", ")); process.exit(1)}' "$RUNNER_TEMP/npm-pack.json"
+          tgz=$(node -e 'const p=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))[0]; if(p.version!==process.argv[2]) throw new Error("pack version "+p.version+" is not "+process.argv[2]); process.stdout.write(p.filename)' "$RUNNER_TEMP/npm-pack.json" "$VERSION")
+          [ "$tgz" = "cyb3rb1ade-plur1bus-memory-$VERSION.tgz" ] || { echo "::error::packed $tgz, expected cyb3rb1ade-plur1bus-memory-$VERSION.tgz"; exit 1; }
+          cd "$out"
+          sha256sum "$tgz" > SHA256SUMS
+          sha256sum -c SHA256SUMS
+          ls -l
+          echo "tgz=$tgz" >> "$GITHUB_OUTPUT"
+          echo "artifact=plugin-release-$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Decide the npm publish once
+        id: npm
+        env:
+          NPM_VAR: ${{ vars.PLUR1BUS_NPM_PUBLISH }}
+        run: |
+          if [ "$NPM_VAR" = yes ]; then echo "npm=yes" >> "$GITHUB_OUTPUT"; else echo "npm=no" >> "$GITHUB_OUTPUT"; fi
+      - name: Job summary
+        env:
+          CHANNEL: ${{ needs.check.outputs.channel }}
+          DRY_RUN: ${{ needs.check.outputs.dry-run }}
+          NPM: ${{ steps.npm.outputs.npm }}
+        run: |
+          {
+            echo "### plugin-release $VERSION ($CHANNEL)"
+            echo ""
+            echo "dry-run: \`$DRY_RUN\`, npm publish: \`$NPM\`, github packages: \`$([ "$DRY_RUN" = true ] && echo no || echo yes)\`, attested: \`$([ "$DRY_RUN" = true ] && echo no || echo yes)\`"
+            echo ""
+            echo "#### SHA256SUMS"
+            echo '```'
+            cat "$RUNNER_TEMP/release/SHA256SUMS"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the release artefact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.pack.outputs.artifact }}
+          path: ${{ runner.temp }}/release
+          if-no-files-found: error
+          retention-days: ${{ needs.check.outputs.dry-run == 'true' && 7 || 90 }}
+
+  attest:
+    name: attest
+    needs: [check, pack]
+    if: needs.check.outputs.dry-run != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download the release artefact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.pack.outputs.artifact }}
+          path: ${{ runner.temp }}/release
+      - name: Attest the tarball
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: |
+            ${{ runner.temp }}/release/cyb3rb1ade-plur1bus-memory-${{ needs.check.outputs.version }}.tgz
+
+  github-release:
+    name: github-release
+    needs: [check, pack, attest]
+    if: needs.check.outputs.dry-run != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      CHANNEL: ${{ needs.check.outputs.channel }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Download the release artefact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.pack.outputs.artifact }}
+          path: ${{ runner.temp }}/release
+      - name: Create the release
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/release"
+          sha256sum -c SHA256SUMS
+          notes="$GITHUB_WORKSPACE/docs/release-notes"
+          if [ -f "$notes/$VERSION.en.md" ] && [ -f "$notes/$VERSION.de.md" ]; then
+            {
+              cat "$notes/$VERSION.en.md"
+              printf '\n---\n\n'
+              cat "$notes/$VERSION.de.md"
+              printf '\n\nChecksums: `SHA256SUMS`.\n'
+            } > "$RUNNER_TEMP/notes.md"
+          else
+            printf 'PLUR1BUS Memory %s. See CHANGELOG.md for the changes.\n\nChecksums: `SHA256SUMS`.\n' "$VERSION" > "$RUNNER_TEMP/notes.md"
+          fi
+          flags=()
+          if [ "$CHANNEL" = beta ]; then flags+=(--prerelease); fi
+          gh release create "v$VERSION" \
+            --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "PLUR1BUS Memory $VERSION" --notes-file "$RUNNER_TEMP/notes.md" \
+            ${flags[@]+"${flags[@]}"} \
+            "cyb3rb1ade-plur1bus-memory-$VERSION.tgz" SHA256SUMS
+
+  npm-publish:
+    name: npm-publish
+    needs: [check, pack, github-release]
+    if: needs.check.outputs.dry-run != 'true' && needs.pack.outputs.npm == 'yes'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: npm-publish
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      CHANNEL: ${{ needs.check.outputs.channel }}
+      TGZ: ${{ needs.pack.outputs.tgz }}
+    steps:
+      - name: Use Node.js 24.21.0
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.21.0'
+          registry-url: https://registry.npmjs.org
+      - name: Download the release artefact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.pack.outputs.artifact }}
+          path: ${{ runner.temp }}/release
+      - name: Publish with provenance (trusted publishing, OIDC)
+        working-directory: ${{ runner.temp }}/release
+        run: |
+          set -euo pipefail
+          sha256sum -c SHA256SUMS
+          npm --version
+          case "$CHANNEL" in stable) dist_tag=latest ;; beta) dist_tag=beta ;; *) echo "::error::unknown channel $CHANNEL"; exit 1 ;; esac
+          npm publish "./$TGZ" --provenance --access public --tag "$dist_tag"
+
+  # GitHub Packages (npm.pkg.github.com): the same tarball as the GitHub Release, published with the automatic token.
+  # @cyb3rb1ade/plur1bus-memory is linked to this repository (package.json `repository` since its first version), so
+  # workflows here inherit access to it. A version that is already there is skipped if it holds this exact tarball
+  # (same sha512 integrity) and fails the job otherwise; published versions are immutable. `latest` only moves up to
+  # a plain x.y.z (see the publish step).
+  github-packages:
+    name: github-packages
+    needs: [check, pack, github-release]
+    if: needs.check.outputs.dry-run != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      CHANNEL: ${{ needs.check.outputs.channel }}
+      TGZ: ${{ needs.pack.outputs.tgz }}
+      PKG: '@cyb3rb1ade/plur1bus-memory'
+    steps:
+      - name: Use Node.js 24.21.0
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.21.0'
+      - name: Download the release artefact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.pack.outputs.artifact }}
+          path: ${{ runner.temp }}/release
+      - name: Check the tarball against the GitHub Release
+        working-directory: ${{ runner.temp }}/release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha256sum -c SHA256SUMS
+          gh release download "v$VERSION" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS --output "$RUNNER_TEMP/release-SHA256SUMS"
+          cmp SHA256SUMS "$RUNNER_TEMP/release-SHA256SUMS"
+      - name: Publish to GitHub Packages
+        working-directory: ${{ runner.temp }}/release
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          case "$CHANNEL" in stable) dist_tag=latest ;; beta) dist_tag=beta ;; *) echo "::error::unknown channel $CHANNEL"; exit 1 ;; esac
+          # The explicit --tag switches off npm's own guards (no prerelease and nothing below the highest x.y.z under
+          # the default tag), so the job keeps them itself: `latest` only ever moves up to a plain x.y.z. A tag push
+          # always runs on the stable channel, also for v1.2.3-beta.1 or a side-line tag.
+          if [ "$dist_tag" = latest ] && ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::$VERSION is a prerelease on the stable channel; latest on GitHub Packages stays on x.y.z. Publish it by hand under its own dist-tag (docs/release-checklist.md)"
+            exit 1
+          fi
+          # Absolute path, as in the manual publishes (a relative one was misread as a GitHub shorthand).
+          tgz="$RUNNER_TEMP/release/$TGZ"
+          npmrc="$RUNNER_TEMP/github-packages.npmrc"
+          # The file names the variable; the token itself never touches the disk.
+          umask 077
+          printf '%s\n' '@cyb3rb1ade:registry=https://npm.pkg.github.com' '//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}' > "$npmrc"
+          gpr() { npm --userconfig "$npmrc" --@cyb3rb1ade:registry=https://npm.pkg.github.com "$@"; }
+          npm --version
+          [ "$(gpr config get @cyb3rb1ade:registry)" = https://npm.pkg.github.com ] || { echo "::error::@cyb3rb1ade is not routed to npm.pkg.github.com"; exit 1; }
+          local_integrity=$(node -e 'const c=require("crypto"); process.stdout.write("sha512-"+c.createHash("sha512").update(require("fs").readFileSync(process.argv[1])).digest("base64"))' "$tgz")
+          # `npm view pkg@x.y.z` exits 1 (E404) for a missing version, so read the version list and test membership.
+          if ! gpr view "$PKG" versions --json > "$RUNNER_TEMP/gpr-versions.json"; then
+            echo "::error::cannot read $PKG on GitHub Packages; give this repository access under the package's Manage Actions access"
+            exit 1
+          fi
+          # yes/no on stdout: a list that does not parse fails the step instead of counting as "absent".
+          present=$(node -e 'const v=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); process.stdout.write((Array.isArray(v)?v:[v]).includes(process.argv[2])?"yes":"no")' "$RUNNER_TEMP/gpr-versions.json" "$VERSION")
+          if [ "$present" = yes ]; then
+            remote=$(gpr view "$PKG@$VERSION" dist.integrity)
+            if [ "$remote" = "$local_integrity" ]; then
+              echo "$PKG@$VERSION is already on GitHub Packages with this tarball; nothing to publish"
+              exit 0
+            fi
+            echo "::error::$PKG@$VERSION is already on GitHub Packages with another tarball ($remote, expected $local_integrity)"
+            exit 1
+          fi
+          if [ "$dist_tag" = latest ]; then
+            # A backport below the highest published x.y.z would move latest backwards. Prereleases do not count.
+            above=$(node -e 'const v=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); const n=(s)=>s.split(".").map(Number); const cmp=(a,b)=>{const x=n(a),y=n(b); for(let i=0;i<3;i++) if(x[i]!==y[i]) return x[i]-y[i]; return 0}; process.stdout.write((Array.isArray(v)?v:[v]).filter((s)=>/^\d+\.\d+\.\d+$/.test(s)&&cmp(s,process.argv[2])>0).sort(cmp).pop()||"")' "$RUNNER_TEMP/gpr-versions.json" "$VERSION")
+            if [ -n "$above" ]; then
+              echo "::error::$PKG@$above is already on GitHub Packages; publishing $VERSION as latest would move latest backwards. Publish it by hand under its own dist-tag (docs/release-checklist.md)"
+              exit 1
+            fi
+          fi
+          # The registry can lag a few seconds behind a publish.
+          read_back() {
+            local r=
+            for _ in 1 2 3; do
+              r=$(gpr view "$PKG@$VERSION" dist.integrity 2>/dev/null || true)
+              [ -n "$r" ] && break
+              sleep 5
+            done
+            printf '%s' "$r"
+          }
+          if ! gpr publish "$tgz" --tag "$dist_tag" --ignore-scripts; then
+            # 409 / EPUBLISHCONFLICT: someone published the version meanwhile, or npm failed after the upload landed.
+            # Fine only if it is this tarball.
+            remote=$(read_back)
+            if [ "$remote" = "$local_integrity" ]; then
+              echo "$PKG@$VERSION is on GitHub Packages with this tarball although npm reported an error"
+              exit 0
+            fi
+            if [ -n "$remote" ]; then
+              echo "::error::$PKG@$VERSION is already on GitHub Packages with another tarball ($remote, expected $local_integrity)"
+              exit 1
+            fi
+            echo "::error::publishing $PKG@$VERSION failed; on E403 give this repository role Write under the package's Manage Actions access, then use Re-run failed jobs"
+            exit 1
+          fi
+          remote=$(read_back)
+          [ "$remote" = "$local_integrity" ] || { echo "::error::published integrity '$remote' is not $local_integrity"; exit 1; }
+          echo "published $PKG@$VERSION to GitHub Packages (dist-tag $dist_tag)"
