@@ -125,6 +125,66 @@ These features sit **after** normal recall and only append results. They must ne
 - Neo ACL: `requesterWorkspaceKey` from `workspaceKeyFromDirStrict` only; never
   use the permissive `workspaceKeyFromContext` (defaults, session map) for ACL.
 
+### Retrieval-arm prototype switches (all off by default)
+
+Measurement switches for collection questions, an entity/facet arm and an
+event-time arm over the enrichment sidecar (`lib/enrichment/`). With every
+switch absent or off the pipeline and the block are byte-identical to
+v7.21.6 (`tests/recall-arms-golden.test.js`, fixture recorded from that tree).
+
+- `recall.collectionWidth` (`lib/recall-collection-query.js`): EN/DE rules
+  detect collection questions; they get `topN` (45) and `candidateTopK` (200,
+  also the rerank input). The pipeline reports `collection` in its result and
+  `runMergedNamespaceRecall` caps and budgets with its `topN`.
+  `recall.candidateHardLimitMax` (default 100) replaces the fixed 100; only a
+  detected collection question raises the per-call limit up to it.
+- `recall.retrievalArms` (`lib/recall-arms.js`): `mode` off|shadow|on,
+  `entity`, `eventTime`, `fusion` rrf|slots. Phase A (index, candidates,
+  `getByIds` hydration) starts at pipeline entry, parallel to the embedding;
+  fusion runs after the vector search, before the temporal filter and scoring,
+  and only changes which rows fill the `fetchLimit` slots. Arm rows pass the
+  lifecycle and ACL gates of the keyword fallback and need a sidecar entry
+  computed from the current text (`index.lookup`); their `score`/`vectorScore`
+  is `distanceToScore(squared L2)`, the value the vector search would report
+  (LanceDB's `_distance` is squared L2). LanceDB returns `vector` as an Arrow
+  Vector (`v[i]` is undefined): use `toArray()`. Hubs (> 5 % of rows) only
+  count together with a facet. Deadline 150 ms per phase, fail-open; shadow
+  only reports (`arms` in the result, one info line, no query text) but costs
+  the same latency as on (the seed expansion waits up to `expansionTimeoutMs`,
+  150 ms, after the vector search).
+- Phase A starts after the current macrotask (`setImmediate`), so the query
+  embedding request goes out first, also on the keyword-fallback path where
+  it is queued as a microtask. The question text is capped at 1,000
+  characters for every analyser, the date window included.
+- Sidecar loading on the recall path: one `loadEnrichmentIndex` refresh reads
+  at most 256 KB synchronously (12–18 ms on a 19.8 MB synthetic sidecar);
+  `enrichmentIndexFor` then starts `drainEnrichmentIndex`, which reads the rest
+  one refresh per event-loop turn (that sidecar: 79 rounds, 1.4 s, longest
+  event-loop gap 60 ms). A main-thread stall cannot be cut by a timeout, so
+  never raise the per-refresh budget without measuring.
+- Arm scores assume a flat vector scan (`_distance` = exact squared L2). With a
+  vector index (hnswPq from 256 rows in `MemoryDB._maybeReindex`) the scales
+  drift; the pipeline warns once per table when it sees one.
+- Event dates (`lib/enrichment/date-resolver.js`): tense cues are picked per
+  clause language. German clauses ignore English past cues ("was" = what,
+  "-ed" in "Unterschied"); English clauses keep the calibrated union (LOCOMO:
+  identical hits on all 1,990 rows and 431 questions). The LLM cross-check
+  accepts a model date the resolver cannot check (`llm-only`) only when the
+  model's phrase occurs in the record text; otherwise `ambiguous`/`unverifiable`.
+- Sidecar writes: production writers use `appendAgentEnrichmentEntries(baseDbPath,
+  agentId, "live"|"backfill", entries)` (path through `enrichmentSidecarPaths`);
+  `appendEnrichmentEntriesToFile` is for bench result paths and tests only.
+- `recall.eventDateRender` (`lib/event-date-render.js`): `event-date` /
+  `event-ago` on records whose sidecar entry has a resolved date, plus one
+  instruction line. Not wired into the Neo lanes (Neo candidates have their
+  own ids, no sidecar yet) or CRR (its projections drop extra fields).
+- Production sidecar root: `<active write namespace or baseDbPath>/<agentId>/_enrich/`
+  (`enrichmentIndexFor` in `engine/create-engine.js`); only the agent's own
+  private namespace has one. A backfill must write to the same root.
+- The question window of the event arm and the render use one time zone per
+  run: the bench passes `"UTC"`, production the plugin `timezone` (default
+  Europe/Berlin).
+
 ### Cohere reranker default (7.21.1)
 
 `DEFAULT_COHERE_RERANK_MODEL` (`lib/providers/dimensions.js`) is

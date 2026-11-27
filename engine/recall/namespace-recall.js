@@ -157,6 +157,11 @@ async function runMergedNamespaceRecall(
         deferFinalCap: true,
         candidateHardLimit: 100,
         now: requestNow,
+        // Retrieval-Arme (Standard aus): Sidecar-Index je Namensraum; nur der
+        // eigene private Namensraum hat einen (enrichmentIndexFor → null sonst).
+        ...(baseParams.retrievalArms && typeof baseParams.enrichmentIndexFor === "function"
+          ? { enrichmentIndex: () => baseParams.enrichmentIndexFor({ namespace, sourceKind }) }
+          : {}),
       });
       if (typeof onNamespacePhases === "function") {
         onNamespacePhases(namespace, childTimer.summary().completed);
@@ -180,6 +185,22 @@ async function runMergedNamespaceRecall(
         identityId: result.value.identityId,
         ...result.value.result,
       });
+    }
+    // V0 (recall.collectionWidth): eine erkannte Sammelfrage meldet ihre
+    // Breite im Ergebnis; Kappung und Budget folgen ihr. Ohne Schalter fehlt
+    // `collection`, und topN/budget bleiben die übergebenen Werte.
+    const collectionTopN = namespaceResults.reduce((max, result) => (
+      result.collection?.applied === true && Number.isFinite(result.collection.topN) ? Math.max(max, result.collection.topN) : max
+    ), 0);
+    if (collectionTopN > 0) {
+      // Merge, Herkunftsgewichtung, Multi-Identity-Kappung und Budget lesen
+      // ab hier baseParams.topN/.budget; eine eigene Kopie hält sie gleich.
+      const collectionWidthTopN = Math.max(baseParams.topN ?? 12, collectionTopN);
+      baseParams = {
+        ...baseParams,
+        topN: collectionWidthTopN,
+        budget: Math.max(Number.isFinite(baseParams.budget) ? baseParams.budget : 0, collectionWidthTopN),
+      };
     }
     let fusionInput = namespaceResults;
     // Was das Zeitfilter-Netz in den Vormischungen je Identität entfernt hat;

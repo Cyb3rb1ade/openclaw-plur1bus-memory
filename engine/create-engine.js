@@ -115,6 +115,7 @@ import { runSemanticDiscoveryBatches, selectSemanticDiscoveryWorkspaces } from "
 import { callLlm, callMergeCheck, withDeterministicLlmContext } from "./runtime/llm-calls.js";
 import { resolveContextWeightingConfig } from "../lib/recall-context.js";
 import { createSensitivityStore } from "../lib/sensitivity-queue.js";
+import { drainEnrichmentIndex, enrichmentSidecarPaths, loadEnrichmentIndex } from "../lib/enrichment/sidecar.js";
 import { classifySensitivityByRules } from "../lib/sensitivity.js";
 import { commandOption, generateSummary, makeQuerySummarizer, normalizedLlmErrorClass, resolveConfiguredApiKey, resolveEnvVars, resolveOptionalEnvVars, summarizeForCapture } from "./runtime/env-config.js";
 import { normalizeBoundedRecallInteger, resolveRuntimeRecallBudget, runMergedNamespaceRecall } from "./recall/namespace-recall.js";
@@ -908,6 +909,31 @@ export function createEngine(host, config, testOptions = {}) {
   // Warteschlange wird im Hintergrund gebündelt eingestuft.
   const contextWeightingCfg = resolveContextWeightingConfig(cfg.recall?.contextWeighting);
   const sensitivityStore = createSensitivityStore({ baseDir: baseDbPath, logger: host.logger });
+  // Retrieval-Arme und Ereignisdatum (recall.retrievalArms, recall.eventDateRender,
+  // Standard aus): Anreicherungs-Sidecar des Agenten neben seiner LanceDB
+  // (`<Schreib-Namensraum>/<agentId>/_enrich/`), inkrementell gelesen, nur
+  // für den eigenen privaten Namensraum. Gelesen wird erst, wenn ein Schalter
+  // an ist; der Backfill muss dieselbe Wurzel beschreiben. Auf dem Recall-Pfad
+  // liest ein Aufruf höchstens ENRICH_REFRESH_MAX_BYTES (256 KB) synchron; den
+  // Rest liest drainEnrichmentIndex danach, ein Stück je Event-Loop-Runde.
+  const enrichmentRoot = namespaceLayout.mode === "named"
+    ? resolve(namespaceLayout.baseDir, namespaceLayout.activeWriteNamespace)
+    : baseDbPath;
+  const enrichmentIndexFor = ({ agentId, namespace = null, sourceKind = "private" } = {}) => {
+    if (sourceKind !== "private") return null;
+    if (namespace != null && namespace !== namespaceLayout.activeWriteNamespace) return null;
+    try {
+      const paths = enrichmentSidecarPaths(enrichmentRoot, agentId);
+      const files = [paths.backfill, paths.live];
+      const loaded = loadEnrichmentIndex(files, { logger: host.logger });
+      // Never rejects; a second call while it runs returns the same drain.
+      if (!loaded.complete) void drainEnrichmentIndex(files, { logger: host.logger });
+      return loaded;
+    } catch (error) {
+      safeDebug(host.logger, "enrichment-sidecar.resolve", error);
+      return null;
+    }
+  };
   const sensitivityLlmCfg = contextWeightingCfg.enabled
     ? (createFeatureRoute("criticalPush", cfg.criticalPush || {}) || createFeatureRoute("merging", cfg.merging || {}))
     : null;
@@ -3587,6 +3613,7 @@ export function createEngine(host, config, testOptions = {}) {
     normalizedLlmErrorClass,
     resolveRuntimeRecallBudget,
     runMergedNamespaceRecall,
+    enrichmentIndexFor,
   };
   // The warm-only path (E5 Task 9) is built from the same members as the
   // assembler, which reaches it as recallContext.warmRecallPath.

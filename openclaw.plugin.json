@@ -2070,6 +2070,93 @@
                 }
               }
             }
+          },
+          "candidateHardLimitMax": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "description": "Prototype (retrieval arms, default 100): upper bound on recall candidates per namespace; replaces the fixed cap of 100. Only a detected collection question (recall.collectionWidth) raises the per-call limit up to this value; every other recall keeps 100."
+          },
+          "collectionWidth": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Automatic recall only, prototype: collection questions (\"What activities does …\", \"wie oft\", \"wie viele\", \"welche … alle\") get a wider prompt and candidate pool. topN replaces maxPromptMemories for such a question, candidateTopK the vector pool and rerank input (capped by candidateHardLimitMax, so raise that too for more than 100). More candidates mean more reranker input tokens. Defaults: disabled, topN 45, candidateTopK 200.",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "topN": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "candidateTopK": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500
+              }
+            }
+          },
+          "retrievalArms": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Automatic recall only, prototype: extra candidates from the memory-enrichment sidecar ({namespace}/{agentId}/_enrich/), alongside the vector search. entity: persons and entities named in the question plus facets routed from its words (names held by more than 5 % of the rows only together with a facet), with expansion over rare entities of the top vector hits. eventTime: rows whose event date overlaps a date in the question, or that have an event date for a \"when\" question. Rows pass the same lifecycle and access checks as vector rows. mode shadow only logs what would be added, but costs latency like on: with entity on, the seed expansion waits up to 150 ms after the vector search (seedExpansion false avoids that); on fuses before scoring (rrf: reciprocal rank fusion, k = rrfK; slots: the top vector rows plus up to `slots` arm rows). Each arm has its own deadline (timeoutMs) and is skipped when late. Without a sidecar nothing changes. Defaults: mode off, entity and eventTime off, fusion rrf, timeoutMs 150, armTopK 30, slots 30, rrfK 60, seedExpansion on.",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "shadow",
+                  "on"
+                ]
+              },
+              "entity": {
+                "type": "boolean"
+              },
+              "eventTime": {
+                "type": "boolean"
+              },
+              "fusion": {
+                "type": "string",
+                "enum": [
+                  "rrf",
+                  "slots"
+                ]
+              },
+              "timeoutMs": {
+                "type": "integer",
+                "minimum": 10,
+                "maximum": 5000
+              },
+              "armTopK": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 200
+              },
+              "slots": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 200
+              },
+              "rrfK": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000
+              },
+              "seedExpansion": {
+                "type": "boolean"
+              }
+            }
+          },
+          "eventDateRender": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Automatic recall only, prototype: memory records get event-date and event-ago attributes (the resolved date of the event a record describes, from the memory-enrichment sidecar) when the sidecar has a resolved date for the record's current text. created-at is unchanged. Default: disabled.",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              }
+            }
           }
         },
         "description": "Recall pipeline tuning: candidate count, importance boost, deduplication, canonical-first selection, prompt budgets, query refinement, adaptive budget, semantic compression, the soft time budget and its fallback, half-lives per memory type and the decision trace."

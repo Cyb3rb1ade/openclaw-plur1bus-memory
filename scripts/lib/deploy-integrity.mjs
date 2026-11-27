@@ -494,6 +494,14 @@ export const DEPLOY_FILES = [
   "lib/proactive-nudge.js",
   "lib/query-refiner.js",
   "lib/temporal-parser.js",
+  // Retrieval arms: shared enrichment (entities, facets, event dates) and its sidecar.
+  "lib/enrichment/date-resolver.js",
+  "lib/enrichment/enrich-llm.js",
+  "lib/enrichment/sidecar.js",
+  // Retrieval-arm switches (all off by default): collection width, arms, event-date rendering.
+  "lib/recall-collection-query.js",
+  "lib/recall-arms.js",
+  "lib/event-date-render.js",
   // ── Operator- und Wartungsskripte ─────────────────────────────────────────
   // Das Paket liefert `scripts/` vollständig aus, das Manifest deckte davon
   // aber nur die vier Laufzeit-nahen Einträge oben ab. Alles andere blieb im

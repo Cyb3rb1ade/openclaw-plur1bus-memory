@@ -146,6 +146,10 @@ export function createPromptContextAssembler(ctx) {
   const keywordFallbackEnabled = cfg?.recall?.keywordFallback?.enabled !== false;
   // 7.21.1: recall.mergeTurnParts (Standard an).
   const mergeTurnPartsEnabled = cfg?.recall?.mergeTurnParts !== false;
+  // V3a: recall.eventDateRender (Standard aus) — event-date/event-ago aus dem
+  // Anreicherungs-Sidecar des Agenten, nur bei aufgelöstem Datum.
+  const eventDateRenderEnabled = cfg?.recall?.eventDateRender?.enabled === true
+    && typeof ctx.enrichmentIndexFor === "function";
 
   return async function assemblePromptContext(event, hookCtx, opts = {}) {
     const assemblerEntryAt = Date.now();
@@ -618,6 +622,14 @@ export function createPromptContextAssembler(ctx) {
         }
         items.push(item);
       }
+      let eventIndex = null;
+      if (eventDateRenderEnabled) {
+        try {
+          eventIndex = ctx.enrichmentIndexFor({ agentId })?.index ?? null;
+        } catch (eventIndexError) {
+          host.logger.debug?.(`memory-lancedb-namespaced: enrichment sidecar unavailable for event dates: ${describeError(eventIndexError)}`);
+        }
+      }
       for (const r of ordered) {
         const sourceStage = r.source === "graph" || r.source === "both" ? "graph" : "vector";
         const item = {
@@ -648,6 +660,10 @@ export function createPromptContextAssembler(ctx) {
           validUntil: r.entry.validUntil ?? 0,
           epistemicStatus: r.entry.epistemicStatus,
         };
+        if (eventIndex) {
+          const enrichment = eventIndex.lookup(r.entry.id, typeof r.entry.text === "string" ? r.entry.text : "");
+          if (enrichment?.event) item.event = enrichment.event;
+        }
         if (traceEnabled) {
           attachTraceToMemory(item, {
             sourceStage,
@@ -1085,6 +1101,7 @@ export function createPromptContextAssembler(ctx) {
           memoryDeferrals.push({ block: "memories", kind: "clipped", from, to, reason: "memories-cap" });
         },
         retrievalFallback: recallFallback || null,
+        ...(eventDateRenderEnabled ? { eventDateRender: { enabled: true, timeZone: cfg?.timezone || undefined } } : {}),
       });
       let personaDirective = null;
       let personaEmojiPalette = null;
