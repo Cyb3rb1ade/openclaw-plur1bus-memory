@@ -279,14 +279,39 @@ print(json.dumps({
     if (not isinstance(state, dict) or state.get("version") != [expected_version, expected_version]
             or not isinstance(state.get("paths"), dict)):
         raise ValueError("Hermes PM plugin version verification failed")
-    expected_hashes = {}
+    validate_pm_import_locations(home, selected_environment, state["paths"], pm_bundle_source_hashes(manifest))
+
+
+def pm_bundle_source_hashes(manifest):
+    """Project the verified Python files of each canonical distribution package."""
+    expected = {}
     for plugin_name in ("plur1bus", "plur1bus-controls"):
         prefix = f"payload/plugins/{plugin_name}/"
-        expected_hashes[plugin_name] = {
+        expected[plugin_name] = {
             name[len(prefix):]: sha for name, sha in manifest["files"].items()
             if name.startswith(prefix) and name.endswith(".py")
         }
-    validate_pm_import_locations(home, selected_environment, state["paths"], expected_hashes)
+    return expected
+
+
+def verify_pm_files_only_sources(home, python, environment, manifest):
+    """Check admitted module locations and exact bytes without importing PLUR1BUS."""
+    code = """
+import importlib.util, json
+paths = {}
+for module in ('plur1bus_hermes', 'plur1bus_controls'):
+    spec = importlib.util.find_spec(module)
+    paths[module] = spec.origin if spec is not None else None
+print(json.dumps(paths))
+"""
+    try:
+        paths = json.loads(run_pm_inspection(home, python, code))
+        validate_pm_import_locations(home, environment, paths, pm_bundle_source_hashes(manifest))
+    except (OSError, ValueError) as error:
+        raise ValueError(
+            "The active Hermes PM runtime could not be verified against this bundle. "
+            "Select all active PLUR1BUS profiles and rerun with --activate (Install and activate)."
+        ) from error
 
 
 def _desired_plugin_selection(config):
@@ -476,21 +501,23 @@ def probe_macos_pm_sync(home, python, generation, require_volume_sync=False):
         raise ValueError("macOS filesystem synchronization failed during Hermes PM preflight; no files were changed")
 
 
-def pm_active_member_profiles(home, python):
-    """Ask installed Hermes PM for live homes selecting PLUR1BUS as plugin/provider."""
+def pm_active_member_profiles(home, python, *, include_controls=False):
+    """Ask Hermes PM for homes selecting the provider or its active controls."""
+    selection = {"plur1bus", "plur1bus-controls"} if include_controls else {"plur1bus"}
     code = """
 import json, sys
 from pathlib import Path
 project = Path(sys.argv[1]).resolve()
 sys.path.insert(0, str(project))
 from pm.plugins_state import enabled_plugins_ordered
+selection = set(json.loads(sys.argv[2]))
 rows = []
 for plugins_dir, names in enabled_plugins_ordered().items():
-    if 'plur1bus' in names:
+    if selection.intersection(names):
         rows.append({'plugins': str(plugins_dir.resolve()), 'names': names})
 print(json.dumps(rows))
 """
-    payload = run_pm_inspection(home, python, code)
+    payload = run_pm_inspection(home, python, code, (json.dumps(sorted(selection)),))
     try:
         rows = json.loads(payload)
     except (ValueError, TypeError) as error:
@@ -504,7 +531,7 @@ print(json.dumps(rows))
                 or not isinstance(row.get("names"), list)
                 or any(not isinstance(name, str) for name in row["names"])):
             raise ValueError("Hermes PM active plugin selection is invalid")
-        if "plur1bus" not in row["names"]:
+        if not selection.intersection(row["names"]):
             continue
         plugin_dir = Path(row["plugins"])
         profile = plugin_dir.parent
@@ -1164,6 +1191,8 @@ def plan_install(bundle, home, profiles=None, python=None, activate=False, depen
             raise ValueError("Hermes PM plugin version is missing from the verified payload")
         check_unselected_pm_profiles(home, set(selected), python, bundle, manifest, plugin_version,
                                      pm_native_source_paths(home, pm_native_cache))
+        if not activate and selected.keys() & pm_active_member_profiles(home, python, include_controls=True).keys():
+            verify_pm_files_only_sources(home, python, selected_pm_environment, manifest)
     torch = None if desktop_only else (
         {"action": "pm-managed", "version": torch_version(python), "index": None}
         if pm_managed else cpu_torch_decision(info, torch_version(python), dependencies)
