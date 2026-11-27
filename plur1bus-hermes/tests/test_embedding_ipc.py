@@ -13,7 +13,9 @@ from unittest.mock import patch
 
 import pytest
 
-from plur1bus_hermes.embedding_ipc import EngineIpcEmbedding, EngineIpcError, EngineIpcServer, validate_ipc_config
+from plur1bus_hermes.embedding_ipc import (
+    EngineIpcEmbedding, EngineIpcError, EngineIpcServer, main, prepare_ipc_scope, validate_ipc_config,
+)
 from plur1bus_hermes.validation import ValidationError
 
 
@@ -176,10 +178,28 @@ def test_total_timeout_and_content_free_errors(state_root):
 
 
 @pytest.mark.skipif(not IPC_SUPPORTED, reason="Native IPC peer credentials required")
+def test_prepare_state_root_creates_scope_without_token_or_listener(state_root, capsys):
+    assert main(["--prepare-state-root", str(state_root)]) == 0
+    assert json.loads(capsys.readouterr().out) == {"stateRoot": str(state_root), "status": "prepared"}
+    scope = state_root / "control/embedding-ipc"
+    assert scope.is_dir()
+    assert list(scope.iterdir()) == []
+    prepare_ipc_scope(state_root)
+    assert list(scope.iterdir()) == []
+    with pytest.raises(EngineIpcError, match="unavailable"):
+        EngineIpcEmbedding(config(state_root)).embed("no automatic owner")
+
+
+@pytest.mark.skipif(not IPC_SUPPORTED, reason="Native IPC peer credentials required")
 def test_memory_only_v1_frames_and_node_interop(state_root):
     node = shutil.which("node")
     if not node or not (SOURCE / "lib/providers/scoped-embedding-ipc.js").is_file():
         pytest.skip("Node and the repository IPC implementation are required")
+    if sys.platform == "win32":
+        # Start the upstream owner inside an explicitly private scope. Its
+        # icacls /grant:r changes the caller's ACE, not other explicit grants
+        # Windows may attach when Node creates the directory.
+        assert main(["--prepare-state-root", str(state_root)]) == 0
     child_code = r"""
 import { createScopedEmbeddingIpcServer, resolveScopedEmbeddingIpcPaths } from './lib/providers/scoped-embedding-ipc.js';
 import { ipcAddress } from './lib/platform.js';
@@ -258,14 +278,20 @@ def test_windows_peer_and_token_checks_fail_before_embedding(state_root):
         with patch.object(_WindowsScope, "_process_sid", return_value="S-1-5-7"):
             with pytest.raises(EngineIpcError, match="trusted"):
                 provider.embed("peer never receives this")
-        token = state_root / "control/embedding-ipc/owner.token"
-        subprocess.run(["icacls", str(token), "/grant", "*S-1-5-32-545:(R)"],
-                       capture_output=True, check=True, timeout=15)
-        try:
-            with pytest.raises(EngineIpcError, match="trusted"):
-                provider.embed("unsafe token cannot authorize this")
-        finally:
-            subprocess.run(["icacls", str(token), "/remove:g", "*S-1-5-32-545"],
+        directory = state_root / "control/embedding-ipc"
+        for candidate in (directory, directory / "owner.token"):
+            subprocess.run(["icacls", str(candidate), "/grant", "*S-1-5-32-545:(RX)"],
                            capture_output=True, check=True, timeout=15)
+            try:
+                with pytest.raises(EngineIpcError, match="trusted"):
+                    provider.embed("unsafe scope cannot authorize this")
+                if candidate == directory:
+                    assert main(["--prepare-state-root", str(state_root)]) == 4
+                    # Prepare must not repair an existing insecure scope.
+                    with pytest.raises(EngineIpcError, match="trusted"):
+                        provider.embed("an explicit grant remains unsafe")
+            finally:
+                subprocess.run(["icacls", str(candidate), "/remove:g", "*S-1-5-32-545"],
+                               capture_output=True, check=True, timeout=15)
         assert calls == []
         assert provider.embed("recovered") == [9, -1]

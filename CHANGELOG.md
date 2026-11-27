@@ -14,7 +14,9 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   sind getrennte Aktionen. Beim Upgrade bleibt der bestehende Encoder aktiv.
 - Multi-Identity-Recall sucht zertifizierte Generationen eines Profils mit
   ihren eigenen Encodern und kombiniert Ranglisten per Reciprocal Rank Fusion.
-  Capture schreibt weiterhin in die aktive Generation.
+  Capture schreibt weiterhin in die aktive Generation. Shared Pools verwenden
+  Vektorsuche nur bei bestätigter Modellidentität und Dimension. Ältere
+  Freigaben ohne diesen Nachweis bleiben über Suchwörter erreichbar.
 - Der lokale Engine-IPC-Provider prüft Modell, Dimensionen, Fingerprint,
   Betriebssystem-Identität und den Token des konfigurierten IPC-Diensts.
 - Automatischer Recall kann belegte Teile desselben Turns und derselben Rolle

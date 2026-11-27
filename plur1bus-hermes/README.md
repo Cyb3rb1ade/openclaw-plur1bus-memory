@@ -276,3 +276,16 @@ and PLUR1BUS dependencies are installed into the same environment.
   successful application is idempotent.
 
 For full parity features, refer to `docs/superpowers/plans/2026-07-25-plur1bus-hermes-migration.md`.
+
+For an upstream Node owner on Windows, prepare the IPC scope first with the
+Python from the Hermes environment:
+
+```powershell
+python -m plur1bus_hermes.embedding_ipc --prepare-state-root "C:\local\engine-state"
+```
+
+Choose a fresh or already safe directory on a local fixed drive. The absolute
+state root must already exist. The command creates or checks the private IPC
+directory and exits without starting a listener or issuing a token. Existing
+unsafe permissions are refused. Give the Node owner and Hermes client the same
+state-root spelling. A Hermes foreground owner prepares its scope at startup.

@@ -152,6 +152,20 @@ def _ipc_directory(path: Path, *, create: bool = False) -> Path:
     return directory
 
 
+def prepare_ipc_scope(state_root: str | Path) -> None:
+    """Create or verify an owner-only IPC directory without changing an existing ACL."""
+    root = _root(state_root)
+    if sys.platform == "win32":
+        from .embedding_ipc_windows import _WindowsScope
+
+        scope = _WindowsScope(root, create=True)
+        scope.close()
+    elif sys.platform in _POSIX:
+        _ipc_directory(root, create=True)
+    else:
+        raise EngineIpcError("scoped_embedding_ipc_unavailable")
+
+
 def _filesystem_socket_path(directory: Path) -> Path:
     path = directory / "owner.sock"
     # Python requires a NUL terminator in sockaddr_un's pathname buffer.
@@ -561,13 +575,26 @@ def _native_identity(config: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Serve the selected Hermes profile's pinned local embedding model in the foreground."""
+    """Serve a pinned local embedding model or prepare a private IPC scope."""
     parser = argparse.ArgumentParser(description=main.__doc__)
-    parser.add_argument("--hermes-home", type=Path, required=True)
-    parser.add_argument("--profile", required=True)
-    parser.add_argument("--state-root", type=Path, help="Existing local state directory. Default is the profile's plur1bus directory.")
+    parser.add_argument("--hermes-home", type=Path)
+    parser.add_argument("--profile")
+    state = parser.add_mutually_exclusive_group()
+    state.add_argument("--state-root", type=Path, help="Existing local state directory. Default is the profile's plur1bus directory.")
+    state.add_argument("--prepare-state-root", type=Path, metavar="ABS",
+                       help="Prepare private IPC directories under an existing absolute local state root.")
     args = parser.parse_args(argv)
+    if args.prepare_state_root is not None:
+        if args.hermes_home is not None or args.profile is not None:
+            parser.error("--prepare-state-root is a standalone operation")
+    elif args.hermes_home is None or args.profile is None:
+        parser.error("--hermes-home and --profile are required to serve embeddings")
     try:
+        if args.prepare_state_root is not None:
+            root = _root(args.prepare_state_root)
+            prepare_ipc_scope(root)
+            print(json.dumps({"stateRoot": str(root), "status": "prepared"}), flush=True)
+            return 0
         from .operator_cli import runtime_view
         from .runtime import EmbeddingBackend, validate_native_embedding_config
 
@@ -608,7 +635,10 @@ def main(argv: list[str] | None = None) -> int:
         print(str(error), file=sys.stderr)
         return 4
     except (OSError, ValueError, KeyError, TypeError):
-        print("Engine IPC serve requires an existing profile and a pinned local model", file=sys.stderr)
+        message = ("Engine IPC preparation requires an existing safe local state directory"
+                   if args.prepare_state_root is not None
+                   else "Engine IPC serve requires an existing profile and a pinned local model")
+        print(message, file=sys.stderr)
         return 4
     return 0
 

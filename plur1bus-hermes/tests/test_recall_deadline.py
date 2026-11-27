@@ -1,4 +1,5 @@
 """Bounded caller wait, no growing queue, and generation lease lifetime."""
+import gc
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -104,3 +105,16 @@ def test_late_primary_prefetch_pins_generation_even_after_runtime_shutdown(tmp_p
     finally:
         finish.set()
         runtime.shutdown()
+
+
+def test_idle_runtime_finalizer_releases_lease_without_cyclic_garbage_collection(tmp_path):
+    was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        runtime = Plur1busRuntime(tmp_path, {}, "main")
+        del runtime  # Transient Controls diagnostics dispose of cold runtimes this way.
+        with exclusive_generation_lease(tmp_path):
+            pass
+    finally:
+        if was_enabled:
+            gc.enable()

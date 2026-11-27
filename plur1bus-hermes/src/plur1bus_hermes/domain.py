@@ -169,9 +169,12 @@ class Plur1busDomain:
         agent_id: str,
         config: dict[str, Any] | None = None,
         metadata_path: Path | None = None,
+        *,
+        embedding_fingerprint: str | None = None,
     ) -> None:
         self.data_dir = data_dir
         self.config = dict(config or {})
+        self._embedding_fingerprint = embedding_fingerprint
         self.agent_id = safe_agent_id(agent_id)
         # Metadata follows the runtime's resolved writer namespace.  Keep the
         # historical default when Domain is constructed directly by callers.
@@ -1950,6 +1953,7 @@ class Plur1busDomain:
             card,
             source_agent=self.agent_id,
             user_scope=user_scope,
+            embedding_fingerprint=self._embedding_fingerprint,
         )
 
     def due_reminders(

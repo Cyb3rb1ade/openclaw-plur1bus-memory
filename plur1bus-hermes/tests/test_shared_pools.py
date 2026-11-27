@@ -7,6 +7,9 @@ from unittest.mock import patch
 from plur1bus_hermes.shared_pools import SharedPoolStore, SharedPrincipal
 
 
+CERTIFIED = 'a' * 64
+
+
 class _PoolQuery:
     def __init__(self, table):
         self.table = table
@@ -20,13 +23,16 @@ class _PoolQuery:
     def limit(self, _limit):
         return self
 
+    def select(self, _columns):
+        return self
+
     def to_list(self):
         return [dict(row) for row in self.table.rows]
 
 
 class _PoolTable:
     def __init__(self, rows, errors):
-        self.schema = SimpleNamespace(names=("epistemicStatus",))
+        self.schema = SimpleNamespace(names=("epistemicStatus", "expiresAt", "validFrom", "validUntil"))
         self.rows = rows
         self.errors = list(errors)
         self.where_calls = []
@@ -94,7 +100,7 @@ class SharedPoolTests(unittest.TestCase):
                     {**table_base, "id": "invalid", "content": "An ordinary note", "sensitivity": "unknown"},
                     {**table_base, "id": "benign", "content": "The museum opens tomorrow.", "sensitivity": ""},
                 ])
-            recalled = store.recall_rows([1.0, 0.0], 10)
+            recalled = store.recall_lexical_rows('ordinary fictional diagnosis museum tomorrow', 10)
             self.assertEqual([row["id"] for row in recalled], ["benign", "benign"])
             self.assertEqual({row["_namespace"] for row in recalled}, {"user-shared", "workspace-shared"})
 
@@ -124,7 +130,7 @@ class SharedPoolTests(unittest.TestCase):
 
             workspace = store.copy(record, source_agent="main")
             user = store.copy(record, source_agent="main", user_scope=True)
-            recalled = store.recall_rows([1.0, 0.0], 10)
+            recalled = store.recall_lexical_rows('migration', 10)
 
             self.assertNotEqual(workspace["path"], user["path"])
             self.assertEqual(workspace["originId"], record["id"])
@@ -156,26 +162,31 @@ class SharedPoolTests(unittest.TestCase):
                 user_scope=True,
             )
 
-            recalled = owner.recall_rows([1.0, 0.0], 1)
+            recalled = owner.recall_lexical_rows('owner other', 1)
 
             self.assertEqual([row["content"] for row in recalled], ["owner"])
 
     def test_temporal_and_expiry_predicates_apply_before_shared_limit(self):
         with tempfile.TemporaryDirectory() as temporary:
-            store = SharedPoolStore(Path(temporary), SharedPrincipal(workspace="ws"))
+            store = SharedPoolStore(Path(temporary), SharedPrincipal(workspace="ws"),
+                                    embedding_fingerprint=CERTIFIED, embedding_dimensions=2)
             base = {
                 "agentId": "main", "scopeKey": "scope", "status": "active",
                 "type": "observation", "sourceRole": "user", "vector": [1.0, 0.0],
             }
-            store.copy({**base, "id": "a", "content": "expired", "expiresAt": 1}, source_agent="main")
-            store.copy({**base, "id": "b", "content": "future", "validFrom": 200}, source_agent="main")
-            store.copy({**base, "id": "c", "content": "valid", "validFrom": 100, "validUntil": 200}, source_agent="main")
+            store.copy({**base, "id": "a", "content": "expired", "expiresAt": 1},
+                       source_agent="main", embedding_fingerprint=CERTIFIED)
+            store.copy({**base, "id": "b", "content": "future", "validFrom": 200},
+                       source_agent="main", embedding_fingerprint=CERTIFIED)
+            store.copy({**base, "id": "c", "content": "valid", "validFrom": 100, "validUntil": 200},
+                       source_agent="main", embedding_fingerprint=CERTIFIED)
             recalled = store.recall_rows([1.0, 0.0], 1, valid_at=150, now_ms=10_000)
         self.assertEqual([row["content"] for row in recalled], ["valid"])
 
     def test_invalidated_rows_are_excluded_before_the_shared_pool_limit(self):
         with tempfile.TemporaryDirectory() as temporary:
-            store = SharedPoolStore(Path(temporary), SharedPrincipal(workspace="ws"))
+            store = SharedPoolStore(Path(temporary), SharedPrincipal(workspace="ws"),
+                                    embedding_fingerprint=CERTIFIED, embedding_dimensions=2)
             base = {
                 "agentId": "main", "scopeKey": "scope", "status": "active",
                 "type": "observation", "sourceRole": "user",
@@ -185,9 +196,10 @@ class SharedPoolTests(unittest.TestCase):
                 "\x1eInVaLiDaTeD\x1e", "\x1finvalidated\x1f",
             )):
                 store.copy({**base, "id": f"invalid-{index}", "content": f"invalidated-{index}",
-                            "vector": [0.0, 0.0], "epistemicStatus": status}, source_agent="main")
+                            "vector": [0.0, 0.0], "epistemicStatus": status},
+                           source_agent="main", embedding_fingerprint=CERTIFIED)
             store.copy({**base, "id": "observed", "content": "observed", "vector": [1.0, 0.0],
-                        "epistemicStatus": "observed"}, source_agent="main")
+                        "epistemicStatus": "observed"}, source_agent="main", embedding_fingerprint=CERTIFIED)
             recalled = store.recall_rows([0.0, 0.0], 1)
         self.assertEqual([row["content"] for row in recalled], ["observed"])
 
@@ -203,15 +215,17 @@ class SharedPoolTests(unittest.TestCase):
                     store = SharedPoolStore(Path(temporary), SharedPrincipal(workspace="ws"))
                     store._path(False).mkdir(parents=True)
                     table = _PoolTable(
-                        [{"id": "legacy", "content": "shared race", "status": "active", "expiresAt": 0}],
+                        [{"id": "legacy", "content": "shared race", "status": "active", "expiresAt": 0,
+                          "sharedScope": "workspace", "principalHash": store.principal.workspace_key}],
                         [
                             RuntimeError(f"column {first} does not exist"),
                             RuntimeError(f"column {second} does not exist"),
                         ],
                     )
-                    database = SimpleNamespace(open_table=lambda _name: table)
+                    database = SimpleNamespace(open_table=lambda _name: table,
+                        list_tables=lambda **_opts: SimpleNamespace(tables=['memories']))
                     with patch.dict("sys.modules", {"lancedb": SimpleNamespace(connect=lambda _path: database)}):
-                        recalled = store.recall_rows([0.1, 0.2], 1, valid_at=100, now_ms=10)
+                        recalled = store.recall_lexical_rows('shared race', 1, valid_at=100, now_ms=10)
                 self.assertEqual([row["content"] for row in recalled], ["shared race"])
                 self.assertEqual(len(table.where_calls), 3)
                 self.assertIn("epistemicStatus", table.where_calls[0])

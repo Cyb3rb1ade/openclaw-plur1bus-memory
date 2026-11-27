@@ -82,10 +82,10 @@ class ScopeIsolationTests(unittest.TestCase):
                     user_scope=True,
                 )
                 self.assertEqual(
-                    [row["content"] for row in owner._shared_pools.recall_rows([1.0, 0.0], 1)],
+                    [row["content"] for row in owner._shared_pools.recall_lexical_rows("shared memory", 1)],
                     ["owner-only shared memory"],
                 )
-                self.assertEqual(foreign._shared_pools.recall_rows([1.0, 0.0], 1), [])
+                self.assertEqual(foreign._shared_pools.recall_lexical_rows("shared memory", 1), [])
             finally:
                 foreign.shutdown()
                 owner.shutdown()

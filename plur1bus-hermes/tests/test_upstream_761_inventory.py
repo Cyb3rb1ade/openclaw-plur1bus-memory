@@ -27,7 +27,7 @@ HERMES_REVIEWED_BLOBS = {
     "plur1bus-hermes/src/plur1bus_hermes/namespaces.py": "5441b42c08d9fe12e2beeac38f410121b0dab16f",
     "plur1bus-hermes/src/plur1bus_hermes/reembed_staged.py": "4653e1b5b0b640b59d4b253867e0854c6713a4a1",
     "plur1bus-hermes/src/plur1bus_hermes/setup_retrieval.py": "acee2b715ba777e817e1b46627b74d9578f385db",
-    "plur1bus-hermes/src/plur1bus_hermes/shared_pools.py": "9a6f17fc2e7383e7d92f38a3ecc80244d7c109bd",
+    "plur1bus-hermes/src/plur1bus_hermes/shared_pools.py": "fef7827f6c4fb424a2febe8a1998e7ed901d9088",
 }
 
 

@@ -654,8 +654,8 @@ class Plur1busRuntime:
         """Initialize under the generation lease; constructor failures release it."""
         from .generation import effective_generation_config
         from .recall_identities import RecallIdentityRouter
-        self._embedding_text_mode = configured_text_mode(config)
         config = effective_generation_config(data_dir, safe_agent_id(agent_id), config)
+        self._embedding_text_mode = configured_text_mode(config)
         self.data_dir = data_dir
         self.config = config
         self.agent_id = safe_agent_id(agent_id)
@@ -684,6 +684,8 @@ class Plur1busRuntime:
                 account=str(self.request_scope.get("account") or ""),
                 user=str(self.request_scope.get("user") or ""),
             ),
+            embedding_fingerprint=self._writer_route.embedding_fingerprint,
+            embedding_dimensions=self._writer_route.embedding_dimensions,
         )
         embedding_config = dict(config.get("embedding", {}))
         # Upstream top-level embedding-cache settings remain accepted while
@@ -713,17 +715,19 @@ class Plur1busRuntime:
         # The storage root can be relocated independently of the credential owner.
         credential_home = config.get("hermesHome")
         self._embedding = EmbeddingBackend(embedding_config, data_dir, credential_home=credential_home)
+        owner_agent = self.agent_id
         self._recall_identities = RecallIdentityRouter(
             self._writer_route, self._recall_routes, config,
             lambda selected: EmbeddingBackend(
-                {**selected, "_scopeId": self.agent_id}, data_dir, credential_home=credential_home,
+                {**selected, "_scopeId": owner_agent}, data_dir, credential_home=credential_home,
             ),
         )
         self._reranker = RerankerBackend(
             dict(config.get("reranker", {})), data_dir.parent, credential_home=credential_home,
         )
         self._domain = Plur1busDomain(
-            data_dir, self.agent_id, config, metadata_path=self._writer_route.path
+            data_dir, self.agent_id, config, metadata_path=self._writer_route.path,
+            embedding_fingerprint=self._writer_route.embedding_fingerprint,
         )
         llm_cache_config = dict(config.get("llmResultCache", {}))
         for upstream, native in {
@@ -1454,7 +1458,12 @@ class Plur1busRuntime:
                             else search_namespaces(vector, base_legacy_where, candidate_limit,
                                                    routed_vectors=identity_vectors))
             rows = lifecycle_rows(private_rows + shared_rows)
-        if not rows and not recall_tables:
+        lexical_shares = self._shared_pools.recall_lexical_rows(
+            semantic_query, min(3, adaptive_limit), valid_at=parsed_valid_at, now_ms=now_ms,
+            include_compatible=vector is None,
+        )
+        lexical_shares = lifecycle_rows(heuristic_rows(lexical_shares) if using_heuristic else lexical_shares)
+        if not rows and not recall_tables and not lexical_shares:
             return ""
         quality_rows = ([row for row in rows if row.get("_embeddingIdentity") == identities.primary]
                         if identities.active else rows)
@@ -1498,6 +1507,9 @@ class Plur1busRuntime:
                 rows = self._reranker.rerank(semantic_query, rows)
         if automatic:
             rows = apply_stale_assistant_weighting(rows, now_ms, recall_config.get("qualityWeighting"))
+        # Uncertified and incompatible shared vectors never enter semantic
+        # scoring, RRF, or a configured reranker's request.
+        rows.extend(lexical_shares)
         hydrated: list[dict[str, Any]] = []
         turns_by_namespace: dict[str, set[str]] = {}
         for row in rows:
