@@ -7,6 +7,19 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.21.7] — 2026-11-27
+
+**Temperament pro Agent im Dashboard wählbar.** Keine neuen Konfigurationsschlüssel; die Karte schreibt denselben Eintrag wie `/plur1bus temperament`.
+
+### Hinzugefügt
+
+- **Dashboard-Karte „Temperament“.** Das Temperament je Agent (`ausgewogen`, `warm`, `kühl`, `feurig`, `stoisch`) lässt sich jetzt im Operator-Reiter wählen, nicht nur per `/plur1bus temperament`. Die Karte schreibt denselben Eintrag `emotion.temperaments.<agent>` (Preset-Werte plus Name) über OpenClaws Config-Writer (`mutateConfigFile`, Reload `auto`); das Ergebnis prüft `resolveEffectiveConfig`, bevor etwas zugewiesen wird. Zeilen: die Chat-Agenten (Kanalbindung, ältere Hosts: Heartbeat), jeder Agent mit gespeichertem Eintrag und „All other agents“ (`default`), auf das alle übrigen Agenten samt Subagenten zurückfallen, `main` nie. Jede Zeile nennt, was gerade läuft und was ohne eigene Wahl gälte; „No own choice“ entfernt den Eintrag. Bis der Plugin-Reload (etwa eine Minute) die Wahl übernommen hat, zeigt die Auswahl schon die gespeicherte Wahl und „Running now“ den laufenden Wert, markiert als „pending“ (`temperament:<agent>` im Vergleich Datei gegen laufende Config). Eine Wahl, die die Datei nicht ändert, schreibt nichts und löst keinen Reload aus; ein Save ohne Änderung in dieser Zeit schreibt also nicht den alten laufenden Wert zurück. Träume und Antwortstil lesen nur den Namen aus dem eigenen Eintrag eines Agenten; die Zeile „All other agents“ ändert nur die Stimmungswerte. Karte und Meldung sagen das so. Schreibrecht wie bei den anderen Karten: nur mit `controlUi.writeActions: "all"` und dem Einmal-Token der Seite; jede Änderung steht als Info-Zeile im Gateway-Log (`dashboard temperament.set agent=… temperament=…`). Neue Datei `lib/agent-temperament.js` (in `DEPLOY_FILES`).
+
+### Fixed
+
+- **`/plur1bus temperament` mit geerbten Objekt-Schlüsseln.** `constructor`, `toString` oder `__proto__` galten als Preset und landeten als Unsinn in `openclaw.json`; jetzt zählen nur die fünf Presets. Der Befehl schreibt außerdem eine tiefe Kopie des Presets statt eines geteilten `baseline`-Objekts, über dieselbe Funktion wie die Karte.
+- **Package-Version 7.21.7.**
+
 ## [7.21.6] — 2026-11-27
 
 **Herkunft für alte Neo-Einträge von main, die nur noch im Index stehen.** Neu ist eine Zuordnungsdatei als zusätzliche Quelle für das Nachtragen der Herkunft. Damit bekommen 1 209 Chatnachrichten aus Bernds Telegram vom 11.07. bis 08.09.2026 ihren Chat (1 056 DM, 153 Gruppe), die weder Lauf-ID noch Turn-Hash zuordnen konnten.

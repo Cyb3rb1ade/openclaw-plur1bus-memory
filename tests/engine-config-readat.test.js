@@ -32,6 +32,7 @@ const ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
  * run-time read of engine config.
  */
 const CONFIG_MUTATION_SITES = Object.freeze({
+  "lib/agent-temperament.js": "the dashboard temperament card writes the temperament into the host config",
   "engine/commands/plur1bus-command.js": "/plur1bus setup merges feature profiles into the host config and shows the result",
   "lib/chat-model.js": "the chat-model command writes the model choice into the host config",
   "lib/dashboard-settings.js": "dashboard settings write into, and show, the host config",
