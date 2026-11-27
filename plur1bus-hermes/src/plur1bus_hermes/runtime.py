@@ -1469,6 +1469,7 @@ class Plur1busRuntime:
                 and is_recallable_epistemic(row) and (is_echo is None or not is_echo(row)))
         ]
         rows = rows[:adaptive_limit]
+        has_capture_time = any(normalize_timestamp(row.get("createdAt")) for row in rows if row.get("content"))
         memory_items = [
             " ".join(part for part in (
                 f"- {escape(recall_text(row, position, full_text))}",
@@ -1506,7 +1507,7 @@ class Plur1busRuntime:
             max_chars = 17_000
         output = apply_global_inject_budget(
             blocks=[
-                {"name": "relative-time", "text": relative_time_note() if recalled else "", "droppable": True},
+                {"name": "relative-time", "text": relative_time_note() if recalled and has_capture_time else "", "droppable": True},
                 {"name": "retrieval", "text": (
                     '<memory-retrieval retrieval="keyword-recent-fallback">'
                     'The query embedding was unavailable. These are keyword or recent matches.'

@@ -15,12 +15,14 @@ HERMES_BASE = "34dfd2102a079ec818818aca39dba81134b69d2a"
 HERMES_REVIEWED_UPDATES = {
     "plur1bus-hermes/src/plur1bus_hermes/cognition.py": "c8366c240a892862c1cb22036f0efc63ad105b57",
 }
-# Exact 7.21.8 native ports for temperament defaults, refined recall and
-# confidential knowledge and shared-pool guards.
+# Exact 7.21.8 native ports for temperament, recall, confidentiality and
+# preserving the recorded embedding-input mode on re-embedding.
 HERMES_REVIEWED_BLOBS = {
     "plur1bus-hermes/src/plur1bus_hermes/knowledge.py": "85353d2972f174045b6d596bbb98a044d649ad0a",
     "plur1bus-hermes/src/plur1bus_hermes/mood.py": "16dc1acabca8dbb2e8c6221f2ca75fb58f909723",
     "plur1bus-hermes/src/plur1bus_hermes/query_refinement.py": "7fab5136af1e8b8de77b4e9cbd8cd5a1e1cd9ea2",
+    "plur1bus-hermes/src/plur1bus_hermes/reembed.py": "afd7bf67ca56d0bc0d805863f9f2b3736ed6384c",
+    "plur1bus-hermes/src/plur1bus_hermes/reembed_staged.py": "4e685ff1576b58e45d67b707cfe1ec84f3d3e399",
     "plur1bus-hermes/src/plur1bus_hermes/shared_pools.py": "9a6f17fc2e7383e7d92f38a3ecc80244d7c109bd",
 }
 
