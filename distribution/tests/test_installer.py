@@ -698,6 +698,97 @@ class InstallerTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "cannot override Hermes PM"):
                 installer.plan_install(self.bundle, self.home, python=sys.executable)
 
+    def test_pm_files_only_requires_admitted_bytes_for_active_profiles(self):
+        project = self.home / "hermes-agent"
+        project.mkdir()
+        key = installer.hashlib.sha256(str(project.resolve()).encode("utf-8")).hexdigest()[:16]
+        selected = self.home / "installs" / key / "environments" / "generation-314" / "venv"
+        python = self.pm_python_path(selected)
+        python.parent.mkdir(parents=True)
+        python.write_text("fixture interpreter")
+        python.chmod(0o755)
+        (selected / "pyvenv.cfg").write_text("version = 3.14.0\n")
+        facts = self.home / "installs" / key / "facts.json"
+        facts.write_text(json.dumps({"packages": {"venv": {"environment": str(selected)}}}))
+        self.files.update({
+            "payload/plugins/plur1bus/plugin.yaml": b'{"name":"plur1bus","version":"7.12.0"}\n',
+            "payload/plugins/plur1bus/__init__.py": b"__version__ = '7.12.0.post2'\n",
+            "payload/plugins/plur1bus-controls/__init__.py": b"__version__ = '7.12.0.post2'\n",
+        })
+        self.write_bundle()
+        config_file = self.home / "config.yaml"
+        original_config = config_file.read_bytes()
+        provider_file = self.home / "plugins/plur1bus/__init__.py"
+        provider_file.parent.mkdir(parents=True)
+        provider_file.write_bytes(b"directory to repair")
+        sources = selected.parent / "workspace/plugin-sources"
+        provider_runtime = sources / "provider/__init__.py"
+        controls_runtime = sources / "controls/__init__.py"
+        for path in (provider_runtime, controls_runtime):
+            path.parent.mkdir(parents=True)
+        provider_payload = self.files["payload/plugins/plur1bus/__init__.py"]
+        provider_runtime.write_bytes(provider_payload)
+        controls_runtime.write_bytes(self.files["payload/plugins/plur1bus-controls/__init__.py"])
+        active_names = []
+        inspections = []
+
+        def python_preflight(_python, code, data=None, timeout=None):
+            if "sys.version_info" in code:
+                return json.dumps({"version": [3, 14, 0], "venv": True, "prefix": str(selected),
+                                   "platform": sys.platform, "architecture": "AMD64",
+                                   "implementation": "cpython", "freeThreaded": False})
+            if "importlib.metadata.version('torch')" in code:
+                return "null"
+            if "packages = sorted" in code:
+                return json.dumps({"fingerprint": "f" * 64, "pipAvailable": False, "ensurepipAvailable": False})
+            return self.real_python(sys.executable, code, data, timeout=timeout)
+
+        def inspect(_home, _python, code, arguments=()):
+            if "enabled_plugins_ordered" in code:
+                return json.dumps([{"plugins": str(self.home / "plugins"), "names": active_names}] if active_names else [])
+            if "find_spec" in code:
+                inspections.append(code)
+                return json.dumps({"plur1bus_hermes": str(provider_runtime), "plur1bus_controls": str(controls_runtime)})
+            self.fail("copy-only preflight requested a mutating or unexpected PM operation")
+
+        with patch.object(installer, "run_python", side_effect=python_preflight), \
+             patch.object(installer, "run_pm_inspection", side_effect=inspect), \
+             patch.object(installer, "probe_macos_pm_sync"), \
+             patch.object(installer, "run_pm_selection", side_effect=AssertionError("copy-only must not admit dependencies")):
+            # An explicitly inactive profile may stage files without a provider import.
+            inactive = installer.plan_install(self.bundle, self.home, profiles=["default"])
+            self.assertFalse(inactive["activate"])
+            self.assertEqual(inspections, [])
+            installer.apply_install(inactive, inactive["confirmation"], stopped=True)
+            self.assertEqual(config_file.read_bytes(), original_config)
+
+            active_names[:] = ["plur1bus"]
+            # Repair an active profile's directory while the admitted runtime is a byte match.
+            provider_file.write_bytes(b"directory to repair")
+            repair = installer.plan_install(self.bundle, self.home, profiles=["default"])
+            self.assertFalse(repair["activate"])
+            installer.apply_install(repair, repair["confirmation"], stopped=True)
+            self.assertEqual(provider_file.read_bytes(), provider_payload)
+            self.assertEqual(config_file.read_bytes(), original_config)
+            transactions = sorted((self.home / "plur1bus-install-backups").iterdir())
+
+            for installed in (b"__version__ = '7.12.0.post1'\n", provider_payload + b"different code"):
+                with self.subTest(installed=installed):
+                    provider_runtime.write_bytes(installed)
+                    with self.assertRaisesRegex(ValueError, "rerun with --activate"):
+                        installer.plan_install(self.bundle, self.home, profiles=["default"])
+                    with self.assertRaisesRegex(ValueError, "rerun with --activate"):
+                        installer.apply_install(repair, repair["confirmation"], stopped=True)
+            active_names[:] = ["plur1bus-controls"]
+            with self.assertRaisesRegex(ValueError, "rerun with --activate"):
+                installer.plan_install(self.bundle, self.home, profiles=["default"], dependencies=False)
+
+        self.assertGreaterEqual(len(inspections), 3)
+        self.assertEqual(sorted((self.home / "plur1bus-install-backups").iterdir()), transactions)
+        self.assertFalse((self.home / ".plur1bus-install-lock").exists())
+        self.assertEqual(config_file.read_bytes(), original_config)
+        self.assertEqual(provider_file.read_bytes(), provider_payload)
+
     def test_yaml_helpers_fall_back_to_ruamel_when_only_pyyaml_is_missing(self):
         path = self.root / "ruamel-config.yaml"
         path.write_text("memory: {}\n", encoding="utf-8")

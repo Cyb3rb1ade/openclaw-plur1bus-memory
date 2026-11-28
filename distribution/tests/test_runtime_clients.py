@@ -250,6 +250,12 @@ class ClientInventoryTests(unittest.TestCase):
         gateway = {'pid': 42, 'hermes_home': str(self.home), 'served_profiles': ['default'], 'state': 'ready'}
         with patch.dict(sys.modules, {'gateway.control_socket': control, 'hermes_cli.update_fleet_scope': scope, 'pm.environments': pm}), patch.object(worker, 'identify', return_value=gateway), patch.object(worker, 'service_owners', return_value=[]):
             entries = worker.inventory(self.home, self.project)
+            host.cmdline.return_value.insert(1, '-P')
+            self.assertEqual(worker.inventory(self.home, self.project), entries)
+            host.cmdline.return_value.insert(1, '-I')
+            with self.assertRaisesRegex(ValueError, 'unclassified'):
+                worker.inventory(self.home, self.project)
+            host.cmdline.return_value.pop(1)
             host.parent.side_effect = lambda: None
             with self.assertRaisesRegex(ValueError, 'unclassified'):
                 worker.inventory(self.home, self.project)
