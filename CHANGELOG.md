@@ -15,6 +15,9 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - Bei bereits aktiven PLUR1BUS-Profilen verweigert der Hermes-PM-Installer
   ein Upgrade ohne Aktivierung, wenn die geladene Python-Laufzeit vom
   Paket abweicht. Die Aufforderung erscheint vor der ersten Änderung.
+- Bei einem Teil-Upgrade prüft Hermes PM zusätzlich nicht ausgewählte Profile,
+  die ausschließlich Controls nutzen. Abweichender Controls-Code stoppt
+  das Upgrade vor dem Schreiben.
 
 ## [7.21.8-hermes.1] — 2026-11-27
 
