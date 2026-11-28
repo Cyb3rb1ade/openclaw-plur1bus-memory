@@ -1,0 +1,104 @@
+name: Hermes 7.21.8-hermes.2 registry
+on:
+  push:
+    branches:
+      - codex/hermes-registry-7218-h2-probe-r3
+      - codex/hermes-registry-7218-h2-publish
+permissions:
+  contents: read
+jobs:
+  registry:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    env:
+      PLUR1BUS_SOURCE: 2448f296090cb6f9df093fe9baa23b15ec6004d4
+      PLUR1BUS_VERSION: 7.21.8-hermes.2
+      PLUR1BUS_INTEGRITY: "SET_FROM_VERIFIED_CANDIDATE"
+      PLUR1BUS_PROBE_RUN: "0"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: 2448f296090cb6f9df093fe9baa23b15ec6004d4
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '26.13.1'
+      - name: Pack and verify the release artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PLUR1BUS_SOURCE"
+          test -z "$(git status --porcelain)"
+          mkdir "$RUNNER_TEMP/plur1bus-pack"
+          if [[ "$GITHUB_REF_NAME" == codex/hermes-registry-7218-h2-publish ]]; then
+            GH_TOKEN="$RELEASE_READ_TOKEN" gh run download "$PLUR1BUS_PROBE_RUN" --repo "$GITHUB_REPOSITORY" --name hermes-npm-candidate --dir "$RUNNER_TEMP/plur1bus-pack"
+          else
+            npm pack --ignore-scripts --json --pack-destination "$RUNNER_TEMP/plur1bus-pack" > "$RUNNER_TEMP/plur1bus-pack/pack.json"
+          fi
+          jq -e --arg version "$PLUR1BUS_VERSION" '
+            length == 1 and .[0].name == "@cyb3rb1ade/plur1bus-memory" and .[0].version == $version and
+            .[0].filename == ("cyb3rb1ade-plur1bus-memory-" + $version + ".tgz")
+          ' "$RUNNER_TEMP/plur1bus-pack/pack.json"
+          jq '.[0] | {integrity,size,entryCount}' "$RUNNER_TEMP/plur1bus-pack/pack.json"
+          if [[ "$GITHUB_REF_NAME" == codex/hermes-registry-7218-h2-publish ]]; then
+            file="$RUNNER_TEMP/plur1bus-pack/cyb3rb1ade-plur1bus-memory-$PLUR1BUS_VERSION.tgz"
+            test "sha512-$(openssl dgst -sha512 -binary "$file" | openssl base64 -A)" = "$PLUR1BUS_INTEGRITY"
+          fi
+        env:
+          RELEASE_READ_TOKEN: ${{ github.token }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: github.ref_name == 'codex/hermes-registry-7218-h2-probe-r3'
+        with:
+          name: hermes-npm-candidate
+          path: ${{ runner.temp }}/plur1bus-pack/
+          retention-days: 7
+          if-no-files-found: error
+      - name: Verify registry and publish to the hermes channel
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          export NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/plur1bus-npmrc"
+          umask 077
+          printf '%s\n' '@cyb3rb1ade:registry=https://npm.pkg.github.com' '//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}' > "$NPM_CONFIG_USERCONFIG"
+          reg=https://npm.pkg.github.com
+          name='@cyb3rb1ade/plur1bus-memory'
+          version="$PLUR1BUS_VERSION"
+          npm view "$name" versions dist-tags --json --registry "$reg" > "$RUNNER_TEMP/registry-before.json"
+          latest="$(jq -r '."dist-tags".latest // empty' "$RUNNER_TEMP/registry-before.json")"
+          jq --arg version "$version" '{versionExists:(.versions|index($version)!=null), tags:."dist-tags"}' "$RUNNER_TEMP/registry-before.json"
+          if [[ "$GITHUB_REF_NAME" != codex/hermes-registry-7218-h2-publish ]]; then exit 0; fi
+          if jq -e --arg version "$version" '.versions|index($version)!=null' "$RUNNER_TEMP/registry-before.json" >/dev/null; then
+            test "$(npm view "$name@$version" dist.integrity --registry "$reg")" = "$PLUR1BUS_INTEGRITY"
+            npm dist-tag add "$name@$version" hermes --registry "$reg"
+          else
+            npm publish "$RUNNER_TEMP/plur1bus-pack/cyb3rb1ade-plur1bus-memory-$version.tgz" --ignore-scripts --registry "$reg" --tag hermes
+          fi
+          test "$(npm view "$name@$version" dist.integrity --registry "$reg")" = "$PLUR1BUS_INTEGRITY"
+          test "$(npm view "$name" dist-tags.hermes --registry "$reg")" = "$version"
+          test "$(npm view "$name" dist-tags.latest --registry "$reg")" = "$latest"
+          printf 'Verified %s@%s, hermes tag, latest=%s and integrity %s\n' "$name" "$version" "$latest" "$PLUR1BUS_INTEGRITY"
+
+  node-suite:
+    if: github.ref_name == 'codex/hermes-registry-7218-h2-probe-r3'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: 2448f296090cb6f9df093fe9baa23b15ec6004d4
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.21.0'
+      - name: Run the OpenClaw JavaScript release checks
+        run: |
+          npm ci --ignore-scripts
+          npm run lint
+          npm test
+          npm audit --omit=dev --audit-level=moderate
