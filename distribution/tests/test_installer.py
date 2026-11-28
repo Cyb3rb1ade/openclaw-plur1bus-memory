@@ -1291,8 +1291,54 @@ class InstallerTests(unittest.TestCase):
         # tombstoned homes; provider-only selection still emits its PM member.
         rows = [{"plugins": str((provider_home / "plugins").resolve()), "names": ["plur1bus"]}]
         with patch.object(installer, "run_pm_inspection", return_value=json.dumps(rows)):
-            self.assertEqual(installer.pm_active_member_profiles(self.home, sys.executable),
-                             {"provider_only": provider_home.resolve()})
+            self.assertEqual(installer.pm_active_members(self.home, sys.executable),
+                             {"provider_only": (provider_home.resolve(), {"plur1bus"})})
+
+    def test_targeted_pm_plan_checks_unselected_controls_only_profile(self):
+        profile = self.home / "profiles/alpha"
+        controls = profile / "plugins/plur1bus-controls"
+        controls.mkdir(parents=True)
+        config = profile / "config.yaml"
+        original = b'{"memory":{"provider":"builtin"},"plugins":{"enabled":["plur1bus-controls"]}}\n'
+        config.write_bytes(original)
+        self.files.update({
+            "payload/plugins/plur1bus/plugin.yaml": b'{"name":"plur1bus","version":"7.21.8-hermes.2"}\n',
+            "payload/plugins/plur1bus-controls/plugin.yaml": b'{"name":"plur1bus-controls","version":"7.21.8.post2"}\n',
+            "payload/plugins/plur1bus-controls/pyproject.toml": b'[project]\nname="plur1bus-controls"\nversion="7.21.8.post2"\n',
+        })
+        self.write_bundle("7.21.8-hermes.2")
+        (controls / "plugin.yaml").write_bytes(self.files["payload/plugins/plur1bus-controls/plugin.yaml"])
+        (controls / "pyproject.toml").write_bytes(installer.pm_member_project_bytes(
+            self.files["payload/plugins/plur1bus-controls/pyproject.toml"], "plur1bus-controls", profile))
+        (controls / "__init__.py").write_bytes(self.files["payload/plugins/plur1bus-controls/__init__.py"])
+        rows = [{"plugins": str(profile / "plugins"), "names": ["unrelated-plugin", "plur1bus-controls"]}]
+        info = {"version": [3, 14, 0], "venv": True, "platform": sys.platform, "architecture": "AMD64"}
+        with patch.object(installer, "pm_selected_environment", return_value=self.root / "generation"), \
+             patch.object(installer, "interpreter", return_value=Path(sys.executable)), \
+             patch.object(installer, "run_python", return_value=json.dumps(info)), \
+             patch.object(installer, "read_config", side_effect=lambda _python, path: json.loads(path.read_text())), \
+             patch.object(installer, "environment_state", return_value={"fingerprint": "f" * 64}), \
+             patch.object(installer, "torch_version", return_value=None), \
+             patch.object(installer, "run_pm_inspection", return_value=json.dumps(rows)), \
+             patch.object(installer, "run_pm_selection", side_effect=AssertionError("preflight must not admit dependencies")):
+            plan = installer.plan_install(self.bundle, self.home, profiles=["default"], activate=True)
+            self.assertEqual(plan["profiles"], ["default"])
+
+            for relative, outdated in (
+                ("__init__.py", b"older controls runtime"),
+                ("plugin.yaml", b'{"name":"plur1bus-controls","version":"7.21.8.post1"}\n'),
+            ):
+                with self.subTest(outdated=relative):
+                    installed = controls / relative
+                    previous = installed.read_bytes()
+                    installed.write_bytes(outdated)
+                    with self.assertRaisesRegex(ValueError, "unselected active Hermes profile has different PLUR1BUS code"):
+                        installer.plan_install(self.bundle, self.home, profiles=["default"], activate=True)
+                    installed.write_bytes(previous)
+        self.assertEqual(config.read_bytes(), original)
+        self.assertFalse((profile / "plugins/plur1bus").exists())
+        self.assertFalse((self.home / "plugins").exists())
+        self.assertFalse((self.home / "plur1bus-install-backups").exists())
 
     def test_pm_inspection_binds_nondefault_home_despite_ambient_hermes_home(self):
         project = self.home / "hermes-agent"

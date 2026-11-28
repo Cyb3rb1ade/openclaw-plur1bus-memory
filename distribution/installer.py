@@ -501,9 +501,9 @@ def probe_macos_pm_sync(home, python, generation, require_volume_sync=False):
         raise ValueError("macOS filesystem synchronization failed during Hermes PM preflight; no files were changed")
 
 
-def pm_active_member_profiles(home, python, *, include_controls=False):
-    """Ask Hermes PM for homes selecting the provider or its active controls."""
-    selection = {"plur1bus", "plur1bus-controls"} if include_controls else {"plur1bus"}
+def pm_active_members(home, python):
+    """Return the Hermes PM profile home and selected PLUR1BUS plugin names."""
+    selection = {"plur1bus", "plur1bus-controls"}
     code = """
 import json, sys
 from pathlib import Path
@@ -531,7 +531,8 @@ print(json.dumps(rows))
                 or not isinstance(row.get("names"), list)
                 or any(not isinstance(name, str) for name in row["names"])):
             raise ValueError("Hermes PM active plugin selection is invalid")
-        if not selection.intersection(row["names"]):
+        members = selection.intersection(row["names"])
+        if not members:
             continue
         plugin_dir = Path(row["plugins"])
         profile = plugin_dir.parent
@@ -549,7 +550,7 @@ print(json.dumps(rows))
             resolve_inside(home, "profiles/" + name + "/plugins")
         if plugin_dir != (profile / "plugins").resolve() or name in active:
             raise ValueError("Hermes PM active profile list is ambiguous")
-        active[name] = profile
+        active[name] = (profile, members)
     return active
 
 
@@ -597,8 +598,9 @@ def verify_pm_materialized_native_sources(home, environment, entries):
     if redirected(workspace) or not workspace.is_dir():
         raise ValueError("Hermes PM native source workspace is missing or redirected")
     try:
-        active_members = pm_active_member_profiles(home, interpreter(home))
-        for profile, profile_home in active_members.items():
+        active_members = pm_active_members(home, interpreter(home))
+        provider_homes = [profile_home for profile_home, members in active_members.values() if "plur1bus" in members]
+        for profile_home in provider_homes:
             identity = resolve_inside(profile_home, "plugins/plur1bus").resolve()
             member_key = "plur1bus-" + hashlib.sha256(str(identity).encode("utf-8")).hexdigest()[:16]
             project_file = resolve_inside(workspace, member_key + "/pyproject.toml")
@@ -613,35 +615,35 @@ def verify_pm_materialized_native_sources(home, environment, entries):
                 raise ValueError("Hermes PM materialized a profile member with noncanonical native wheel paths")
     except (OSError, UnicodeError, tomllib.TOMLDecodeError, TypeError) as error:
         raise ValueError("Hermes PM materialized native project metadata is invalid") from error
-    if not active_members:
+    if not provider_homes:
         raise ValueError("Hermes PM workspace has no active PLUR1BUS profile members")
 
 
 def check_unselected_pm_profiles(home, selected_names, python, bundle, manifest, expected_plugin_version,
                                  native_sources=None):
     """Refuse mixed or duplicate active members in Hermes PM's all-profile workspace."""
-    for name, target in pm_active_member_profiles(home, python).items():
+    for name, (target, members) in pm_active_members(home, python).items():
         if name in selected_names:
             continue
-        plugin_manifest = resolve_inside(target, "plugins/plur1bus/plugin.yaml")
-        if not plugin_manifest.is_file():
-            raise ValueError("an unselected active Hermes profile has no verifiable PLUR1BUS version; select all profiles")
-        installed = read_config(python, plugin_manifest)
-        if not isinstance(installed, dict) or installed.get("version") != expected_plugin_version:
-            raise ValueError("an unselected active Hermes profile has different PLUR1BUS code; select all profiles")
-        prefixes = ("payload/plugins/plur1bus/", "payload/plugins/plur1bus-controls/")
-        for source_name, expected_hash in manifest["files"].items():
-            if not source_name.startswith(prefixes):
-                continue
-            relative = source_name[8:]
-            if not relative.endswith(".py") and relative not in {
-                "plugins/plur1bus/plugin.yaml", "plugins/plur1bus-controls/plugin.yaml"
-            }:
-                continue
-            current = resolve_inside(target, relative)
-            if not current.is_file() or digest(current.read_bytes()) != expected_hash:
-                raise ValueError("an unselected active Hermes profile has different PLUR1BUS code; select all profiles")
-        for plugin_name in ("plur1bus", "plur1bus-controls"):
+        for plugin_name in sorted(members):
+            manifest_name = f"plugins/{plugin_name}/plugin.yaml"
+            plugin_manifest = resolve_inside(target, manifest_name)
+            if not plugin_manifest.is_file() or "payload/" + manifest_name not in manifest["files"]:
+                raise ValueError("an unselected active Hermes profile has no verifiable PLUR1BUS version; select all profiles")
+            if plugin_name == "plur1bus":
+                installed = read_config(python, plugin_manifest)
+                if not isinstance(installed, dict) or installed.get("version") != expected_plugin_version:
+                    raise ValueError("an unselected active Hermes profile has different PLUR1BUS code; select all profiles")
+            prefix = f"payload/plugins/{plugin_name}/"
+            for source_name, expected_hash in manifest["files"].items():
+                if not source_name.startswith(prefix):
+                    continue
+                relative = source_name[8:]
+                if not relative.endswith(".py") and relative != manifest_name:
+                    continue
+                current = resolve_inside(target, relative)
+                if not current.is_file() or digest(current.read_bytes()) != expected_hash:
+                    raise ValueError("an unselected active Hermes profile has different PLUR1BUS code; select all profiles")
             project_file = resolve_inside(target, f"plugins/{plugin_name}/pyproject.toml")
             bundled_project = resolve_inside(bundle, f"payload/plugins/{plugin_name}/pyproject.toml")
             if not project_file.is_file() or not bundled_project.is_file():
@@ -1191,7 +1193,7 @@ def plan_install(bundle, home, profiles=None, python=None, activate=False, depen
             raise ValueError("Hermes PM plugin version is missing from the verified payload")
         check_unselected_pm_profiles(home, set(selected), python, bundle, manifest, plugin_version,
                                      pm_native_source_paths(home, pm_native_cache))
-        if not activate and selected.keys() & pm_active_member_profiles(home, python, include_controls=True).keys():
+        if not activate and selected.keys() & pm_active_members(home, python).keys():
             verify_pm_files_only_sources(home, python, selected_pm_environment, manifest)
     torch = None if desktop_only else (
         {"action": "pm-managed", "version": torch_version(python), "index": None}
