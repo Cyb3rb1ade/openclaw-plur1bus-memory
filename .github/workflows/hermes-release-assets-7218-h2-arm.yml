@@ -1,0 +1,30 @@
+{
+  "name": "Upload verified Hermes 7.21.8-hermes.2 assets (arm)",
+  "on": {
+    "push": {
+      "branches": [
+        "codex/hermes-release-assets-7218-h2-arm"
+      ]
+    }
+  },
+  "permissions": {
+    "contents": "write",
+    "actions": "read"
+  },
+  "jobs": {
+    "upload": {
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 18,
+      "env": {
+        "GH_TOKEN": "${{ github.token }}"
+      },
+      "steps": [
+        {
+          "name": "Stage checked bytes on the release draft",
+          "shell": "bash",
+          "run": "set -euo pipefail\nrepo=Cyb3rb1ade/openclaw-plur1bus-memory\ntest \"$GITHUB_REPOSITORY\" = \"$repo\"\ntag=7.21.8-hermes.2\ndraft=461383454\nsource=2448f296090cb6f9df093fe9baa23b15ec6004d4\nobject=$(gh api \"repos/$repo/git/ref/tags/$tag\" --jq .object.sha)\ntest \"$(gh api \"repos/$repo/git/tags/$object\" --jq .object.sha)\" = \"$source\"\ngh api \"repos/$repo/releases/$draft\" | jq -e --arg tag \"$tag\" '.draft and .prerelease and .tag_name == $tag'\ncd \"$RUNNER_TEMP\"\nupload() {\n    path=$1\n    name=$2\n    digest=$3\n    test \"$(sha256sum \"$path\" | cut -d' ' -f1)\" = \"$digest\"\n    result=$(gh api \"repos/$repo/releases/$draft\" | jq -c --arg name \"$name\" '.assets[] | select(.name == $name)')\n    if [[ -z \"$result\" ]]; then\n        if [[ \"$path\" != \"$name\" ]]; then cp \"$path\" \"$name\"; fi\n        gh release upload \"$tag\" --repo \"$repo\" \"$name\"\n        result=$(gh api \"repos/$repo/releases/$draft\" | jq -c --arg name \"$name\" '.assets[] | select(.name == $name)')\n    fi\n    jq -e --arg digest \"sha256:$digest\" '.state == \"uploaded\" and .digest == $digest' <<< \"$result\"\n}\ngh run download 46119248578 --repo \"$repo\" --name plur1bus-hermes-windows-arm64-pm-acceptance --dir package-0\nupload package-0/plur1bus-7.21.8-hermes.2-windows-arm64.tar.gz plur1bus-7.21.8-hermes.2-windows-arm64.tar.gz e4c86849212a1cdfc9477ea2a15dd374bff9f8d38b4e54d32d660579d0d49e02\nupload package-0/plur1bus-7.21.8-hermes.2-windows-arm64.zip plur1bus-7.21.8-hermes.2-windows-arm64.zip ee318e8b1410ebd3272682ad50d898434fce1d0e7267911aa79a65a20308f5e8\nupload package-0/plur1bus-7.21.8-hermes.2-windows-arm64-setup-unsigned.exe plur1bus-7.21.8-hermes.2-windows-arm64-setup-unsigned.exe 2320c8c9833ec2034ff4f65e996e6e8934c5738b477a32bd31a9724fa02503cf\n"
+        }
+      ]
+    }
+  }
+}
