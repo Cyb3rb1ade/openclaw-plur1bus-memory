@@ -7,6 +7,15 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.21.8-hermes.2] — 2026-11-28
+
+- Der Installer erkennt den profilgebundenen Hermes Plugin Host auch mit
+  Pythons Safe-Path-Flag. Der Gateway beendet den Prozess beim regulären
+  Herunterfahren.
+- Bei bereits aktiven PLUR1BUS-Profilen verweigert der Hermes-PM-Installer
+  ein Upgrade ohne Aktivierung, wenn die geladene Python-Laufzeit vom
+  Paket abweicht. Die Aufforderung erscheint vor der ersten Änderung.
+
 ## [7.21.8-hermes.1] — 2026-11-27
 
 - Hermes unterstützt EmbeddingGemma 2 mit gepinnten ONNX-Artefakten, q8, q4 oder
